@@ -9,9 +9,9 @@
 
   "ai_service": {
     "info": "OpenAI 兼容的 AI 服务配置",
-    "api_base": " ",
-    "api_key": " ",
-    "model": " ",
+    "api_base": "  ",
+    "api_key": "  ",
+    "model": "  ",
 
     "extra_params": {
       "temperature": 1,

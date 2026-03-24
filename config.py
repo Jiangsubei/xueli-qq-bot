@@ -1,5 +1,6 @@
 """配置模块 - 从 config.json 加载"""
 import json
+from typing import Dict, Any
 
 
 class Config:
@@ -62,6 +63,28 @@ class Config:
             return self._data[name]
 
         raise AttributeError(f"'Config' object has no attribute '{name}'")
+
+    def get_extra_params(self) -> Dict[str, Any]:
+        """解析并返回额外请求参数"""
+        try:
+            import json
+            value = self.OPENAI_EXTRA_PARAMS
+            if isinstance(value, dict):
+                return value
+            return json.loads(value) if value else {}
+        except Exception:
+            return {}
+
+    def get_extra_headers(self) -> Dict[str, str]:
+        """解析并返回额外请求头"""
+        try:
+            import json
+            value = self.OPENAI_EXTRA_HEADERS
+            if isinstance(value, dict):
+                return value
+            return json.loads(value) if value else {}
+        except Exception:
+            return {}
 
 
 # 全局配置实例
