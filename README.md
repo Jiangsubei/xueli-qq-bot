@@ -1,6 +1,6 @@
 # QQ AI 机器人框架
 
-一个基于 Python 的自研 QQ 机器人框架，连接 NapCat（OneBot v11 协议），集成 DeepSeek AI 实现智能对话。
+一个基于 Python 使用AI构建的 QQ 机器人框架，连接 NapCat（OneBot v11 协议），支持openai兼容的api。
 
 ## ✨ 特性
 

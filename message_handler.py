@@ -33,6 +33,24 @@ class MessageHandler:
         logger.info(f"创建 AI 客户端: {config.OPENAI_API_BASE}, 模型: {config.OPENAI_MODEL}")
         return AIClient()
 
+    def _build_system_prompt(self) -> str:
+        """构建完整的系统提示词（三个部分组合）"""
+        parts = []
+
+        # 人格部分
+        if hasattr(config, 'PERSONALITY') and config.PERSONALITY:
+            parts.append(f"【人格】\n{config.PERSONALITY}")
+
+        # 对话风格部分
+        if hasattr(config, 'DIALOGUE_STYLE') and config.DIALOGUE_STYLE:
+            parts.append(f"【对话风格】\n{config.DIALOGUE_STYLE}")
+
+        # 行为部分
+        if hasattr(config, 'BEHAVIOR') and config.BEHAVIOR:
+            parts.append(f"【行为】\n{config.BEHAVIOR}")
+
+        return "\n\n".join(parts) if parts else "你是一个友好、有帮助的AI助手。"
+
     def _get_conversation_key(self, event: MessageEvent) -> str:
         """获取对话的 key"""
         if event.message_type == MessageType.PRIVATE.value:
@@ -189,9 +207,12 @@ class MessageHandler:
         key = self._get_conversation_key(event)
         conversation = self._get_conversation(key)
 
+        # 构建完整的系统提示词（三个部分组合）
+        system_prompt = self._build_system_prompt()
+
         # 构建消息列表
         messages = [
-            {"role": "system", "content": config.SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             *conversation.get_messages(config.MAX_CONTEXT_LENGTH),
             {"role": "user", "content": user_message}
         ]
