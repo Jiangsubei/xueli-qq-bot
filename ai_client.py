@@ -111,7 +111,7 @@ class AIClient:
 
     def _build_request_body(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
@@ -121,7 +121,7 @@ class AIClient:
         构建请求体
 
         Args:
-            messages: 消息列表
+            messages: 消息列表，支持多模态内容
             temperature: 采样温度
             max_tokens: 最大生成 token 数
             stream: 是否流式输出
@@ -149,6 +149,102 @@ class AIClient:
         body.update(kwargs)
 
         return body
+
+    def build_text_message(self, role: str, content: str) -> Dict[str, Any]:
+        """
+        构建纯文本消息
+
+        Args:
+            role: 角色 (system/user/assistant)
+            content: 文本内容
+
+        Returns:
+            消息字典
+        """
+        return {"role": role, "content": content}
+
+    def build_multimodal_message(
+        self,
+        role: str,
+        text: str,
+        images: List[str],
+        image_format: str = "base64"
+    ) -> Dict[str, Any]:
+        """
+        构建多模态消息（文本 + 图片）
+
+        Args:
+            role: 角色 (system/user/assistant)
+            text: 文本内容
+            images: 图片列表，每个元素是 base64 编码的图片数据
+            image_format: 图片格式，默认为 base64
+
+        Returns:
+            多模态消息字典，符合 OpenAI Vision API 格式
+        """
+        # 构建 content 列表
+        content = []
+
+        # 添加文本部分
+        if text:
+            content.append({
+                "type": "text",
+                "text": text
+            })
+
+        # 添加图片部分
+        for image_data in images:
+            # 如果图片数据已经是 data URL 格式，直接使用
+            if image_data.startswith("data:"):
+                image_url = image_data
+            else:
+                # 否则添加 data URL 前缀（假设是 jpeg 格式）
+                image_url = f"data:image/jpeg;base64,{image_data}"
+
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url
+                }
+            })
+
+        return {"role": role, "content": content}
+
+    def convert_to_multimodal_format(
+        self,
+        messages: List[Dict[str, Any]],
+        images_map: Dict[int, List[str]]
+    ) -> List[Dict[str, Any]]:
+        """
+        将普通消息列表转换为多模态格式
+
+        Args:
+            messages: 原始消息列表
+            images_map: 图片映射，key 是消息索引，value 是 base64 图片列表
+
+        Returns:
+            转换后的多模态消息列表
+        """
+        result = []
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            # 检查是否有对应的图片
+            if i in images_map and images_map[i]:
+                # 转换为多模态消息
+                multimodal_msg = self.build_multimodal_message(
+                    role=role,
+                    text=content if isinstance(content, str) else "",
+                    images=images_map[i]
+                )
+                result.append(multimodal_msg)
+            else:
+                # 保持原始消息格式
+                result.append(msg)
+
+        return result
 
     def _extract_content(self, data: Dict[str, Any]) -> str:
         """

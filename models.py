@@ -67,6 +67,29 @@ class MessageSegment:
             return f"[@{self.data.get('qq', '')}]"
         return ""
 
+    def is_image(self) -> bool:
+        """检查是否为图片消息段"""
+        return self.type == "image"
+
+    def get_image_file_id(self) -> Optional[str]:
+        """获取图片文件 ID（用于下载）"""
+        if self.type == "image":
+            # NapCat 可能使用 file 或 file_id 字段
+            return self.data.get("file") or self.data.get("file_id")
+        return None
+
+    def get_image_url(self) -> Optional[str]:
+        """获取图片 URL（如果存在）"""
+        if self.type == "image":
+            return self.data.get("url")
+        return None
+
+    def get_image_filename(self) -> Optional[str]:
+        """获取图片文件名"""
+        if self.type == "image":
+            return self.data.get("file_name") or self.data.get("file_id")
+        return None
+
 
 @dataclass
 class OneBotEvent:
@@ -190,6 +213,24 @@ class MessageEvent(OneBotEvent):
                 except ValueError:
                     pass
         return qq_list
+
+    def get_image_segments(self) -> List[MessageSegment]:
+        """获取消息中所有的图片段"""
+        return [seg for seg in self.message if seg.is_image()]
+
+    def has_image(self) -> bool:
+        """检查消息是否包含图片"""
+        return any(seg.is_image() for seg in self.message)
+
+    def get_image_file_ids(self) -> List[str]:
+        """获取所有图片的文件 ID 列表"""
+        file_ids = []
+        for seg in self.message:
+            if seg.is_image():
+                file_id = seg.get_image_file_id()
+                if file_id:
+                    file_ids.append(file_id)
+        return file_ids
 
 
 @dataclass

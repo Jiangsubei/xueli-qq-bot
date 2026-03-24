@@ -5,12 +5,14 @@
 import asyncio
 import logging
 import time
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Tuple
 import re
 
 from config import config
 from models import MessageEvent, MessageType, Conversation
-from ai_client import AIClient, AIAPIError
+from ai_client import AIClient
+from ai_client import AIAPIError
+from image_client import ImageClient
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +20,11 @@ logger = logging.getLogger(__name__)
 class MessageHandler:
     """消息处理器"""
 
-    def __init__(self, ai_client: Optional[AIClient] = None):
+    def __init__(self, ai_client: Optional[AIClient] = None, image_client: Optional[ImageClient] = None):
         # 如果没有传入 ai_client，使用配置创建
         self.ai_client = ai_client or self._create_ai_client()
+        # 图片下载客户端
+        self.image_client = image_client or ImageClient()
         self.conversations: Dict[str, Conversation] = {}
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
@@ -113,6 +117,38 @@ class MessageHandler:
 
         return text
 
+    async def download_images(self, event: MessageEvent) -> List[str]:
+        """
+        下载消息中的所有图片
+
+        通过 WebSocket 消息中的 URL 或 base64 数据直接获取图片，
+        无需依赖 NapCat HTTP API。
+
+        Args:
+            event: 消息事件
+
+        Returns:
+            base64 编码的图片列表
+        """
+        image_segments = event.get_image_segments()
+        if not image_segments:
+            return []
+
+        base64_images = []
+        for seg in image_segments:
+            try:
+                # 使用新的 process_image_segment 方法处理图片
+                base64_data = await self.image_client.process_image_segment(seg.data)
+                if base64_data:
+                    base64_images.append(base64_data)
+                    logger.debug("图片处理成功")
+                else:
+                    logger.warning("图片处理失败")
+            except Exception as e:
+                logger.error(f"处理图片出错: {e}", exc_info=True)
+
+        return base64_images
+
     def check_command(self, text: str, event: MessageEvent) -> Optional[str]:
         """
         检查是否为特殊命令
@@ -195,6 +231,7 @@ class MessageHandler:
     async def get_ai_response(self, event: MessageEvent) -> str:
         """
         调用 AI API 获取回复
+        支持多模态（文本 + 图片）
         """
         user_message = self.extract_user_message(event)
 
@@ -202,6 +239,16 @@ class MessageHandler:
         command_result = self.check_command(user_message, event)
         if command_result is not None:
             return command_result
+
+        # 检查是否包含图片
+        has_images = event.has_image()
+        base64_images = []
+
+        if has_images:
+            # 下载图片
+            logger.info(f"检测到图片，开始下载...")
+            base64_images = await self.download_images(event)
+            logger.info(f"成功下载 {len(base64_images)} 张图片")
 
         # 获取对话历史
         key = self._get_conversation_key(event)
@@ -212,20 +259,37 @@ class MessageHandler:
 
         # 构建消息列表
         messages = [
-            {"role": "system", "content": system_prompt},
-            *conversation.get_messages(config.MAX_CONTEXT_LENGTH),
-            {"role": "user", "content": user_message}
+            self.ai_client.build_text_message("system", system_prompt),
         ]
+
+        # 添加历史对话
+        for hist_msg in conversation.get_messages(config.MAX_CONTEXT_LENGTH):
+            role = hist_msg.get("role", "user")
+            content = hist_msg.get("content", "")
+            messages.append(self.ai_client.build_text_message(role, content))
+
+        # 添加当前用户消息（支持多模态）
+        if base64_images:
+            # 构建多模态消息
+            user_msg = self.ai_client.build_multimodal_message(
+                role="user",
+                text=user_message or "请描述这张图片",
+                images=base64_images
+            )
+            messages.append(user_msg)
+        else:
+            # 纯文本消息
+            messages.append(self.ai_client.build_text_message("user", user_message))
 
         try:
             # 调用 AI API
-            logger.info(f"调用 AI API，用户: {event.user_id}")
+            logger.info(f"调用 AI API，用户: {event.user_id}, 图片数: {len(base64_images)}")
             response = await self.ai_client.chat_completion(
                 messages=messages,
                 temperature=0.7
             )
 
-            # 更新对话历史
+            # 更新对话历史（仅保存文本内容）
             conversation.add_message("user", user_message)
             conversation.add_message("assistant", response.content)
 
@@ -284,8 +348,3 @@ class MessageHandler:
             parts.append(current_part)
 
         return parts
-
-
-class AIAPIError(Exception):
-    """AI API 错误"""
-    pass
