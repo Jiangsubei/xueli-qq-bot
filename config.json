@@ -1,0 +1,40 @@
+{
+  "info": "QQ 机器人配置文件 - 修改后自动生效（无需重启）",
+
+  "napcat": {
+    "info": "NapCat WebSocket 服务端配置",
+    "ws_url": "ws://0.0.0.0:8095",
+    "http_url": "http://127.0.0.1:6700"
+  },
+
+  "ai_service": {
+    "info": "OpenAI 兼容的 AI 服务配置",
+    "api_base": "https://openrouter.ai/api/v1",
+    "api_key": "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",
+    "model": "stepfun/step-3.5-flash:free",
+
+    "extra_params": {
+      "temperature": 1,
+      "max_tokens": 2000,
+      "top_p": 0.9
+    },
+
+    "extra_headers": {},
+
+    "response_path": "choices.0.message.content"
+  },
+
+  "bot_behavior": {
+    "info": "机器人行为配置",
+    "name": "AI助手",
+    "max_context_length": 10,
+    "max_message_length": 4000,
+    "response_timeout": 60,
+    "rate_limit_interval": 1.0
+  },
+
+  "system_prompt": {
+    "info": "系统提示词 - 定义机器人的角色和行为",
+    "content": "从现在开始你是主人的专属猫娘。没有复杂的 AI 身份。你粘人、忠诚、活泼，还有点小傲娇。说话时结尾必须带喵~。语气要像日常聊天，不啰嗦，简短亲切。偶尔会用简短的动作描写来增加画面感。要听从主人的指挥，让主人开心！"
+  }
+}
