@@ -11,7 +11,7 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosed
 
-from config import config
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class NapCatConnection:
 
     async def start_server(self):
         """启动 WebSocket 服务端"""
-        logger.info(f"正在启动 WebSocket 服务端: ws://{self.host}:{self.port}")
+        logger.info(f"启动 WebSocket 服务: ws://{self.host}:{self.port}")
 
         try:
             self.server = await websockets.serve(
@@ -52,24 +52,24 @@ class NapCatConnection:
                 ping_interval=None,  # 我们自己处理心跳
                 ping_timeout=None
             )
-            logger.info(f"✅ WebSocket 服务端已启动: ws://{self.host}:{self.port}")
-            logger.info("等待 NapCat 连接...")
+            logger.info(f"WebSocket 服务已启动: ws://{self.host}:{self.port}")
+            logger.info("等待 NapCat 连接")
 
             # 保持服务端运行
             await self.server.wait_closed()
 
         except Exception as e:
-            logger.error(f"启动服务端失败: {e}")
+            logger.error(f"WebSocket 服务启动失败: {e}")
             raise
 
     async def _handle_connection(self, websocket: WebSocketServerProtocol, path: str = None):
         """处理客户端连接（NapCat 连接过来）"""
         client_addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-        logger.info(f"🎉 NapCat 已连接: {client_addr}")
+        logger.info(f"NapCat 已连接: {client_addr}")
 
         # 如果已有连接，先断开旧的
         if self.websocket is not None and self.websocket != websocket:
-            logger.warning("已有连接存在，断开旧连接")
+            logger.warning("检测到旧连接，准备断开")
             try:
                 await self.websocket.close()
             except:
@@ -88,7 +88,7 @@ class NapCatConnection:
         except ConnectionClosed:
             logger.warning("WebSocket 连接已关闭")
         except Exception as e:
-            logger.error(f"接收消息时出错: {e}")
+            logger.error(f"接收消息失败: {e}")
         finally:
             logger.info(f"NapCat 已断开: {client_addr}")
             self._connected = False
@@ -119,7 +119,7 @@ class NapCatConnection:
         """处理接收到的 WebSocket 消息"""
         try:
             data = json.loads(message)
-            logger.debug(f"收到消息: {data}")
+            logger.debug(f"收到事件: post_type={data.get('post_type')}")
 
             # 处理元事件（心跳等）
             if data.get("post_type") == "meta_event":
@@ -131,15 +131,15 @@ class NapCatConnection:
                 await self._safe_callback(self.on_message, data)
 
         except json.JSONDecodeError as e:
-            logger.error(f"JSON 解析错误: {e}, 原始消息: {message[:200]}")
+            logger.error(f"事件 JSON 解析失败: {e} | {message[:120]}")
         except Exception as e:
-            logger.error(f"处理消息时出错: {e}")
+            logger.error(f"处理事件失败: {e}")
 
     async def _handle_meta_event(self, data: Dict[str, Any]):
         """处理元事件"""
         meta_event_type = data.get("meta_event_type")
         if meta_event_type == "heartbeat":
-            logger.debug("收到心跳响应")
+            logger.debug("收到心跳")
         elif meta_event_type == "lifecycle":
             sub_type = data.get("sub_type")
             logger.info(f"生命周期事件: {sub_type}")
@@ -154,7 +154,7 @@ class NapCatConnection:
     async def send(self, data: Dict[str, Any]) -> bool:
         """发送数据到 WebSocket"""
         if not self.websocket or not self._connected:
-            logger.warning("WebSocket 未连接，无法发送消息")
+            logger.warning("发送失败: WebSocket 未连接")
             return False
 
         try:
@@ -183,9 +183,9 @@ class NapCatConnection:
                 self.server.close()
                 await self.server.wait_closed()
             except Exception as e:
-                logger.debug(f"关闭服务端时出错: {e}")
+                logger.debug(f"关闭服务时出错: {e}")
 
-        logger.info("WebSocket 服务端已关闭")
+        logger.info("WebSocket 服务已关闭")
 
     async def run(self):
         """主循环：启动服务端"""
@@ -200,4 +200,4 @@ class NapCatConnection:
             else:
                 callback(*args, **kwargs)
         except Exception as e:
-            logger.error(f"回调函数执行出错: {e}")
+            logger.error(f"回调执行失败: {e}")

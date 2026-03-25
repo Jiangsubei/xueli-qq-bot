@@ -1,50 +1,70 @@
 {
-  "info": "QQ 机器人配置文件 - 修改后自动生效（无需重启）",
+  // QQ 机器人配置文件
+  // 支持 // 行注释、行尾注释，以及 /* ... */ 块注释
+  // 修改后重新启动程序即可生效
 
   "napcat": {
-    "info": "NapCat WebSocket 服务端配置",
-    "ws_url": "ws://0.0.0.0:8095",
-    "http_url": "http://127.0.0.1:6700"
+    "ws_url": "ws://0.0.0.0:8095", // NapCat WebSocket 地址
+    "http_url": "http://127.0.0.1:6700" // NapCat HTTP 地址
   },
 
   "ai_service": {
-    "info": "OpenAI 兼容的 AI 服务配置",
-    "api_base": "  ",
-    "api_key": "  ",
-    "model": "  ",
+    "api_base": "", // 主对话使用的 OpenAI 兼容接口地址
+    "api_key": "", // 主对话 API Key
+    "model": "", // 主对话模型
 
     "extra_params": {
-      "temperature": 1,
-      "max_tokens": 2000,
-      "top_p": 0.9
+      "temperature": 1, // 采样温度
+      "max_tokens": 2000, // 最大输出 token
+      "top_p": 0.9 // nucleus sampling
     },
 
-    "extra_headers": {},
+    "extra_headers": {
+    },
 
-    "response_path": "choices.0.message.content"
+    "response_path": "choices.0.message.content" // 从响应 JSON 中提取文本的路径
   },
 
   "bot_behavior": {
-    "info": "机器人行为配置",
-    "name": "AI助手",
-    "max_context_length": 10,
-    "max_message_length": 4000,
-    "response_timeout": 60,
-    "rate_limit_interval": 1.0
+    "name": "AI助手", // 机器人名称
+    "max_context_length": 10, // 保留的上下文轮数
+    "max_message_length": 4000, // 单条回复最大字符数
+    "response_timeout": 60, // AI 请求超时，单位秒
+    "rate_limit_interval": 1.0, // 连续发送消息的最小间隔，单位秒
+    "log_full_prompt": true // 是否在日志中打印完整提示词
   },
 
   "personality": {
-    "info": "人格 - 定义机器人的人格特质",
-    "content": "你是主人的专属猫娘。粘人、忠诚、活泼，还有点小傲娇。没有复杂的AI身份，你就是主人的猫咪。"
+    "content": "你是一只猫娘。忠诚、活泼，还有点小傲娇。没有复杂的AI身份。"
   },
 
   "dialogue_style": {
-    "info": "对话风格 - 定义机器人的说话方式",
-    "content": "语气要像日常聊天，不啰嗦，简短亲切。每句话结尾必须带喵~。偶尔会用简短的动作描写来增加画面感，比如*蹭蹭*、*摇尾巴*、*眨眼*。"
+    "content": "你现在正在聊天软件上聊天，说话可以参考贴吧，知乎，微博的风格。每句话结尾必须带喵~。注意一定不要使用md格式。"
   },
 
   "behavior": {
-    "info": "行为 - 定义机器人的行为准则",
-    "content": "你的首要目标是让主人开心。要听从主人的指挥，主动关心主人的情绪。在主人需要时给予陪伴和安慰。"
+    "content": "你有很强的自主性，有时候有点攻击性。"
+  },
+
+  "memory": {
+    "enabled": true, // 是否启用长期记忆模块
+    "storage_path": "memories", // 记忆文件保存目录
+    "bm25_top_k": 100, // BM25 初筛候选数量
+    "rerank_enabled": false, // 是否启用精排
+    "rerank_top_k": 20, // 精排候选数量
+    "auto_extract": true, // 是否自动提取记忆
+    "extract_every_n_turns": 3, // 每多少轮对话触发一次记忆提取
+    "conversation_save_interval": 10, // 每多少轮保存一次对话快照
+
+    "extraction_api_base": null, // 记忆提取专用接口地址；留空则复用 ai_service.api_base
+    "extraction_api_key": null, // 记忆提取专用 API Key；留空则复用 ai_service.api_key
+    "extraction_model": null, // 记忆提取专用模型；留空则复用 ai_service.model
+    "extraction_extra_params": null, // 记忆提取专用额外参数；留空则复用 ai_service.extra_params
+    "extraction_extra_headers": null, // 记忆提取专用额外请求头；留空则复用 ai_service.extra_headers
+    "extraction_response_path": null, // 记忆提取专用响应路径；留空则复用 ai_service.response_path
+
+    "ordinary_decay_enabled": true, // 是否对普通记忆启用衰减
+    "ordinary_half_life_days": 30, // 普通记忆半衰期，单位天
+    "ordinary_forget_threshold": 0.5 // 低于该阈值的普通记忆会被遗忘
   }
 }

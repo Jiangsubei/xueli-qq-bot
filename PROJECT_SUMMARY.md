@@ -19,12 +19,13 @@
 - **灵活扩展**：支持自定义请求参数、请求头、响应解析
 
 ### 2. 模块化设计
-- `config.py` - 通用配置管理
-- `ai_client.py` - 通用 OpenAI 兼容客户端
-- `message_handler.py` - 消息处理逻辑
-- `bot.py` - 机器人主类
-- `connection.py` - WebSocket 连接管理
-- `dispatcher.py` - 事件分发
+- `src/core/config.py` - 通用配置管理
+- `src/services/ai_client.py` - 通用 OpenAI 兼容客户端
+- `src/handlers/message_handler.py` - 消息处理逻辑
+- `src/core/bot.py` - 机器人主类
+- `src/core/connection.py` - WebSocket 连接管理
+- `src/core/dispatcher.py` - 事件分发
+- `src/memory/` - 记忆提取、检索与存储模块
 
 ### 3. 完整功能支持
 - 私聊消息处理
@@ -138,30 +139,43 @@ OPENAI_RESPONSE_PATH=output.choices.0.message.content
 
 ```
 .
-├── config.py              # 通用配置管理
-├── ai_client.py           # 通用 OpenAI 兼容客户端
-├── message_handler.py     # 消息处理器
-├── bot.py                 # 机器人主类
-├── main.py                # 入口文件
-├── connection.py          # WebSocket 连接管理
-├── dispatcher.py          # 事件分发
-├── models.py              # 数据模型
-├── test_api.py            # API 测试工具
-├── .env.example           # 环境变量模板
-├── API_CONFIG_GUIDE.md    # API 配置指南
-├── PROJECT_SUMMARY.md     # 项目概述（本文档）
-├── requirements.txt       # 依赖列表
-├── start.bat              # Windows 启动脚本
-├── start.sh               # Linux/Mac 启动脚本
-└── .gitignore             # Git 忽略文件
+├── main.py                     # 入口文件
+├── src/
+│   ├── core/                  # 核心模块
+│   │   ├── bot.py             # 机器人主类
+│   │   ├── config.py          # 通用配置管理
+│   │   ├── connection.py      # WebSocket 连接管理
+│   │   ├── dispatcher.py      # 事件分发
+│   │   └── models.py          # 数据模型
+│   ├── handlers/
+│   │   └── message_handler.py # 消息处理器
+│   ├── services/
+│   │   ├── ai_client.py       # OpenAI 兼容客户端
+│   │   └── image_client.py    # 图片服务客户端
+│   └── memory/
+│       ├── extraction/        # 记忆提取
+│       ├── retrieval/         # 记忆检索
+│       ├── storage/           # 记忆存储
+│       └── memory_manager.py  # 记忆管理入口
+├── memories/                  # 本地运行期数据
+├── test_api.py                # API 测试工具
+├── test_ai.py                 # AI 对话测试
+├── test_memory.py             # 记忆模块测试
+├── .env.example               # 环境变量模板
+├── API_CONFIG_GUIDE.md        # API 配置指南
+├── PROJECT_SUMMARY.md         # 项目概述（本文档）
+├── requirements.txt           # 依赖列表
+├── start.bat                  # Windows 启动脚本
+├── start.sh                   # Linux/Mac 启动脚本
+└── .gitignore                 # Git 忽略文件
 ```
 
 ## 代码统计
 
 - **总代码行数**: ~2000+ 行
-- **核心模块**: 9 个 Python 文件
+- **核心模块**: `src/` 下按 core / handlers / services / memory 分层组织
 - **配置文件**: 3 个 (.env.example, .md 文档)
-- **测试工具**: 2 个 (test_api.py 等)
+- **测试工具**: 3 个 (`test_api.py`、`test_ai.py`、`test_memory.py`)
 
 ## 技术栈
 

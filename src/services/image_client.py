@@ -31,14 +31,14 @@ class ImageClient:
         """初始化 HTTP 会话"""
         if not self.session:
             self.session = aiohttp.ClientSession()
-            logger.debug("ImageClient HTTP 会话初始化完成")
+            logger.debug("图片客户端会话已创建")
 
     async def close(self):
         """关闭 HTTP 会话"""
         if self.session:
             await self.session.close()
             self.session = None
-            logger.debug("ImageClient HTTP 会话已关闭")
+            logger.debug("图片客户端会话已关闭")
 
     def _fix_url(self, url: str) -> str:
         """
@@ -69,26 +69,26 @@ class ImageClient:
         fixed_url = self._fix_url(url)
 
         try:
-            logger.debug(f"从 URL 下载图片: {fixed_url[:100]}...")
+            logger.debug(f"下载图片: {fixed_url[:80]}")
             async with self.session.get(fixed_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status != 200:
-                    logger.error(f"下载图片失败: HTTP {response.status}")
+                    logger.error(f"图片下载失败: HTTP {response.status}")
                     return None
 
                 # 检查内容类型是否为图片
                 content_type = response.headers.get('Content-Type', '')
                 if not content_type.startswith('image/'):
-                    logger.warning(f"下载的内容不是图片: {content_type}")
+                    logger.warning(f"返回内容不是图片: {content_type}")
 
                 image_bytes = await response.read()
-                logger.debug(f"图片下载成功: {len(image_bytes)} 字节")
+                logger.debug(f"图片下载完成: {len(image_bytes)} 字节")
                 return image_bytes
 
         except aiohttp.ClientError as e:
-            logger.error(f"下载图片 HTTP 错误: {e}")
+            logger.error(f"图片下载请求失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"下载图片出错: {e}", exc_info=True)
+            logger.error(f"图片下载失败: {e}", exc_info=True)
             return None
 
     async def download_image_from_base64(self, base64_data: str) -> Optional[bytes]:
@@ -107,11 +107,11 @@ class ImageClient:
                 base64_data = base64_data[9:]
 
             image_bytes = base64.b64decode(base64_data)
-            logger.debug(f"Base64 图片解码成功: {len(image_bytes)} 字节")
+            logger.debug(f"Base64 解码完成: {len(image_bytes)} 字节")
             return image_bytes
 
         except Exception as e:
-            logger.error(f"Base64 图片解码失败: {e}")
+            logger.error(f"Base64 解码失败: {e}")
             return None
 
     async def process_image_segment(self, segment_data: Dict[str, Any]) -> Optional[str]:
@@ -132,7 +132,7 @@ class ImageClient:
             # 优先使用 url（最常见）
             url = segment_data.get("url")
             if url:
-                logger.debug(f"从 URL 处理图片: {url[:80]}...")
+                logger.debug(f"按 URL 处理图片: {url[:80]}")
                 image_bytes = await self.download_image_from_url(url)
                 if image_bytes:
                     return base64.b64encode(image_bytes).decode('utf-8')
@@ -143,24 +143,24 @@ class ImageClient:
             if file_field:
                 # 检查是否是 base64 编码
                 if file_field.startswith("base64://"):
-                    logger.debug("从 base64 处理图片")
+                    logger.debug("按 Base64 处理图片")
                     image_bytes = await self.download_image_from_base64(file_field)
                     if image_bytes:
                         return base64.b64encode(image_bytes).decode('utf-8')
                 else:
                     # 本地文件路径 - 直接读取
-                    logger.debug(f"从本地文件读取图片: {file_field}")
+                    logger.debug(f"读取本地图片: {file_field}")
                     try:
                         with open(file_field, 'rb') as f:
                             image_bytes = f.read()
                         return base64.b64encode(image_bytes).decode('utf-8')
                     except Exception as e:
-                        logger.error(f"读取本地图片文件失败: {e}")
+                        logger.error(f"读取本地图片失败: {e}")
                 return None
 
-            logger.warning("图片消息段中没有找到 url 或 file 字段")
+            logger.warning("图片消息缺少 url 或 file 字段")
             return None
 
         except Exception as e:
-            logger.error(f"处理图片消息段时出错: {e}", exc_info=True)
+            logger.error(f"处理图片消息失败: {e}", exc_info=True)
             return None

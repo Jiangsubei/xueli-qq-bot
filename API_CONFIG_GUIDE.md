@@ -102,13 +102,7 @@ OPENAI_RESPONSE_PATH=choices.0.message.content
 
 ## 验证配置
 
-### 1. 运行配置验证
-
-```bash
-python verify_setup.py
-```
-
-### 2. 测试 API 连接
+### 1. 测试 API 连接
 
 ```bash
 python test_api.py
@@ -116,7 +110,7 @@ python test_api.py
 
 脚本会自动读取 `.env` 中的配置并测试连接。
 
-### 3. 启动机器人
+### 2. 启动机器人
 
 ```bash
 python main.py

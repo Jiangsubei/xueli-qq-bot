@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 import aiohttp
 from dataclasses import dataclass
 
-from config import config
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class AIResponse:
     usage: Optional[Dict[str, int]] = None
     model: str = ""
     finish_reason: str = ""
+    tool_calls: Optional[List[Dict[str, Any]]] = None
     raw_response: Optional[Dict[str, Any]] = None  # 保存完整响应用于调试
 
 
@@ -77,7 +78,7 @@ class AIClient:
         self.session: Optional[aiohttp.ClientSession] = None
         self._semaphore = asyncio.Semaphore(5)  # 限制并发请求数
 
-        logger.debug(f"AIClient 初始化: url={self.chat_completions_url}, model={self.model}")
+        logger.debug(f"AI 客户端已就绪: 模型={self.model}, 地址={self.chat_completions_url}")
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
@@ -145,8 +146,8 @@ class AIClient:
         # 合并额外参数（来自配置或构造时传入）
         body.update(self.extra_params)
 
-        # 合并调用时传入的参数
-        body.update(kwargs)
+        # 合并调用时传入的参数，忽略 None，避免覆盖默认值
+        body.update({key: value for key, value in kwargs.items() if value is not None})
 
         return body
 
@@ -276,8 +277,8 @@ class AIClient:
             return str(current) if current else ""
 
         except (KeyError, IndexError, TypeError) as e:
-            logger.error(f"无法从路径 '{self.response_path}' 提取内容: {e}")
-            logger.debug(f"响应数据: {data}")
+            logger.error(f"提取响应内容失败: 路径={self.response_path}, 错误={e}")
+            logger.debug(f"响应预览: {str(data)[:300]}")
             # 返回备用内容
             return data.get("content", "") or data.get("text", "") or ""
 
@@ -335,8 +336,10 @@ class AIClient:
 
         async with self._semaphore:
             try:
-                logger.debug(f"发送请求到 {self.chat_completions_url}")
-                logger.debug(f"请求体: {body}")
+                logger.debug(
+                    f"请求 AI: 模型={body.get('model')}, 消息数={len(messages)}, "
+                    f"流式={stream}, 地址={self.chat_completions_url}"
+                )
 
                 async with self.session.post(
                     self.chat_completions_url,
@@ -345,7 +348,7 @@ class AIClient:
                     response_text = await response.text()
 
                     if response.status != 200:
-                        logger.error(f"API 请求失败: {response.status}, {response_text}")
+                        logger.error(f"AI 请求失败: HTTP {response.status} | {response_text[:200]}")
                         raise AIAPIError(
                             f"API 请求失败: {response.status}, {response_text[:500]}"
                         )
@@ -354,16 +357,16 @@ class AIClient:
                     try:
                         data = json.loads(response_text)
                     except json.JSONDecodeError as e:
-                        logger.error(f"JSON 解析失败: {e}, 响应: {response_text[:500]}")
+                        logger.error(f"响应 JSON 解析失败: {e} | {response_text[:200]}")
                         raise AIAPIError(f"无法解析 API 响应: {e}")
 
                     return self._parse_response(data)
 
             except aiohttp.ClientError as e:
-                logger.error(f"HTTP 请求失败: {e}")
+                logger.error(f"AI 请求异常: {e}")
                 raise AIAPIError(f"HTTP 请求失败: {e}")
             except asyncio.TimeoutError:
-                logger.error(f"请求超时 (>{self.timeout}秒)")
+                logger.error(f"AI 请求超时: {self.timeout} 秒")
                 raise AIAPIError(f"请求超时，请稍后重试")
 
     def _parse_response(self, data: Dict[str, Any]) -> AIResponse:
@@ -386,20 +389,23 @@ class AIClient:
                 # 某些服务可能格式不同
                 choice = data
 
+            message = choice.get("message", {}) if isinstance(choice, dict) else {}
             finish_reason = choice.get("finish_reason", "")
             usage = data.get("usage")
             model = data.get("model", self.model)
+            tool_calls = message.get("tool_calls") or choice.get("tool_calls") or []
 
             return AIResponse(
                 content=content,
                 usage=usage,
                 model=model,
                 finish_reason=finish_reason,
+                tool_calls=tool_calls,
                 raw_response=data  # 保存完整响应用于调试
             )
 
         except Exception as e:
-            logger.error(f"解析响应失败: {e}, 数据: {str(data)[:500]}")
+            logger.error(f"解析 AI 响应失败: {e} | {str(data)[:200]}")
             # 尝试返回原始内容
             return AIResponse(
                 content=str(data)[:1000],

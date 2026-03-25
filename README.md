@@ -17,17 +17,28 @@
 
 ```
 .
-├── main.py              # 程序入口
-├── bot.py              # 机器人主类
-├── config.py           # 配置管理
-├── connection.py       # WebSocket 连接管理
-├── dispatcher.py       # 事件分发
-├── message_handler.py  # 消息处理
-├── ai_client.py        # AI API 客户端
-├── models.py           # 数据模型
-├── requirements.txt    # 依赖列表
-├── .env.example        # 环境变量示例
-└── README.md           # 使用说明
+├── main.py                         # 程序入口
+├── src/
+│   ├── core/                      # 核心运行模块
+│   │   ├── bot.py                 # 机器人主类
+│   │   ├── config.py              # 配置管理
+│   │   ├── connection.py          # WebSocket 连接管理
+│   │   ├── dispatcher.py          # 事件分发
+│   │   └── models.py              # 数据模型
+│   ├── handlers/
+│   │   └── message_handler.py     # 消息处理
+│   ├── services/
+│   │   ├── ai_client.py           # AI API 客户端
+│   │   └── image_client.py        # 图片服务客户端
+│   └── memory/                    # 记忆系统
+│       ├── memory_manager.py      # 记忆管理入口
+│       ├── extraction/            # 记忆提取
+│       ├── retrieval/             # 记忆检索
+│       └── storage/               # 记忆存储
+├── memories/                      # 运行期生成的记忆数据
+├── requirements.txt               # 依赖列表
+├── .env.example                   # 环境变量示例
+└── README.md                      # 使用说明
 ```
 
 ## 🚀 快速开始
@@ -134,6 +145,16 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 OPENAI_API_URL=https://api.openai.com/v1/chat/completions
 OPENAI_MODEL=gpt-3.5-turbo
 ```
+
+## 🧠 记忆数据说明
+
+运行过程中产生的用户资料、会话记录和重要记忆会保存在 `memories/` 目录下。
+
+- `memories/users/`：用户画像和长期资料
+- `memories/conversations/`：会话历史记录
+- `memories/important/`：抽取后的重要记忆
+
+这些文件属于本地运行数据，默认不建议提交到 Git 仓库。
 
 ## 🔧 故障排除
 

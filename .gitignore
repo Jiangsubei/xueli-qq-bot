@@ -39,6 +39,9 @@ ENV/
 logs/
 *.db
 *.sqlite
+memories/
+.claude/settings.local.json
+.pytest_cache/
 
 # OS
 .DS_Store

@@ -15,7 +15,7 @@ import os
 # 将当前目录添加到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bot import QQBot
+from src.core.bot import QQBot
 
 
 async def main():

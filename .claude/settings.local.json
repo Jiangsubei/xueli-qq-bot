@@ -8,7 +8,14 @@
       "Bash(./venv/Scripts/python main.py)",
       "Bash(./venv/Scripts/python -c \":*)",
       "Bash(netstat -ano)",
-      "Bash(findstr :8095)"
+      "Bash(findstr :8095)",
+      "Bash(ls -la d:WorkscodeClaude*.py)",
+      "Bash(dir d:WorkscodeClaude*.py)",
+      "Bash(dir /b d:WorkscodeClaude*.py)",
+      "Bash(ls -la d:WorkscodeClaudeconfig.*)",
+      "Bash(dir d:WorkscodeClaudeconfig.*)",
+      "Bash(dir d:WorkscodeClaudememories)",
+      "Bash(python test_memory.py)"
     ]
   }
 }

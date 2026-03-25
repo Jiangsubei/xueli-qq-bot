@@ -9,7 +9,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import config
+from src.core.config import config
 from ai_client import AIClient
 
 
