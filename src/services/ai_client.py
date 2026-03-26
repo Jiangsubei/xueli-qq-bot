@@ -1,114 +1,98 @@
 """
-AI API 客户端模块 - 通用 OpenAI 兼容实现
-支持任意遵循 OpenAI API 规范的服务
+AI client facade that keeps the public API stable while delegating request
+building, response parsing, error mapping, and HTTP session management.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
-from typing import List, Dict, Any, Optional, AsyncGenerator
-import aiohttp
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from src.core.config import config
+import aiohttp
+
+from src.core.config import AppConfig, config
+from src.services.ai import (
+    AIAPIError,
+    AIHTTPSessionManager,
+    AIRequestBuilder,
+    AIResponse,
+    AIResponseParser,
+    map_client_error,
+    map_http_error,
+    map_json_error,
+    map_timeout_error,
+)
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class AIResponse:
-    """AI 响应"""
-    content: str
-    usage: Optional[Dict[str, int]] = None
-    model: str = ""
-    finish_reason: str = ""
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    raw_response: Optional[Dict[str, Any]] = None  # 保存完整响应用于调试
-
-
 class AIClient:
-    """
-    通用 OpenAI 兼容 API 客户端
-
-    支持任意遵循 OpenAI API 规范的服务:
-    - OpenAI (api.openai.com)
-    - DeepSeek (api.deepseek.com)
-    - OpenRouter (openrouter.ai)
-    - Azure OpenAI
-    - 本地 Ollama
-    - 其他兼容服务
-    """
+    """OpenAI-compatible client facade."""
 
     def __init__(
         self,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         extra_params: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
-        response_path: Optional[str] = None
+        response_path: Optional[str] = None,
+        log_label: str = "ai",
+        app_config: Optional[AppConfig] = None,
     ):
-        """
-        初始化 AI 客户端
+        self.app_config = app_config or config.app
+        ai_service = self.app_config.ai_service
+        bot_behavior = self.app_config.bot_behavior
 
-        Args:
-            api_base: API 基础 URL，如 https://api.openai.com/v1
-            api_key: API 密钥
-            model: 模型名称
-            timeout: 请求超时时间（秒）
-            extra_params: 额外请求参数
-            extra_headers: 额外请求头
-            response_path: 响应内容提取路径
-        """
-        # 优先使用传入参数，否则使用配置
-        self.api_base = (api_base or config.OPENAI_API_BASE).rstrip('/')
-        self.api_key = api_key or config.OPENAI_API_KEY
-        self.model = model or config.OPENAI_MODEL
-        self.timeout = timeout
-
-        # 额外参数和请求头
-        self.extra_params = extra_params or config.get_extra_params()
-        self.extra_headers = extra_headers or config.get_extra_headers()
-        self.response_path = response_path or config.OPENAI_RESPONSE_PATH
-
-        # 构建完整 API URL
+        self.api_base = str(api_base or ai_service.api_base).rstrip("/")
+        self.api_key = str(api_key or ai_service.api_key)
+        self.model = str(model or ai_service.model)
+        self.timeout = int(timeout if timeout is not None else bot_behavior.response_timeout)
+        self.extra_params = dict(extra_params) if extra_params is not None else dict(ai_service.extra_params)
+        self.extra_headers = dict(extra_headers) if extra_headers is not None else dict(ai_service.extra_headers)
+        self.response_path = str(response_path or ai_service.response_path)
+        self.log_label = str(log_label or "ai")
         self.chat_completions_url = f"{self.api_base}/chat/completions"
 
-        # HTTP 会话
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._semaphore = asyncio.Semaphore(5)  # 限制并发请求数
+        self._request_builder = AIRequestBuilder(self.model, self.extra_params)
+        self._response_parser = AIResponseParser(
+            response_path=self.response_path,
+            default_model=self.model,
+            log_label=self.log_label,
+        )
+        self._session_manager = AIHTTPSessionManager(
+            api_key=self.api_key,
+            extra_headers=self.extra_headers,
+            timeout=self.timeout,
+        )
+        self._semaphore = asyncio.Semaphore(5)
 
-        logger.debug(f"AI 客户端已就绪: 模型={self.model}, 地址={self.chat_completions_url}")
+        logger.debug(
+            "[%s] AI client prepared: model=%s url=%s timeout=%s",
+            self.log_label,
+            self.model,
+            self.chat_completions_url,
+            self.timeout,
+        )
+
+    @property
+    def session(self):
+        return self._session_manager.session
 
     async def __aenter__(self):
-        """异步上下文管理器入口"""
         await self._init_session()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
         await self.close()
 
     async def _init_session(self):
-        """初始化 HTTP 会话"""
-        if not self.session:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            # 合并额外请求头
-            headers.update(self.extra_headers)
-
-            self.session = aiohttp.ClientSession(
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            )
+        await self._session_manager.ensure_session()
 
     async def close(self):
-        """关闭 HTTP 会话"""
-        if self.session:
-            await self.session.close()
-            self.session = None
+        await self._session_manager.close()
 
     def _build_request_body(
         self,
@@ -116,52 +100,17 @@ class AIClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
-        """
-        构建请求体
-
-        Args:
-            messages: 消息列表，支持多模态内容
-            temperature: 采样温度
-            max_tokens: 最大生成 token 数
-            stream: 是否流式输出
-            **kwargs: 其他参数
-
-        Returns:
-            请求体字典
-        """
-        body = {
-            "model": self.model,
-            "messages": messages,
-            "stream": stream
-        }
-
-        # 添加可选参数
-        if temperature is not None:
-            body["temperature"] = temperature
-        if max_tokens is not None:
-            body["max_tokens"] = max_tokens
-
-        # 合并额外参数（来自配置或构造时传入）
-        body.update(self.extra_params)
-
-        # 合并调用时传入的参数，忽略 None，避免覆盖默认值
-        body.update({key: value for key, value in kwargs.items() if value is not None})
-
-        return body
+        return self._request_builder.build(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=stream,
+            **kwargs,
+        )
 
     def build_text_message(self, role: str, content: str) -> Dict[str, Any]:
-        """
-        构建纯文本消息
-
-        Args:
-            role: 角色 (system/user/assistant)
-            content: 文本内容
-
-        Returns:
-            消息字典
-        """
         return {"role": role, "content": content}
 
     def build_multimodal_message(
@@ -169,251 +118,109 @@ class AIClient:
         role: str,
         text: str,
         images: List[str],
-        image_format: str = "base64"
+        image_format: str = "base64",
     ) -> Dict[str, Any]:
-        """
-        构建多模态消息（文本 + 图片）
+        del image_format
+        content: List[Dict[str, Any]] = []
 
-        Args:
-            role: 角色 (system/user/assistant)
-            text: 文本内容
-            images: 图片列表，每个元素是 base64 编码的图片数据
-            image_format: 图片格式，默认为 base64
-
-        Returns:
-            多模态消息字典，符合 OpenAI Vision API 格式
-        """
-        # 构建 content 列表
-        content = []
-
-        # 添加文本部分
         if text:
-            content.append({
-                "type": "text",
-                "text": text
-            })
+            content.append({"type": "text", "text": text})
 
-        # 添加图片部分
         for image_data in images:
-            # 如果图片数据已经是 data URL 格式，直接使用
-            if image_data.startswith("data:"):
-                image_url = image_data
-            else:
-                # 否则添加 data URL 前缀（假设是 jpeg 格式）
-                image_url = f"data:image/jpeg;base64,{image_data}"
-
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": image_url
+            image_url = image_data if image_data.startswith("data:") else f"data:image/jpeg;base64,{image_data}"
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
                 }
-            })
+            )
 
         return {"role": role, "content": content}
 
     def convert_to_multimodal_format(
         self,
         messages: List[Dict[str, Any]],
-        images_map: Dict[int, List[str]]
+        images_map: Dict[int, List[str]],
     ) -> List[Dict[str, Any]]:
-        """
-        将普通消息列表转换为多模态格式
-
-        Args:
-            messages: 原始消息列表
-            images_map: 图片映射，key 是消息索引，value 是 base64 图片列表
-
-        Returns:
-            转换后的多模态消息列表
-        """
         result = []
-
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-
-            # 检查是否有对应的图片
-            if i in images_map and images_map[i]:
-                # 转换为多模态消息
-                multimodal_msg = self.build_multimodal_message(
-                    role=role,
-                    text=content if isinstance(content, str) else "",
-                    images=images_map[i]
+        for index, message in enumerate(messages):
+            if index in images_map and images_map[index]:
+                result.append(
+                    self.build_multimodal_message(
+                        role=message.get("role", "user"),
+                        text=message.get("content", "") if isinstance(message.get("content"), str) else "",
+                        images=images_map[index],
+                    )
                 )
-                result.append(multimodal_msg)
             else:
-                # 保持原始消息格式
-                result.append(msg)
-
+                result.append(message)
         return result
 
     def _extract_content(self, data: Dict[str, Any]) -> str:
-        """
-        从响应数据中提取内容
+        return self._response_parser.extract_content(data)
 
-        支持可配置的响应路径，如:
-        - choices.0.message.content (标准 OpenAI)
-        - output.choices.0.message.content (某些变体)
-        - text.0 (某些简化服务)
-
-        Args:
-            data: 响应数据字典
-
-        Returns:
-            提取的内容字符串
-        """
-        try:
-            # 按路径分割
-            path_parts = self.response_path.split('.')
-
-            current = data
-            for part in path_parts:
-                # 处理数组索引，如 "0"
-                if part.isdigit():
-                    current = current[int(part)]
-                else:
-                    current = current[part]
-
-            return str(current) if current else ""
-
-        except (KeyError, IndexError, TypeError) as e:
-            logger.error(f"提取响应内容失败: 路径={self.response_path}, 错误={e}")
-            logger.debug(f"响应预览: {str(data)[:300]}")
-            # 返回备用内容
-            return data.get("content", "") or data.get("text", "") or ""
+    def _parse_response(self, data: Dict[str, Any]) -> AIResponse:
+        return self._response_parser.parse(data)
 
     async def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = 0.7,
         max_tokens: Optional[int] = None,
         stream: bool = False,
-        **kwargs
+        **kwargs,
     ) -> AIResponse:
-        """
-        发起聊天补全请求
-
-        这是通用的 OpenAI 兼容 API 调用方法，支持:
-        - OpenAI (api.openai.com)
-        - DeepSeek (api.deepseek.com)
-        - OpenRouter (openrouter.ai)
-        - Azure OpenAI
-        - 本地 Ollama
-        - 其他兼容服务
-
-        Args:
-            messages: 消息列表，格式为 [
-                {"role": "system", "content": "..."},
-                {"role": "user", "content": "..."}
-            ]
-            temperature: 采样温度 (0-2)
-            max_tokens: 最大生成 token 数
-            stream: 是否使用流式输出
-            **kwargs: 其他参数，会合并到请求体中
-
-        Returns:
-            AIResponse 对象，包含:
-            - content: AI 生成的回复内容
-            - usage: token 使用情况 (如果 API 返回)
-            - model: 实际使用的模型名称
-            - finish_reason: 生成结束原因
-            - raw_response: 完整的 API 响应 (用于调试)
-
-        Raises:
-            AIAPIError: 当 API 请求失败时
-            asyncio.TimeoutError: 当请求超时时
-        """
         await self._init_session()
-
-        # 构建请求体
         body = self._build_request_body(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             stream=stream,
-            **kwargs
+            **kwargs,
         )
 
         async with self._semaphore:
             try:
                 logger.debug(
-                    f"请求 AI: 模型={body.get('model')}, 消息数={len(messages)}, "
-                    f"流式={stream}, 地址={self.chat_completions_url}"
+                    "[%s] AI request: model=%s messages=%s stream=%s url=%s",
+                    self.log_label,
+                    body.get("model"),
+                    len(messages),
+                    stream,
+                    self.chat_completions_url,
+                )
+                status, response_text = await self._session_manager.post_text(
+                    self.chat_completions_url,
+                    body,
                 )
 
-                async with self.session.post(
-                    self.chat_completions_url,
-                    json=body
-                ) as response:
-                    response_text = await response.text()
+                if status != 200:
+                    logger.error(
+                        "[%s] AI request failed: HTTP %s %s",
+                        self.log_label,
+                        status,
+                        response_text[:200],
+                    )
+                    raise map_http_error(status, response_text)
 
-                    if response.status != 200:
-                        logger.error(f"AI 请求失败: HTTP {response.status} | {response_text[:200]}")
-                        raise AIAPIError(
-                            f"API 请求失败: {response.status}, {response_text[:500]}"
-                        )
+                try:
+                    data = json.loads(response_text)
+                except json.JSONDecodeError as exc:
+                    logger.error(
+                        "[%s] invalid AI JSON response: %s %s",
+                        self.log_label,
+                        exc,
+                        response_text[:200],
+                    )
+                    raise map_json_error(exc)
 
-                    # 解析响应
-                    try:
-                        data = json.loads(response_text)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"响应 JSON 解析失败: {e} | {response_text[:200]}")
-                        raise AIAPIError(f"无法解析 API 响应: {e}")
-
-                    return self._parse_response(data)
-
-            except aiohttp.ClientError as e:
-                logger.error(f"AI 请求异常: {e}")
-                raise AIAPIError(f"HTTP 请求失败: {e}")
+                return self._parse_response(data)
+            except aiohttp.ClientError as exc:
+                logger.error("[%s] AI client error: %s", self.log_label, exc)
+                raise map_client_error(exc)
             except asyncio.TimeoutError:
-                logger.error(f"AI 请求超时: {self.timeout} 秒")
-                raise AIAPIError(f"请求超时，请稍后重试")
-
-    def _parse_response(self, data: Dict[str, Any]) -> AIResponse:
-        """
-        解析 API 响应
-
-        Args:
-            data: API 返回的 JSON 数据
-
-        Returns:
-            AIResponse 对象
-        """
-        try:
-            # 提取内容
-            content = self._extract_content(data)
-
-            # 尝试提取标准字段
-            choice = data.get("choices", [{}])[0] if data.get("choices") else {}
-            if not choice:
-                # 某些服务可能格式不同
-                choice = data
-
-            message = choice.get("message", {}) if isinstance(choice, dict) else {}
-            finish_reason = choice.get("finish_reason", "")
-            usage = data.get("usage")
-            model = data.get("model", self.model)
-            tool_calls = message.get("tool_calls") or choice.get("tool_calls") or []
-
-            return AIResponse(
-                content=content,
-                usage=usage,
-                model=model,
-                finish_reason=finish_reason,
-                tool_calls=tool_calls,
-                raw_response=data  # 保存完整响应用于调试
-            )
-
-        except Exception as e:
-            logger.error(f"解析 AI 响应失败: {e} | {str(data)[:200]}")
-            # 尝试返回原始内容
-            return AIResponse(
-                content=str(data)[:1000],
-                model=self.model,
-                raw_response=data
-            )
+                logger.error("[%s] AI request timeout: %s seconds", self.log_label, self.timeout)
+                raise map_timeout_error()
 
 
-class AIAPIError(Exception):
-    """AI API 错误"""
-    pass
+__all__ = ["AIClient", "AIResponse", "AIAPIError"]

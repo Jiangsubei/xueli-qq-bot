@@ -1,10 +1,15 @@
 """
-重要记忆存储。
+Important memory storage.
 
-这些记忆会在新会话开始时优先读取，也会在检索阶段优先匹配。
+These memories are persisted in Markdown for transparent inspection while
+keeping richer metadata in an inline JSON comment for migration and policy use.
 """
+from __future__ import annotations
+
+import json
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,22 +19,23 @@ import aiofiles
 logger = logging.getLogger(__name__)
 
 
+@dataclass
 class ImportantMemoryItem:
-    """重要记忆项。"""
+    """A single important memory record."""
 
-    def __init__(
-        self,
-        content: str,
-        created_at: str = None,
-        source: str = "",
-        priority: int = 1,
-        score: float = 0.0,
-    ):
-        self.content = content
-        self.created_at = created_at or datetime.now().isoformat()
-        self.source = source
-        self.priority = priority
-        self.score = score
+    content: str
+    created_at: str = ""
+    source: str = ""
+    priority: int = 1
+    score: float = 0.0
+    owner_user_id: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.created_at:
+            self.created_at = datetime.now().isoformat()
+        if self.metadata is None:
+            self.metadata = {}
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -38,21 +44,25 @@ class ImportantMemoryItem:
             "source": self.source,
             "priority": self.priority,
             "score": self.score,
+            "owner_user_id": self.owner_user_id,
+            "metadata": dict(self.metadata or {}),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ImportantMemoryItem":
         return cls(
             content=data.get("content", ""),
-            created_at=data.get("created_at"),
+            created_at=data.get("created_at", ""),
             source=data.get("source", ""),
-            priority=data.get("priority", 1),
+            priority=int(data.get("priority", 1) or 1),
             score=float(data.get("score", 0.0) or 0.0),
+            owner_user_id=data.get("owner_user_id", ""),
+            metadata=dict(data.get("metadata") or {}),
         )
 
 
 class ImportantMemoryStore:
-    """使用 Markdown 存储重要记忆。"""
+    """Store important memories as Markdown lines with JSON metadata."""
 
     def __init__(self, base_path: str = "memories/important"):
         self.base_path = Path(base_path)
@@ -60,6 +70,9 @@ class ImportantMemoryStore:
 
     def _get_user_file(self, user_id: str) -> Path:
         return self.base_path / f"{user_id}.md"
+
+    def get_user_ids(self) -> List[str]:
+        return sorted(file_path.stem for file_path in self.base_path.glob("*.md"))
 
     def _normalize_text(self, text: str) -> str:
         normalized = (text or "").lower().strip()
@@ -104,6 +117,30 @@ class ImportantMemoryStore:
 
         return max(substring_score, overlap_score)
 
+    def _build_payload(self, memory: ImportantMemoryItem) -> str:
+        return json.dumps(
+            {
+                "source": memory.source,
+                "metadata": dict(memory.metadata or {}),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def _parse_payload(self, raw_comment: str) -> tuple[str, Dict[str, Any]]:
+        text = str(raw_comment or "").strip()
+        if not text:
+            return "unknown", {}
+        if text.startswith("{"):
+            try:
+                payload = json.loads(text)
+                return str(payload.get("source") or "unknown"), dict(payload.get("metadata") or {})
+            except json.JSONDecodeError:
+                logger.debug("Failed to parse important memory payload JSON")
+        source_match = re.search(r"source:(.*?)$", text)
+        source = source_match.group(1).strip() if source_match else "unknown"
+        return source, {}
+
     async def _read_memories(self, user_id: str) -> List[ImportantMemoryItem]:
         file_path = self._get_user_file(user_id)
         if not file_path.exists():
@@ -122,15 +159,18 @@ class ImportantMemoryStore:
                 try:
                     timestamp_match = re.search(r"\[(.*?)\]", line)
                     priority_match = re.search(r"\[P(\d+)\]", line)
-                    source_match = re.search(r"source:(.*?)\s*-->", line)
+                    comment_match = re.search(r"<!--\s*(.+?)\s*-->$", line)
 
                     created_at = timestamp_match.group(1) if timestamp_match else datetime.now().isoformat()
                     priority = int(priority_match.group(1)) if priority_match else 1
-
                     content_start = line.find("]", line.find("[P")) + 1 if "[P" in line else 2
                     content_end = line.find("<!--") if "<!--" in line else len(line)
                     memory_content = line[content_start:content_end].strip()
-                    source = source_match.group(1).strip() if source_match else "unknown"
+
+                    source = "unknown"
+                    metadata: Dict[str, Any] = {}
+                    if comment_match:
+                        source, metadata = self._parse_payload(comment_match.group(1))
 
                     if memory_content:
                         memories.append(
@@ -139,14 +179,16 @@ class ImportantMemoryStore:
                                 created_at=created_at,
                                 source=source,
                                 priority=priority,
+                                owner_user_id=user_id,
+                                metadata=metadata,
                             )
                         )
                 except Exception as exc:
-                    logger.debug("解析重要记忆行失败: %s", exc)
+                    logger.debug("Failed to parse important memory line: %s", exc)
 
             return memories
         except Exception as exc:
-            logger.error("读取重要记忆失败: user=%s, 错误=%s", user_id, exc)
+            logger.error("Failed to read important memories: user=%s, error=%s", user_id, exc)
             return []
 
     async def _write_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
@@ -161,14 +203,14 @@ class ImportantMemoryStore:
                 except ValueError:
                     pass
                 lines.append(
-                    f"- [{display_time}] [P{memory.priority}] {memory.content}<!-- source:{memory.source} -->"
+                    f"- [{display_time}] [P{memory.priority}] {memory.content}<!-- {self._build_payload(memory)} -->"
                 )
 
             async with aiofiles.open(file_path, "w", encoding="utf-8") as file:
                 await file.write("\n".join(lines))
             return True
         except Exception as exc:
-            logger.error("写入重要记忆失败: user=%s, 错误=%s", user_id, exc)
+            logger.error("Failed to write important memories: user=%s, error=%s", user_id, exc)
             return False
 
     async def add_memory(
@@ -177,8 +219,8 @@ class ImportantMemoryStore:
         content: str,
         source: str = "manual",
         priority: int = 1,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[ImportantMemoryItem]:
-        """追加一条重要记忆；相同内容会去重并提升优先级。"""
         if not content or not content.strip():
             return None
 
@@ -192,15 +234,11 @@ class ImportantMemoryStore:
                     existing.content = normalized_content
                 if source and (existing.source == "unknown" or not existing.source):
                     existing.source = source
+                if metadata:
+                    existing.metadata.update(dict(metadata))
 
                 success = await self._write_memories(user_id, memories)
                 if success:
-                    logger.info(
-                        "重要记忆已去重更新: user=%s, 优先级=P%s, 内容=%s",
-                        user_id,
-                        existing.priority,
-                        existing.content[:40],
-                    )
                     return existing
                 return None
 
@@ -208,20 +246,14 @@ class ImportantMemoryStore:
             content=normalized_content,
             source=source,
             priority=int(priority),
+            owner_user_id=user_id,
+            metadata=dict(metadata or {}),
         )
         memories.append(memory)
         memories.sort(key=lambda item: (item.priority, item.created_at), reverse=True)
 
         success = await self._write_memories(user_id, memories)
-        if success:
-            logger.info(
-                "重要记忆已保存: user=%s, 优先级=P%s, 内容=%s",
-                user_id,
-                priority,
-                normalized_content[:40],
-            )
-            return memory
-        return None
+        return memory if success else None
 
     async def get_memories(
         self,
@@ -241,7 +273,6 @@ class ImportantMemoryStore:
         min_priority: int = 1,
         min_score: float = 0.35,
     ) -> List[ImportantMemoryItem]:
-        """按相关度搜索重要记忆。"""
         memories = await self.get_memories(user_id, min_priority=min_priority)
         matched: List[ImportantMemoryItem] = []
 
@@ -255,6 +286,8 @@ class ImportantMemoryStore:
                         source=memory.source,
                         priority=memory.priority,
                         score=score,
+                        owner_user_id=user_id,
+                        metadata=dict(memory.metadata or {}),
                     )
                 )
 
@@ -273,7 +306,7 @@ class ImportantMemoryStore:
                 return False
             return await self._write_memories(user_id, new_memories)
         except Exception as exc:
-            logger.error("删除重要记忆失败: user=%s, 错误=%s", user_id, exc)
+            logger.error("Failed to delete important memory: user=%s, error=%s", user_id, exc)
             return False
 
     async def clear_memories(self, user_id: str) -> bool:
@@ -283,8 +316,10 @@ class ImportantMemoryStore:
 
         try:
             file_path.unlink()
-            logger.info("重要记忆已清空: user=%s", user_id)
             return True
         except Exception as exc:
-            logger.error("清空重要记忆失败: user=%s, 错误=%s", user_id, exc)
+            logger.error("Failed to clear important memories: user=%s, error=%s", user_id, exc)
             return False
+
+    async def replace_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
+        return await self._write_memories(user_id, memories)

@@ -51,6 +51,7 @@ class MemoryItem:
     updated_at: str = ""
     tags: Optional[List[str]] = None
     metadata: Optional[Dict] = None
+    owner_user_id: str = ""
 
     def __post_init__(self):
         if self.tags is None:
@@ -97,6 +98,7 @@ class MemoryItem:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "metadata": self.metadata,
+            "owner_user_id": self.owner_user_id,
         }
         lines.append(
             f"  <!-- {json.dumps(hidden_payload, ensure_ascii=False, separators=(',', ':'))} -->"
@@ -170,6 +172,7 @@ class MemoryItem:
             updated_at=updated_at,
             tags=hidden_payload.get("tags") or [],
             metadata=metadata,
+            owner_user_id=hidden_payload.get("owner_user_id", ""),
         )
 
     @classmethod
@@ -219,6 +222,7 @@ class MemoryItem:
                 updated_at=updated_at,
                 tags=[tag.strip() for tag in tags if tag.strip()],
                 metadata=metadata,
+                owner_user_id=parsed_meta.get("owner", ""),
             )
         except Exception as e:
             logger.warning("解析记忆失败: 内容=%s, 错误=%s", line[:80], e)
@@ -255,6 +259,9 @@ class MarkdownMemoryStore:
 
     def _get_user_file(self, user_id: str) -> Path:
         return self.users_path / f"{user_id}.md"
+
+    def get_user_ids(self) -> List[str]:
+        return sorted(file_path.stem for file_path in self.users_path.glob("*.md"))
 
     def _get_archive_user_file(self, user_id: str) -> Path:
         return self.archive_users_path / f"{user_id}.md"
@@ -408,7 +415,7 @@ class MarkdownMemoryStore:
                 boosted_importance,
             )
 
-    async def _read_memories_async(self, file_path: Path) -> List[MemoryItem]:
+    async def _read_memories_async(self, file_path: Path, owner_user_id: str = "") -> List[MemoryItem]:
         if not file_path.exists():
             return []
 
@@ -423,6 +430,7 @@ class MarkdownMemoryStore:
         for block in self._parse_memory_blocks(content):
             mem = MemoryItem.from_markdown_block(block)
             if mem:
+                mem.owner_user_id = owner_user_id
                 memories.append(mem)
 
         return memories
@@ -459,7 +467,7 @@ class MarkdownMemoryStore:
             await self._remove_file_if_exists(file_path)
 
     async def get_user_memories(self, user_id: str) -> List[MemoryItem]:
-        memories = await self._read_memories_async(self._get_user_file(user_id))
+        memories = await self._read_memories_async(self._get_user_file(user_id), owner_user_id=user_id)
         active, archived = self._partition_memories_by_decay(memories)
         await self._sync_archive_file(self._get_archive_user_file(user_id), archived, f"user:{user_id}")
         if archived:
@@ -476,7 +484,7 @@ class MarkdownMemoryStore:
 
     async def get_archived_user_memories(self, user_id: str) -> List[MemoryItem]:
         """返回用户的软归档记忆，不修改原始文件。"""
-        memories = await self._read_memories_async(self._get_user_file(user_id))
+        memories = await self._read_memories_async(self._get_user_file(user_id), owner_user_id=user_id)
         _, archived = self._partition_memories_by_decay(memories)
         await self._sync_archive_file(self._get_archive_user_file(user_id), archived, f"user:{user_id}")
         return archived
@@ -490,6 +498,12 @@ class MarkdownMemoryStore:
 
     async def get_all_memories(self, user_id: str) -> List[MemoryItem]:
         return await self.get_user_memories(user_id) + await self.get_global_memories()
+
+    async def replace_user_memories(self, user_id: str, memories: List[MemoryItem]) -> bool:
+        return await self._write_memories_async(self._get_user_file(user_id), memories)
+
+    async def replace_global_memories(self, memories: List[MemoryItem]) -> bool:
+        return await self._write_memories_async(self.global_file, memories)
 
     async def add_memory(
         self,
@@ -526,6 +540,7 @@ class MarkdownMemoryStore:
             updated_at=now_iso,
             tags=tags or [],
             metadata=self._prepare_new_metadata(metadata),
+            owner_user_id=user_id or "",
         )
         memories.append(mem)
         success = await self._write_memories_async(target_file, memories)

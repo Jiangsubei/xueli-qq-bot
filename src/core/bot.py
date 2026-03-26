@@ -1,338 +1,390 @@
-"""
-QQ 机器人主类
-整合连接管理、事件分发和消息处理
-"""
+﻿"""QQ bot runtime coordinator."""
+from __future__ import annotations
+
 import asyncio
 import logging
 import signal
 import sys
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Set
 
+from src.core.bootstrap import BotBootstrapper
 from src.core.config import config
-from src.core.connection import NapCatConnection
-from src.core.dispatcher import EventDispatcher, EventContext
-from src.handlers.message_handler import MessageHandler
-from src.core.models import MessageEvent, MessageType
+from src.core.dispatcher import EventContext, EventDispatcher
+from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
+from src.core.models import MessageEvent, MessageSegment, MessageType
+from src.core.runtime_metrics import RuntimeMetrics
 
-# 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
 
 class QQBot:
-    """QQ 机器人"""
+    """Main bot runtime facade."""
 
     def __init__(self):
-        self.connection: Optional[NapCatConnection] = None
         self.dispatcher = EventDispatcher()
-        self.message_handler: Optional[MessageHandler] = None
-        self._running = False
-        self._shutdown_event = asyncio.Event()
+        self.runtime_metrics = RuntimeMetrics()
+        self.bootstrapper = BotBootstrapper(config)
 
-        # 机器人状态
+        self.connection = None
+        self.message_handler = None
+        self.memory_manager = None
+
+        self._running = False
+        self._initialized = False
+        self._closed = False
+        self._shutdown_event = asyncio.Event()
+        self._message_tasks: Set[asyncio.Task] = set()
+        self._connection_task: Optional[asyncio.Task] = None
+        self._handlers_registered = False
+
         self.status = {
             "connected": False,
             "ready": False,
             "messages_received": 0,
             "messages_sent": 0,
-            "errors": 0
+            "errors": 0,
         }
 
     async def initialize(self):
-        """初始化机器人"""
-        logger.info(f"启动机器人: {config.BOT_NAME}")
-
-        # 验证 API 配置
-        if not config.OPENAI_API_KEY:
-            logger.warning("未设置 OPENAI_API_KEY，AI 功能可能无法正常使用")
-        if not config.OPENAI_API_BASE:
-            logger.error("未设置 OPENAI_API_BASE，AI 功能将无法使用")
-            raise ValueError("必须设置 OPENAI_API_BASE 才能使用 AI 功能")
-
-        logger.info(f"AI 服务: {config.OPENAI_API_BASE}")
-        logger.info(f"默认模型: {config.OPENAI_MODEL}")
-
-        # 初始化记忆模块（如果配置启用）
-        self.memory_manager = None
-        memory_enabled = getattr(config, 'MEMORY_ENABLED', None)
-        logger.info(f"记忆模块: {'启用' if memory_enabled else '未启用'}")
-
-        if memory_enabled:
-            try:
-                from src.memory import MemoryManager, MemoryManagerConfig, RetrievalConfig, ExtractionConfig
-                memory_extraction_client_config = config.get_memory_extraction_client_config()
-                extraction_model = memory_extraction_client_config.get("model")
-
-                if getattr(config, "MEMORY_EXTRACTION_MODEL", None):
-                    logger.info(f"记忆提取模型: {extraction_model}")
-                else:
-                    logger.info(f"记忆提取模型未单独配置，回退主模型: {extraction_model}")
-
-                # 创建异步 LLM 回调函数用于记忆提取
-                async def llm_callback(system_prompt: str, messages: list):
-                    from src.services.ai_client import AIClient
-                    client = AIClient(**memory_extraction_client_config)
-
-                    try:
-                        # 构建完整的消息列表
-                        full_messages = [
-                            client.build_text_message("system", system_prompt),
-                        ]
-                        for m in messages:
-                            full_messages.append(client.build_text_message(m["role"], m["content"]))
-
-                        # 检查是否配置了专用的记忆提取模型
-                        extraction_model = getattr(config, 'MEMORY_EXTRACTION_MODEL', None)
-
-                        # 异步调用；只有配置了专用提取模型时才覆盖默认模型
-                        request_kwargs = {
-                            "messages": full_messages,
-                            "temperature": 0.3,
-                        }
-                        if extraction_model:
-                            request_kwargs["model"] = extraction_model
-
-                        result = await client.chat_completion(**request_kwargs)
-                        return result.content if hasattr(result, 'content') else str(result)
-                    finally:
-                        # 确保关闭 HTTP 会话
-                        await client.close()
-
-                # 配置记忆管理器
-                mm_config = MemoryManagerConfig(
-                    storage_base_path=getattr(config, 'MEMORY_STORAGE_PATH', 'memories'),
-                    retrieval_config=RetrievalConfig(
-                        bm25_top_k=getattr(config, 'MEMORY_BM25_TOP_K', 100),
-                        rerank_enabled=getattr(config, 'MEMORY_RERANK_ENABLED', False),
-                        rerank_top_k=getattr(config, 'MEMORY_RERANK_TOP_K', 20)
-                    ),
-                    extraction_config=ExtractionConfig(
-                        extract_every_n_turns=getattr(config, 'MEMORY_EXTRACT_EVERY_N_TURNS', 3)
-                    ),
-                    ordinary_decay_enabled=getattr(config, 'MEMORY_ORDINARY_DECAY_ENABLED', True),
-                    ordinary_half_life_days=getattr(config, 'MEMORY_ORDINARY_HALF_LIFE_DAYS', 30.0),
-                    ordinary_forget_threshold=getattr(config, 'MEMORY_ORDINARY_FORGET_THRESHOLD', 0.5),
-                    conversation_save_interval=getattr(config, 'MEMORY_CONVERSATION_SAVE_INTERVAL', 10),
-                    auto_extract_memory=getattr(config, 'MEMORY_AUTO_EXTRACT', True),
-                    auto_build_index=True
-                )
-
-                self.memory_manager = MemoryManager(
-                    llm_callback=llm_callback,
-                    config=mm_config
-                )
-
-                await self.memory_manager.initialize()
-                logger.info("记忆模块初始化完成")
-
-            except Exception as e:
-                logger.error(f"记忆模块初始化失败: {e}", exc_info=True)
-                self.memory_manager = None
-        else:
-            if memory_enabled is None:
-                logger.warning("记忆模块配置缺失: MEMORY_ENABLED")
-            elif memory_enabled is False:
-                logger.info("记忆模块已禁用")
-
-        # 初始化消息处理器
-        self.message_handler = MessageHandler(memory_manager=self.memory_manager)
-
-        # 设置事件处理器
-        self._setup_handlers()
-
-        # 初始化 WebSocket 服务端（等待 NapCat 连接）
-        # 从 NAPCAT_WS_URL 解析 host 和 port
-        ws_url = config.NAPCAT_WS_URL
-        if "://" in ws_url:
-            ws_url = ws_url.split("://", 1)[1]
-        if ":" in ws_url:
-            host, port_str = ws_url.rsplit(":", 1)
-            port = int(port_str)
-        else:
-            host = ws_url
-            port = 8095
-
-        logger.info(f"监听 NapCat 连接: ws://{host}:{port}")
-
-        self.connection = NapCatConnection(
-            host=host,
-            port=port,
-            on_message=self._on_websocket_message,
-            on_connect=self._on_connect,
-            on_disconnect=self._on_disconnect
-        )
-
-        logger.info("机器人初始化完成")
-
-    def _setup_handlers(self):
-        """设置事件处理器"""
-        # 注册预处理器
-        @self.dispatcher.register_preprocessor
-        def log_event(ctx: EventContext):
-            """记录事件日志"""
-            if ctx.event.post_type == "message":
-                event = ctx.event
-                if hasattr(event, 'message_type'):
-                    msg_type = "私聊" if event.message_type == "private" else "群聊"
-                    logger.info(f"收到{msg_type}消息: 用户={event.user_id}")
-
-        # 注册消息处理器
-        @self.dispatcher.on_message
-        async def handle_message(event: MessageEvent):
-            """处理消息"""
-            await self._handle_message_event(event)
-
-    async def _handle_message_event(self, event: MessageEvent):
-        """处理消息事件"""
-        # 更新统计
-        self.status["messages_received"] += 1
-
-        # 检查是否应该处理
-        if not self.message_handler.should_process(event):
+        """Initialize managed runtime dependencies."""
+        if self._initialized:
             return
 
-        # 检查频率限制
-        target_id = str(event.user_id if event.message_type == MessageType.PRIVATE.value else event.group_id)
-        await self.message_handler.check_rate_limit(target_id)
+        self._closed = False
+        self._shutdown_event.clear()
+        self._setup_handlers()
+        try:
+            runtime = await self.bootstrapper.build(
+                on_message=self._on_websocket_message,
+                on_connect=self._on_connect,
+                on_disconnect=self._on_disconnect,
+                runtime_metrics=self.runtime_metrics,
+                status_provider=self.get_status,
+            )
+        except Exception:
+            await self.close()
+            raise
+
+        self.connection = runtime.connection
+        self.message_handler = runtime.message_handler
+        self.memory_manager = runtime.memory_manager
+
+        if self.message_handler and hasattr(self.message_handler, "set_status_provider"):
+            self.message_handler.set_status_provider(self.get_status)
+
+        self._initialized = True
+        self._sync_runtime_counters()
+        self._sync_status_cache()
+        logger.info("bot initialized")
+
+    def _setup_handlers(self):
+        """Register dispatcher handlers once."""
+        if self._handlers_registered:
+            return
+
+        @self.dispatcher.register_preprocessor
+        def log_event(ctx: EventContext):
+            if ctx.event.post_type != "message":
+                return
+            event = ctx.event
+            if not hasattr(event, "message_type"):
+                return
+            msg_type = "private" if event.message_type == MessageType.PRIVATE.value else "group"
+            logger.info("received %s message: user=%s", msg_type, event.user_id)
+
+        @self.dispatcher.on_message
+        async def handle_message(event: MessageEvent):
+            self._start_message_task(event)
+
+        self._handlers_registered = True
+
+    def _start_message_task(self, event: MessageEvent) -> None:
+        task = asyncio.create_task(self._handle_message_event(event))
+        self._message_tasks.add(task)
+        self._sync_runtime_counters()
+        task.add_done_callback(self._on_message_task_done)
+
+    def _on_message_task_done(self, task: asyncio.Task) -> None:
+        self._message_tasks.discard(task)
+        self._sync_runtime_counters()
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("[message] background message task failed: %s", exc, exc_info=True)
+            self.runtime_metrics.record_error(message_error=True)
+            self._sync_status_cache()
+
+    async def _cancel_message_tasks(self) -> None:
+        tasks = list(self._message_tasks)
+        if not tasks:
+            self._sync_runtime_counters()
+            return
+        await cancel_tasks(tasks, label="message_tasks")
+        self._message_tasks.clear()
+        self._sync_runtime_counters()
+
+    async def _handle_message_event(self, event: MessageEvent):
+        self.runtime_metrics.inc_messages_received()
+        self._sync_status_cache()
+        plan = None
 
         try:
-            # 获取 AI 回复
-            response = await self.message_handler.get_ai_response(event)
-
-            if response:
-                # 发送回复
-                await self._send_response(event, response)
-
-        except Exception as e:
-            logger.error(f"消息处理失败: {e}", exc_info=True)
-            self.status["errors"] += 1
-            await self._send_response(
-                event,
-                "❌ 处理消息时出错，请稍后重试"
+            plan = await self.message_handler.plan_message(event)
+            planner_log_context = self._build_planner_log_context(plan)
+            logger.info(
+                "[planner] action=%s source=%s batch_mode=%s batch_size=%s latest=%s merged=%s reason=%s user=%s group=%s",
+                plan.action,
+                plan.source,
+                planner_log_context["batch_mode"],
+                planner_log_context["batch_size"],
+                planner_log_context["is_latest"],
+                planner_log_context["merged_into_latest"],
+                plan.reason,
+                event.user_id,
+                event.group_id,
             )
 
-    async def _send_response(self, event: MessageEvent, message: str):
-        """发送回复"""
-        try:
-            # 分割长消息
-            parts = self.message_handler.split_long_message(message)
+            if not plan.should_reply:
+                return
 
-            # 构建发送参数
+            target_id = str(
+                event.user_id if event.message_type == MessageType.PRIVATE.value else event.group_id
+            )
+            await self.message_handler.check_rate_limit(target_id)
+            reply_result = await self.message_handler.get_ai_response(event, plan=plan)
+            if not reply_result or not reply_result.text:
+                return
+
+            sent = await self._send_response(event, reply_result.text)
+            if sent:
+                await self._send_emoji_follow_up_if_needed(event, reply_result, plan)
+        except Exception as exc:
+            logger.error("[message] failed to handle message: %s", exc, exc_info=True)
+            self.runtime_metrics.record_error(message_error=True)
+            self._sync_status_cache()
+            if plan is not None and plan.should_reply:
+                await self._send_response(event, "处理消息时出错，请稍后再试。")
+
+    async def _send_response(self, event: MessageEvent, message: str) -> bool:
+        try:
+            parts = self.message_handler.split_long_message(message)
             if event.message_type == MessageType.PRIVATE.value:
-                # 私聊
                 for part in parts:
                     await self._send_private_msg(event.user_id, part)
-                    await asyncio.sleep(0.5)  # 避免发送过快
+                    await asyncio.sleep(0.5)
             else:
-                # 群聊
                 for part in parts:
                     await self._send_group_msg(event.group_id, part, event.user_id)
                     await asyncio.sleep(0.5)
 
-            self.status["messages_sent"] += len(parts)
-            logger.info(f"回复已发送: {len(parts)} 条")
+            self.runtime_metrics.inc_messages_replied(len(parts))
+            self._sync_status_cache()
+            logger.info(
+                "[reply_send] target=%s type=%s parts=%s",
+                event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
+                event.message_type,
+                len(parts),
+            )
+            return True
+        except Exception as exc:
+            logger.error("failed to send reply: %s", exc, exc_info=True)
+            self.runtime_metrics.record_error(message_error=True)
+            self._sync_status_cache()
+            return False
 
-        except Exception as e:
-            logger.error(f"发送回复失败: {e}", exc_info=True)
-            self.status["errors"] += 1
+    async def _send_emoji_follow_up_if_needed(self, event: MessageEvent, reply_result: Any, plan: Any) -> None:
+        if event.message_type != MessageType.GROUP.value:
+            return
+        selection = await self.message_handler.plan_emoji_follow_up(event, reply_result, plan=plan)
+        if not selection or not getattr(selection, "emoji", None):
+            return
+
+        image_path = await self.message_handler.get_emoji_follow_up_image_path(selection)
+        if not image_path:
+            return
+
+        try:
+            await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)])
+            await self.message_handler.mark_emoji_follow_up_sent(event, selection)
+            logger.info(
+                "[emoji_reply] sent follow-up emoji: group=%s emoji_id=%s",
+                event.group_id,
+                getattr(selection.emoji, "emoji_id", ""),
+            )
+        except Exception as exc:
+            logger.error("failed to send emoji follow-up: %s", exc, exc_info=True)
+            self.runtime_metrics.record_error(message_error=True)
+            self._sync_status_cache()
 
     async def _send_private_msg(self, user_id: int, message: str):
-        """发送私聊消息"""
         payload = {
             "action": "send_private_msg",
-            "params": {
-                "user_id": user_id,
-                "message": message
-            }
+            "params": {"user_id": user_id, "message": message},
         }
         await self.connection.send(payload)
-        logger.debug(f"发送私聊: 用户={user_id}")
+        logger.debug("sent private reply: user=%s", user_id)
 
     async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None):
-        """发送群聊消息"""
-        # 构建消息
-        msg_content = message
-        if at_user:
-            # 在消息前添加 @
-            msg_content = f"[CQ:at,qq={at_user}] {message}"
+        msg_content = f"[CQ:at,qq={at_user}] {message}" if at_user else message
+        payload = {
+            "action": "send_group_msg",
+            "params": {"group_id": group_id, "message": msg_content},
+        }
+        await self.connection.send(payload)
+        logger.debug("sent group reply: group=%s", group_id)
 
+    async def _send_group_segments(self, group_id: int, segments: List[MessageSegment]) -> None:
         payload = {
             "action": "send_group_msg",
             "params": {
                 "group_id": group_id,
-                "message": msg_content
-            }
+                "message": [segment.to_dict() for segment in segments],
+            },
         }
         await self.connection.send(payload)
-        logger.debug(f"发送群消息: 群={group_id}")
+        logger.debug("sent group segment reply: group=%s segments=%s", group_id, len(segments))
 
     async def _on_websocket_message(self, data: Dict[str, Any]):
-        """WebSocket 消息回调"""
         try:
             await self.dispatcher.dispatch(data)
-        except Exception as e:
-            logger.error(f"事件分发失败: {e}", exc_info=True)
-            self.status["errors"] += 1
+        except Exception as exc:
+            logger.error("dispatcher failed: %s", exc, exc_info=True)
+            self.runtime_metrics.record_error()
+            self._sync_status_cache()
 
     async def _on_connect(self):
-        """连接成功回调"""
-        self.status["connected"] = True
-        self.status["ready"] = True
-        logger.info("NapCat 已连接")
+        self.runtime_metrics.set_connected(True)
+        self.runtime_metrics.set_ready(True)
+        self._sync_status_cache()
+        logger.info("NapCat connected")
 
     async def _on_disconnect(self):
-        """断开连接回调"""
-        self.status["connected"] = False
-        self.status["ready"] = False
-        logger.warning("NapCat 连接已断开")
+        self.runtime_metrics.set_connected(False)
+        self.runtime_metrics.set_ready(False)
+        self._sync_status_cache()
+        logger.warning("NapCat disconnected")
 
     async def run(self):
-        """运行机器人"""
         await self.initialize()
 
-        # 设置信号处理
         def signal_handler(signum, frame):
-            logger.info(f"收到退出信号: {signum}")
+            del frame
+            logger.info("received shutdown signal: %s", signum)
             self._shutdown_event.set()
 
-        # Windows 不支持 SIGTERM，需要特殊处理
         try:
-            import signal
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
         except (AttributeError, ValueError):
             pass
 
-        # 启动连接
-        connection_task = asyncio.create_task(self.connection.run())
+        self._running = True
+        self._connection_task = asyncio.create_task(self.connection.run())
 
         try:
-            # 等待关闭信号
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
-            logger.info("运行任务已取消")
+            logger.info("bot run task cancelled")
         finally:
-            # 关闭连接
-            await self.connection.disconnect()
-            connection_task.cancel()
-            try:
-                await connection_task
-            except asyncio.CancelledError:
-                pass
+            await self.close()
+            logger.info("bot closed")
 
-            logger.info("机器人已关闭")
+    async def close(self) -> None:
+        if self._closed:
+            return
+
+        self._running = False
+        self._closed = True
+        self._shutdown_event.set()
+
+        await self._cancel_message_tasks()
+
+        if self.connection:
+            try:
+                await self.connection.disconnect()
+            finally:
+                await cancel_task(self._connection_task, label="connection_task")
+                self._connection_task = None
+        else:
+            await cancel_task(self._connection_task, label="connection_task")
+            self._connection_task = None
+
+        await close_resource(self.message_handler, label="message_handler")
+        await close_resource(self.memory_manager, label="memory_manager")
+
+        self.runtime_metrics.set_state(
+            connected=False,
+            ready=False,
+            active_message_tasks=0,
+            active_conversations=0,
+            background_tasks=0,
+        )
+        self._initialized = False
+        self._sync_status_cache()
 
     def get_status(self) -> Dict[str, Any]:
-        """获取机器人状态"""
-        stats = self.dispatcher.get_stats()
+        dispatcher_stats = self.dispatcher.get_stats()
+        memory_stats = {}
+        if self.memory_manager and hasattr(self.memory_manager, "get_stats"):
+            memory_stats = self.memory_manager.get_stats()
+        active_conversations = 0
+        if self.message_handler and hasattr(self.message_handler, "get_active_conversation_count"):
+            active_conversations = self.message_handler.get_active_conversation_count()
+
+        self.runtime_metrics.set_state(active_conversations=active_conversations)
+        snapshot = self.runtime_metrics.snapshot()
+        status = {
+            **snapshot,
+            **dispatcher_stats,
+            **memory_stats,
+            "active_conversations": active_conversations,
+            "messages_sent": snapshot.get("reply_parts_sent", 0),
+            "errors": snapshot.get("message_errors", 0),
+        }
+        return status
+
+    def _sync_runtime_counters(self) -> None:
+        active_conversations = 0
+        if self.message_handler and hasattr(self.message_handler, "get_active_conversation_count"):
+            active_conversations = self.message_handler.get_active_conversation_count()
+        self.runtime_metrics.set_state(
+            active_message_tasks=len(self._message_tasks),
+            active_conversations=active_conversations,
+        )
+
+    def _sync_status_cache(self) -> None:
+        self._sync_runtime_counters()
+        snapshot = self.runtime_metrics.snapshot()
+        self.status.update(
+            {
+                "connected": snapshot.get("connected", False),
+                "ready": snapshot.get("ready", False),
+                "messages_received": snapshot.get("messages_received", 0),
+                "messages_sent": snapshot.get("reply_parts_sent", 0),
+                "errors": snapshot.get("message_errors", 0),
+            }
+        )
+
+    def _build_planner_log_context(self, plan: Any) -> Dict[str, Any]:
+        if not plan or not getattr(plan, "reply_context", None):
+            return {
+                "batch_mode": "unknown",
+                "batch_size": 1,
+                "is_latest": True,
+                "merged_into_latest": False,
+            }
+
+        planner_batch = plan.reply_context.get("planner_batch") or {}
         return {
-            **self.status,
-            **stats,
-            "active_conversations": len(self.conversations) if hasattr(self, 'conversations') else 0
+            "batch_mode": planner_batch.get("mode", "unknown"),
+            "batch_size": planner_batch.get("batch_size", 1),
+            "is_latest": planner_batch.get("is_latest", True),
+            "merged_into_latest": planner_batch.get("merged_into_latest", False),
         }

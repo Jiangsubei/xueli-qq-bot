@@ -1,0 +1,2 @@
+﻿"""Emoji subsystem package."""
+

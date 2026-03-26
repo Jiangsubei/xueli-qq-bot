@@ -278,3 +278,26 @@ class Conversation:
     def is_expired(self, timeout: int = 3600) -> bool:
         """检查对话是否过期（默认1小时）"""
         return time.time() - self.last_update > timeout
+
+
+class MessagePlanAction(Enum):
+    """消息处理计划动作"""
+
+    REPLY = "reply"
+    WAIT = "wait"
+    IGNORE = "ignore"
+
+
+@dataclass
+class MessageHandlingPlan:
+    """消息处理计划"""
+
+    action: str
+    reason: str
+    source: str = "rule"
+    raw_decision: Optional[Dict[str, Any]] = None
+    reply_context: Optional[Dict[str, Any]] = None
+
+    @property
+    def should_reply(self) -> bool:
+        return self.action == MessagePlanAction.REPLY.value
