@@ -1,26 +1,29 @@
-# WebSocket 客户端
+﻿# WebSocket client
 websockets>=12.0
 
-# HTTP 客户端
+# HTTP client
 aiohttp>=3.9.0
 
-# 异步文件操作（记忆模块需要）
+# Async file operations (required by the memory module)
 aiofiles>=23.0.0
 
-# 中文分词（记忆模块 BM25 检索需要）
+# Chinese tokenization (used by memory module and BM25 retrieval)
 jieba>=0.42.1
 
-# BM25 检索算法（记忆模块需要）
+# BM25 retrieval (required by the memory module)
 rank-bm25>=0.2.2
 
-# OpenAI API 客户端
+# OpenAI API client
 openai>=1.0.0
 
-# 图片处理
+# Image processing
 pillow>=10.0.0
 
-# 可选：更好的 JSON 性能
+# Optional: faster JSON support
 # orjson>=3.9.0
 
-# 可选：本地精排模型（如果需要启用本地 CrossEncoder）
+# Optional: local reranker model support, for example CrossEncoder
 # sentence-transformers>=2.2.0
+
+# WebUI
+django>=5.2,<6

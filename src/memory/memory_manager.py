@@ -384,6 +384,18 @@ class MemoryManager:
     async def delete_important_memory(self, user_id: str, content_substring: str) -> bool:
         return await self.important_memory_store.delete_memory(user_id, content_substring)
 
+    async def update_important_memory(self, user_id: str, memory_id: str, content: str) -> bool:
+        result = await self.important_memory_store.update_memory(user_id, memory_id, content)
+        if result:
+            self._inc_memory_writes()
+        return result
+
+    async def delete_important_memory_by_id(self, user_id: str, memory_id: str) -> bool:
+        result = await self.important_memory_store.delete_memory_by_id(user_id, memory_id)
+        if result:
+            self._inc_memory_writes()
+        return result
+
     async def clear_important_memories(self, user_id: str) -> bool:
         return await self.important_memory_store.clear_memories(user_id)
 

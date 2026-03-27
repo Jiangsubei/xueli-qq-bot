@@ -64,8 +64,9 @@ class BotBehaviorConfig:
 
 @dataclass(frozen=True)
 class AssistantProfileConfig:
-    name: str = "AI助手"
+    name: str = "AI??"
     alias: str = ""
+    avatar_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,21 @@ class GroupReplyDecisionConfig:
 
 
 @dataclass(frozen=True)
+class MemoryRerankConfig:
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    extra_params: Optional[Dict[str, Any]] = None
+    extra_headers: Optional[Dict[str, str]] = None
+    response_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = False
     storage_path: str = "memories"
     read_scope: str = "user"
     bm25_top_k: int = 100
-    rerank_enabled: bool = False
     rerank_top_k: int = 20
     auto_extract: bool = True
     extract_every_n_turns: int = 3
@@ -130,6 +140,7 @@ class AppConfig:
     personality: ContentSection = field(default_factory=ContentSection)
     dialogue_style: ContentSection = field(default_factory=ContentSection)
     behavior: ContentSection = field(default_factory=ContentSection)
+    memory_rerank: MemoryRerankConfig = field(default_factory=MemoryRerankConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
 
@@ -144,6 +155,16 @@ def get_vision_service_status(app_config: AppConfig) -> str:
     if not is_vision_service_configured(app_config):
         return "unconfigured"
     return "enabled"
+
+
+def is_group_reply_decision_configured(app_config: AppConfig) -> bool:
+    decision = app_config.group_reply_decision
+    return all(str(value or "").strip() for value in (decision.api_base, decision.api_key, decision.model))
+
+
+def is_memory_rerank_configured(app_config: AppConfig) -> bool:
+    rerank = app_config.memory_rerank
+    return all(str(value or "").strip() for value in (rerank.api_base, rerank.api_key, rerank.model))
 
 
 class ConfigValidationError(ValueError):
@@ -206,8 +227,13 @@ class Config:
         "MEMORY_STORAGE_PATH": ("memory", "storage_path"),
         "MEMORY_READ_SCOPE": ("memory", "read_scope"),
         "MEMORY_BM25_TOP_K": ("memory", "bm25_top_k"),
-        "MEMORY_RERANK_ENABLED": ("memory", "rerank_enabled"),
         "MEMORY_RERANK_TOP_K": ("memory", "rerank_top_k"),
+        "MEMORY_RERANK_API_BASE": ("memory_rerank", "api_base"),
+        "MEMORY_RERANK_API_KEY": ("memory_rerank", "api_key"),
+        "MEMORY_RERANK_MODEL": ("memory_rerank", "model"),
+        "MEMORY_RERANK_EXTRA_PARAMS": ("memory_rerank", "extra_params"),
+        "MEMORY_RERANK_EXTRA_HEADERS": ("memory_rerank", "extra_headers"),
+        "MEMORY_RERANK_RESPONSE_PATH": ("memory_rerank", "response_path"),
         "MEMORY_AUTO_EXTRACT": ("memory", "auto_extract"),
         "MEMORY_EXTRACT_EVERY_N_TURNS": ("memory", "extract_every_n_turns"),
         "MEMORY_CONVERSATION_SAVE_INTERVAL": ("memory", "conversation_save_interval"),
@@ -224,6 +250,7 @@ class Config:
     _JSON_STRING_KEYS = {
         "OPENAI_EXTRA_PARAMS", "OPENAI_EXTRA_HEADERS", "VISION_SERVICE_EXTRA_PARAMS", "VISION_SERVICE_EXTRA_HEADERS",
         "GROUP_REPLY_DECISION_EXTRA_PARAMS", "GROUP_REPLY_DECISION_EXTRA_HEADERS",
+        "MEMORY_RERANK_EXTRA_PARAMS", "MEMORY_RERANK_EXTRA_HEADERS",
         "MEMORY_EXTRACTION_EXTRA_PARAMS", "MEMORY_EXTRACTION_EXTRA_HEADERS",
     }
 
@@ -324,6 +351,23 @@ class Config:
         value = self._app.memory.extraction_extra_headers
         return self.get_extra_headers() if value is None else dict(value)
 
+    def get_memory_rerank_extra_params(self) -> Dict[str, Any]:
+        return {} if self._app.memory_rerank.extra_params is None else dict(self._app.memory_rerank.extra_params)
+
+    def get_memory_rerank_extra_headers(self) -> Dict[str, str]:
+        return {} if self._app.memory_rerank.extra_headers is None else dict(self._app.memory_rerank.extra_headers)
+
+    def get_memory_rerank_client_config(self) -> Dict[str, Any]:
+        rerank = self._app.memory_rerank
+        return {
+            "api_base": rerank.api_base or "",
+            "api_key": rerank.api_key or "",
+            "model": rerank.model or "",
+            "extra_params": self.get_memory_rerank_extra_params(),
+            "extra_headers": self.get_memory_rerank_extra_headers(),
+            "response_path": rerank.response_path or AIServiceConfig().response_path,
+        }
+
     def get_memory_extraction_client_config(self) -> Dict[str, Any]:
         memory = self._app.memory
         ai_service = self._app.ai_service
@@ -381,6 +425,7 @@ class Config:
             vision_service=self._build_vision_service_config(), emoji=self._build_emoji_config(),
             bot_behavior=self._build_bot_behavior_config(), assistant_profile=self._build_assistant_profile_config(),
             group_reply=self._build_group_reply_config(), group_reply_decision=self._build_group_reply_decision_config(),
+            memory_rerank=self._build_memory_rerank_config(),
             personality=self._build_content_section("personality"), dialogue_style=self._build_content_section("dialogue_style"),
             behavior=self._build_content_section("behavior"), memory=self._build_memory_config(),
         )
@@ -443,8 +488,9 @@ class Config:
     def _build_assistant_profile_config(self) -> AssistantProfileConfig:
         section = self._get_section("assistant_profile")
         return AssistantProfileConfig(
-            name=self._require_string(section, "assistant_profile", "name", default="AI助手"),
+            name=self._require_string(section, "assistant_profile", "name", default="AI??"),
             alias=self._optional_string(section, "assistant_profile", "alias", default=""),
+            avatar_path=self._optional_string(section, "assistant_profile", "avatar_path", default=""),
         )
 
     def _build_group_reply_config(self) -> GroupReplyConfig:
@@ -480,6 +526,17 @@ class Config:
             response_path=self._nullable_string(section, "group_reply_decision", "response_path"),
         )
 
+    def _build_memory_rerank_config(self) -> MemoryRerankConfig:
+        section = self._get_section("memory_rerank")
+        return MemoryRerankConfig(
+            api_base=self._nullable_string(section, "memory_rerank", "api_base"),
+            api_key=self._nullable_string(section, "memory_rerank", "api_key"),
+            model=self._nullable_string(section, "memory_rerank", "model"),
+            extra_params=self._nullable_mapping(section, "memory_rerank", "extra_params"),
+            extra_headers=self._nullable_mapping(section, "memory_rerank", "extra_headers"),
+            response_path=self._nullable_string(section, "memory_rerank", "response_path"),
+        )
+
     def _build_content_section(self, section_name: str) -> ContentSection:
         return ContentSection(content=self._optional_string(self._get_section(section_name), section_name, "content", default=""))
 
@@ -490,7 +547,6 @@ class Config:
             storage_path=self._optional_string(section, "memory", "storage_path", default="memories"),
             read_scope=self._literal_string(section, "memory", "read_scope", allowed={"user", "global"}, default="user"),
             bm25_top_k=self._bounded_int(section, "memory", "bm25_top_k", default=100, minimum=1),
-            rerank_enabled=self._bool_value(section, "memory", "rerank_enabled", default=False),
             rerank_top_k=self._bounded_int(section, "memory", "rerank_top_k", default=20, minimum=1),
             auto_extract=self._bool_value(section, "memory", "auto_extract", default=True),
             extract_every_n_turns=self._bounded_int(section, "memory", "extract_every_n_turns", default=3, minimum=1),
@@ -509,7 +565,7 @@ class Config:
             self._add_error("memory.rerank_top_k cannot be greater than memory.bm25_top_k")
             config = MemoryConfig(
                 enabled=config.enabled, storage_path=config.storage_path, read_scope=config.read_scope,
-                bm25_top_k=config.bm25_top_k, rerank_enabled=config.rerank_enabled, rerank_top_k=config.bm25_top_k,
+                bm25_top_k=config.bm25_top_k, rerank_top_k=config.bm25_top_k,
                 auto_extract=config.auto_extract, extract_every_n_turns=config.extract_every_n_turns,
                 conversation_save_interval=config.conversation_save_interval, extraction_api_base=config.extraction_api_base,
                 extraction_api_key=config.extraction_api_key, extraction_model=config.extraction_model,

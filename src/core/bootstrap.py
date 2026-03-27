@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from src.core.config import Config, config, get_vision_service_status
+from src.core.config import Config, config, get_vision_service_status, is_group_reply_decision_configured
 from src.core.connection import NapCatConnection
 from src.core.lifecycle import close_resource
 from src.core.runtime_metrics import RuntimeMetrics
@@ -98,6 +98,7 @@ class BotBootstrapper:
             group_reply.burst_max_messages,
             decision_config.get("model"),
         )
+        logger.info("[planner] configured=%s", is_group_reply_decision_configured(app_config))
 
     async def _initialize_memory_manager(
         self,
@@ -114,15 +115,24 @@ class BotBootstrapper:
         from src.memory import MemoryManager, MemoryManagerConfig, RetrievalConfig, ExtractionConfig
 
         memory_client_config = self.config.get_memory_extraction_client_config()
+        memory_rerank_client_config = self.config.get_memory_rerank_client_config()
         logger.info("memory extraction model: %s", memory_client_config.get("model"))
+        logger.info("memory rerank model: %s", memory_rerank_client_config.get("model"))
 
         manager_config = MemoryManagerConfig(
             storage_base_path=memory_config.storage_path,
             memory_read_scope=memory_config.read_scope,
             retrieval_config=RetrievalConfig(
                 bm25_top_k=memory_config.bm25_top_k,
-                rerank_enabled=memory_config.rerank_enabled,
+                rerank_enabled=bool(memory_rerank_client_config.get("api_base") and memory_rerank_client_config.get("api_key") and memory_rerank_client_config.get("model")),
                 rerank_top_k=memory_config.rerank_top_k,
+                reranker_type="api",
+                api_endpoint=memory_rerank_client_config.get("api_base", ""),
+                api_key=memory_rerank_client_config.get("api_key", ""),
+                api_model=memory_rerank_client_config.get("model", ""),
+                api_extra_params=memory_rerank_client_config.get("extra_params", {}),
+                api_extra_headers=memory_rerank_client_config.get("extra_headers", {}),
+                api_response_path=memory_rerank_client_config.get("response_path", "choices.0.message.content"),
             ),
             extraction_config=ExtractionConfig(
                 extract_every_n_turns=memory_config.extract_every_n_turns,

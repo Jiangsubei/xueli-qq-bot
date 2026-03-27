@@ -1,41 +1,58 @@
-﻿#!/usr/bin/env python3
-"""
-Claude QQ Bot 启动入口。
-
-运行方式:
-1. 准备并检查仓库根目录下的 config.json。
-2. 确认 NapCat WebSocket 服务可连接。
-3. 执行: python main.py
-
-启动链路:
-- main.py 负责事件循环与 QQBot.run()
-- QQBot 负责运行时协调与统一关闭
-- BotBootstrapper 负责配置校验、依赖装配、Memory 初始化和连接创建
-"""
+#!/usr/bin/env python3
 import asyncio
+import logging
 import os
+import signal
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.core.bot import QQBot
+from src.core.runtime_supervisor import BotRuntimeSupervisor
+from src.core.webui_runtime_registry import register_runtime_control, unregister_runtime
+from src.webui.runtime_server import create_webui_runtime_server_from_env
+
+logger = logging.getLogger(__name__)
 
 
 async def main():
-    """运行机器人主循环。"""
-    bot = QQBot()
+    supervisor = BotRuntimeSupervisor()
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def handle_shutdown(signum, frame):
+        del frame
+        logger.info('main received shutdown signal: %s', signum)
+        shutdown_event.set()
 
     try:
-        await bot.run()
+        signal.signal(signal.SIGINT, handle_shutdown)
+        signal.signal(signal.SIGTERM, handle_shutdown)
+    except (AttributeError, ValueError):
+        pass
+
+    register_runtime_control(supervisor=supervisor, loop=loop)
+    webui_server = create_webui_runtime_server_from_env()
+    webui_started = webui_server.start()
+
+    if webui_started:
+        logger.info('WebUI URL: %s', webui_server.display_url)
+
+    try:
+        await supervisor.start_bot()
+        await shutdown_event.wait()
     except KeyboardInterrupt:
-        print("\n收到键盘中断，正在关闭...")
-    except Exception as e:
-        print(f"运行出错: {e}")
+        logger.info('keyboard interrupt received in main')
+    except Exception as exc:
+        print(f'Runtime error: {exc}')
         raise
+    finally:
+        await supervisor.shutdown()
+        unregister_runtime(clear_control=True)
+        webui_server.stop()
 
 
-if __name__ == "__main__":
-    if sys.platform == "win32" and sys.version_info < (3, 16):
+if __name__ == '__main__':
+    if sys.platform == 'win32' and sys.version_info < (3, 16):
         try:
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         except AttributeError:

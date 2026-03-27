@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from src.core.config import AppConfig, config, get_vision_service_status, is_vision_service_configured
+from src.core.config import AppConfig, config, get_vision_service_status, is_group_reply_decision_configured, is_vision_service_configured
 from src.core.models import (
     Conversation,
     MessageEvent,
@@ -245,6 +245,9 @@ class MessageHandler:
     def _build_rule_plan(self, action: MessagePlanAction, reason: str, source: str = "rule") -> MessageHandlingPlan:
         return MessageHandlingPlan(action=action.value, reason=reason, source=source)
 
+    def _group_planner_available(self) -> bool:
+        return is_group_reply_decision_configured(self.app_config)
+
     async def _plan_group_message(self, event: MessageEvent) -> MessageHandlingPlan:
         return await self.group_plan_coordinator.plan_group_message(
             event=event,
@@ -262,10 +265,17 @@ class MessageHandler:
         if event.message_type != MessageType.GROUP.value:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "当前仅处理私聊和群聊消息")
 
-        if self.app_config.group_reply.only_reply_when_at:
+        planner_available = self._group_planner_available()
+        only_at_mode = self.app_config.group_reply.only_reply_when_at or not planner_available
+
+        if only_at_mode:
             if event.is_at(event.self_id):
-                return self._build_rule_plan(MessagePlanAction.REPLY, "群聊仅在被 @ 时回复，当前消息命中 @")
-            return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
+                if planner_available and self.app_config.group_reply.only_reply_when_at:
+                    return self._build_rule_plan(MessagePlanAction.REPLY, "群聊仅在被 @ 时回复，当前消息命中 @")
+                return self._build_rule_plan(MessagePlanAction.REPLY, "未配置群聊判断模型，当前仅在被 @ 时回复")
+            if planner_available and self.app_config.group_reply.only_reply_when_at:
+                return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
+            return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
         if event.is_at(event.self_id):
             return self._build_rule_plan(MessagePlanAction.REPLY, "群聊消息显式 @ 了助手，直接回复")
@@ -278,7 +288,8 @@ class MessageHandler:
         if event.message_type == MessageType.PRIVATE.value:
             return True
         if event.message_type == MessageType.GROUP.value:
-            return event.is_at(event.self_id) if self.app_config.group_reply.only_reply_when_at else True
+            only_at_mode = self.app_config.group_reply.only_reply_when_at or not self._group_planner_available()
+            return event.is_at(event.self_id) if only_at_mode else True
         return False
 
     def extract_user_message(self, event: MessageEvent) -> str:

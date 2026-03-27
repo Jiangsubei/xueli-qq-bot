@@ -370,22 +370,15 @@ class MemoryRetrievalCoordinator:
     ) -> List[SearchResult]:
         await self.index_coordinator.ensure_fresh(owner_user_id)
 
-        original_rerank = self.retriever.config.rerank_enabled
-        if use_rerank is not None:
-            self.retriever.config.rerank_enabled = use_rerank
-
-        try:
-            results = await self.retriever.retrieve(
-                user_id=owner_user_id,
-                query=query,
-                top_k=top_k,
-            )
-            for result in results:
-                if result.memory:
-                    result.memory.owner_user_id = owner_user_id
-            return results
-        finally:
-            self.retriever.config.rerank_enabled = original_rerank
+        results = await self.retriever.retrieve(
+            user_id=owner_user_id,
+            query=query,
+            top_k=top_k,
+        )
+        for result in results:
+            if result.memory:
+                result.memory.owner_user_id = owner_user_id
+        return results
 
     def _resolve_access_context(
         self,

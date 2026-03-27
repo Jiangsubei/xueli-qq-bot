@@ -14,8 +14,8 @@ from tests.test_support import (
     build_event,
 )
 
-from src.core.config import AppConfig, EmojiConfig, VisionServiceConfig
-from src.core.models import Conversation, MessageHandlingPlan
+from src.core.config import AppConfig, EmojiConfig, GroupReplyConfig, GroupReplyDecisionConfig, VisionServiceConfig
+from src.core.models import Conversation, MessageHandlingPlan, MessageSegment
 from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers import message_handler as message_handler_module
 from src.handlers.message_handler import MessageHandler
@@ -178,6 +178,26 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(handler.vision_enabled())
         self.assertEqual("unconfigured", handler.vision_status())
+
+    async def test_group_message_without_planner_model_only_replies_when_at(self):
+        app_config = AppConfig(
+            group_reply=GroupReplyConfig(only_reply_when_at=False, interest_reply_enabled=True),
+            group_reply_decision=GroupReplyDecisionConfig(api_base=None, api_key=None, model=None),
+        )
+        handler = self.create_handler(app_config=app_config)
+
+        normal_event = build_event("大家好", message_type="group")
+        normal_plan = await handler.plan_message(normal_event)
+        self.assertEqual("ignore", normal_plan.action)
+        self.assertEqual("rule", normal_plan.source)
+        self.assertFalse(handler.should_process(normal_event))
+
+        at_event = build_event("??", message_type="group")
+        at_event.message.insert(0, MessageSegment.at(at_event.self_id))
+        at_plan = await handler.plan_message(at_event)
+        self.assertEqual("reply", at_plan.action)
+        self.assertEqual("rule", at_plan.source)
+        self.assertTrue(handler.should_process(at_event))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from src.core.config import AppConfig, config
+from src.core.config import AppConfig, config, is_group_reply_decision_configured
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.services.ai_client import AIAPIError, AIClient
 
@@ -25,16 +25,19 @@ class GroupReplyPlanner:
         self.ai_client = ai_client or self._create_ai_client()
         self._owns_ai_client = ai_client is None
 
-    def _create_ai_client(self) -> AIClient:
+    def _create_ai_client(self) -> Optional[AIClient]:
+        if not is_group_reply_decision_configured(self.app_config):
+            logger.info("[planner] group reply decision model is not configured; planner disabled")
+            return None
+
         decision = self.app_config.group_reply_decision
-        ai_service = self.app_config.ai_service
         client_config = {
-            "api_base": decision.api_base or ai_service.api_base,
-            "api_key": decision.api_key or ai_service.api_key,
-            "model": decision.model or ai_service.model,
-            "extra_params": dict(decision.extra_params) if decision.extra_params is not None else dict(ai_service.extra_params),
-            "extra_headers": dict(decision.extra_headers) if decision.extra_headers is not None else dict(ai_service.extra_headers),
-            "response_path": decision.response_path or ai_service.response_path,
+            "api_base": decision.api_base,
+            "api_key": decision.api_key,
+            "model": decision.model,
+            "extra_params": dict(decision.extra_params or {}),
+            "extra_headers": dict(decision.extra_headers or {}),
+            "response_path": decision.response_path or "choices.0.message.content",
         }
         logger.info("[planner] initialize planner model: model=%s", client_config.get("model"))
         return AIClient(log_label="planner", app_config=self.app_config, **client_config)
@@ -258,6 +261,14 @@ class GroupReplyPlanner:
             raw_decision=decision,
         )
 
+    def _build_rule_plan(
+        self,
+        action: MessagePlanAction,
+        reason: str,
+        source: str = "rule",
+    ) -> MessageHandlingPlan:
+        return MessageHandlingPlan(action=action.value, reason=reason, source=source)
+
     def _build_fallback_plan(self, event: MessageEvent, error: str) -> MessageHandlingPlan:
         if event.is_at(event.self_id):
             return MessageHandlingPlan(
@@ -289,6 +300,14 @@ class GroupReplyPlanner:
 
         recent_messages = recent_messages or []
         window_messages = window_messages or []
+
+        if self.ai_client is None:
+            return self._build_rule_plan(
+                MessagePlanAction.IGNORE,
+                "未配置群聊判断模型，当前仅在被 @ 时回复",
+                source="rule",
+            )
+
         messages = [
             self.ai_client.build_text_message("system", self._build_system_prompt()),
             self.ai_client.build_text_message(

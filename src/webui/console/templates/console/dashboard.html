@@ -1,0 +1,47 @@
+﻿{% extends "console/base.html" %}
+
+{% block body %}
+<aside class="sidebar mica-material" id="sidebar">
+    <div class="logo-area">
+        <div class="logo-wrapper"><span class="logo-text">WebUI</span></div>
+        <button class="toggle-btn" id="sidebarToggle" type="button" aria-label="toggle sidebar"><i class="fa-solid fa-bars-staggered"></i></button>
+    </div>
+    <div class="menu-list">
+        {% for item in navigation %}
+        <a href="#" class="menu-item{% if item.id == active_page %} active{% endif %}" data-target="{{ item.id }}"><i class="fa-solid {{ item.icon }}"></i><span class="menu-text">{{ item.label }}</span></a>
+        {% endfor %}
+    </div>
+    <div class="sidebar-footer">
+        <div class="color-picker">
+            {% for color in theme_colors %}
+            <div class="color-dot{% if color.active %} active{% endif %}" style="background: rgb({{ color.rgb }});" data-rgb="{{ color.rgb }}" aria-label="{{ color.label }}"></div>
+            {% endfor %}
+        </div>
+        <button class="btn-outline" id="themeToggle" type="button"><i class="fa-solid fa-circle-half-stroke"></i><span class="btn-text">&#x4EAE;&#x6697;&#x5207;&#x6362;</span></button>
+        <button class="btn-outline btn-quiet" id="restartTrigger" type="button"><i class="fa-solid fa-power-off"></i><span class="btn-text">&#x91CD;&#x542F;&#x670D;&#x52A1;</span></button>
+    </div>
+</aside>
+<main class="main-content">
+    <header class="header header-bar">
+        <div>
+            <h2 class="page-title" id="top-title">&#x603B;&#x89C8;</h2>
+            <p class="page-subtitle">&#x8FD9;&#x91CC;&#x80FD;&#x770B;&#x5230;&#x52A9;&#x624B;&#x73B0;&#x5728;&#x7684;&#x72B6;&#x6001;&#xFF0C;&#x4E5F;&#x80FD;&#x987A;&#x624B;&#x6539;&#x5E38;&#x7528;&#x8BBE;&#x7F6E;&#x3002;</p>
+        </div>
+        <div class="header-status-group">
+            <button class="status-pill status-pill-warning hidden" id="dirtyRestartNotice" type="button">
+                <span class="status-dot"></span>
+                <span>&#x6709;&#x6539;&#x52A8;&#xFF0C;&#x8BB0;&#x5F97;&#x4FDD;&#x5B58;&#x5E76;&#x91CD;&#x542F;</span>
+            </button>
+            <button class="btn-outline btn-primary-fill header-save-button hidden" id="dirtySaveButton" type="button">&#x4FDD;&#x5B58;&#x8BBE;&#x7F6E;</button>
+            <div class="status-pill{% if runtime.online %} is-online{% else %} is-offline{% endif %}" data-runtime-online>
+                <span class="status-dot"></span>
+                <span data-runtime-key="online_label">{{ runtime.online_label }}</span>
+            </div>
+        </div>
+    </header>
+    <div class="workspace"><div class="workspace-shell"><div class="save-feedback hidden" id="saveFeedback"></div>{% include "console/partials/_home.html" %}{% include "console/partials/_status.html" %}{% include "console/partials/_network.html" %}{% include "console/partials/_model.html" %}{% include "console/partials/_reply.html" %}{% include "console/partials/_emoji.html" %}{% include "console/partials/_memory.html" %}{% include "console/partials/_recall.html" %}</div></div>
+</main>
+<div class="modal-overlay" id="restartModal"><div class="modal-box mica-material"><i class="fa-solid fa-triangle-exclamation modal-icon"></i><h3 class="modal-title" id="restartModalTitle">&#x91CD;&#x542F;&#x52A9;&#x624B;&#x670D;&#x52A1;</h3><p class="modal-desc" id="restartModalDesc">&#x8FD9;&#x4F1A;&#x91CD;&#x65B0;&#x542F;&#x52A8;&#x540E;&#x7AEF;&#x52A9;&#x624B;&#xFF0C;&#x5F53;&#x524D;&#x9875;&#x9762;&#x4E0D;&#x4F1A;&#x5173;&#x95ED;&#x3002;</p><div class="modal-actions"><button class="btn-cancel" id="restartCancel" type="button">&#x5148;&#x7B49;&#x7B49;</button><button class="btn-confirm" id="restartConfirm" type="button">&#x73B0;&#x5728;&#x91CD;&#x542F;</button></div></div></div>
+<div class="modal-overlay" id="avatarCropModal"><div class="modal-box mica-material avatar-crop-modal-box"><div class="avatar-crop-head"><div><h3 class="modal-title">&#x88C1;&#x5207;&#x5934;&#x50CF;</h3><p class="modal-desc">&#x62D6;&#x4E00;&#x62D6;&#x4F4D;&#x7F6E;&#xFF0C;&#x4FDD;&#x5B58;&#x540E;&#x4F1A;&#x81EA;&#x52A8;&#x88C1;&#x6210; 1:1&#x3002;</p></div></div><div class="avatar-crop-stage" id="avatarCropStage"><img class="avatar-crop-image" id="avatarCropImage" alt="&#x5934;&#x50CF;&#x9884;&#x89C8;"><div class="avatar-crop-square" id="avatarCropSquare"></div></div><div class="avatar-crop-actions"><button class="btn-cancel" id="avatarCropCancel" type="button">&#x53D6;&#x6D88;</button><button class="btn-confirm" id="avatarCropConfirm" type="button">&#x4E0A;&#x4F20;&#x5934;&#x50CF;</button></div></div></div>
+<div class="floating-tooltip hidden" id="floatingTooltip"></div>
+{% endblock %}

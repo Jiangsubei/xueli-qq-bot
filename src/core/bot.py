@@ -1,4 +1,4 @@
-﻿"""QQ bot runtime coordinator."""
+"""QQ bot runtime coordinator."""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +13,8 @@ from src.core.dispatcher import EventContext, EventDispatcher
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
 from src.core.models import MessageEvent, MessageSegment, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
+from src.core.webui_runtime_registry import register_runtime, unregister_runtime
+from src.core.webui_snapshot import WebUISnapshotPublisher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,14 +27,20 @@ logger = logging.getLogger(__name__)
 class QQBot:
     """Main bot runtime facade."""
 
-    def __init__(self):
+    def __init__(self, *, manage_signals: bool = True):
         self.dispatcher = EventDispatcher()
+        self._manage_signals = manage_signals
         self.runtime_metrics = RuntimeMetrics()
         self.bootstrapper = BotBootstrapper(config)
+        self.webui_snapshot = WebUISnapshotPublisher(
+            app_config=config.app,
+            status_provider=self.get_status,
+        )
 
         self.connection = None
         self.message_handler = None
         self.memory_manager = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
 
         self._running = False
         self._initialized = False
@@ -40,6 +48,7 @@ class QQBot:
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
         self._connection_task: Optional[asyncio.Task] = None
+        self._snapshot_task: Optional[asyncio.Task] = None
         self._handlers_registered = False
 
         self.status = {
@@ -73,6 +82,8 @@ class QQBot:
         self.connection = runtime.connection
         self.message_handler = runtime.message_handler
         self.memory_manager = runtime.memory_manager
+        self._event_loop = asyncio.get_running_loop()
+        register_runtime(bot=self, memory_manager=self.memory_manager, loop=self._event_loop)
 
         if self.message_handler and hasattr(self.message_handler, "set_status_provider"):
             self.message_handler.set_status_provider(self.get_status)
@@ -271,22 +282,38 @@ class QQBot:
         self._sync_status_cache()
         logger.warning("NapCat disconnected")
 
+    async def _run_webui_snapshot_heartbeat(self) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                self.webui_snapshot.publish()
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("webui snapshot heartbeat failed: %s", exc, exc_info=True)
+                await asyncio.sleep(5)
+
     async def run(self):
+        self._event_loop = asyncio.get_running_loop()
         await self.initialize()
 
-        def signal_handler(signum, frame):
-            del frame
-            logger.info("received shutdown signal: %s", signum)
-            self._shutdown_event.set()
+        if self._manage_signals:
+            def signal_handler(signum, frame):
+                del frame
+                logger.info("received shutdown signal: %s", signum)
+                self._shutdown_event.set()
 
-        try:
-            signal.signal(signal.SIGINT, signal_handler)
-            signal.signal(signal.SIGTERM, signal_handler)
-        except (AttributeError, ValueError):
-            pass
+            try:
+                signal.signal(signal.SIGINT, signal_handler)
+                signal.signal(signal.SIGTERM, signal_handler)
+            except (AttributeError, ValueError):
+                pass
 
         self._running = True
         self._connection_task = asyncio.create_task(self.connection.run())
+        self._snapshot_task = asyncio.create_task(self._run_webui_snapshot_heartbeat())
 
         try:
             await self._shutdown_event.wait()
@@ -316,6 +343,9 @@ class QQBot:
             await cancel_task(self._connection_task, label="connection_task")
             self._connection_task = None
 
+        await cancel_task(self._snapshot_task, label="webui_snapshot_task")
+        self._snapshot_task = None
+
         await close_resource(self.message_handler, label="message_handler")
         await close_resource(self.memory_manager, label="memory_manager")
 
@@ -327,7 +357,9 @@ class QQBot:
             background_tasks=0,
         )
         self._initialized = False
+        unregister_runtime(self)
         self._sync_status_cache()
+        self.webui_snapshot.publish(closing=True)
 
     def get_status(self) -> Dict[str, Any]:
         dispatcher_stats = self.dispatcher.get_stats()
@@ -371,6 +403,7 @@ class QQBot:
                 "errors": snapshot.get("message_errors", 0),
             }
         )
+        self.webui_snapshot.publish()
 
     def _build_planner_log_context(self, plan: Any) -> Dict[str, Any]:
         if not plan or not getattr(plan, "reply_context", None):

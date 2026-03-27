@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from hashlib import sha1
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +25,9 @@ class ImportantMemoryItem:
     """A single important memory record."""
 
     content: str
+    id: str = ""
     created_at: str = ""
+    updated_at: str = ""
     source: str = ""
     priority: int = 1
     score: float = 0.0
@@ -34,13 +37,19 @@ class ImportantMemoryItem:
     def __post_init__(self) -> None:
         if not self.created_at:
             self.created_at = datetime.now().isoformat()
+        if not self.updated_at:
+            self.updated_at = self.created_at
         if self.metadata is None:
             self.metadata = {}
+        if not self.id:
+            self.id = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "id": self.id,
             "content": self.content,
             "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "source": self.source,
             "priority": self.priority,
             "score": self.score,
@@ -51,8 +60,10 @@ class ImportantMemoryItem:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ImportantMemoryItem":
         return cls(
+            id=data.get("id", ""),
             content=data.get("content", ""),
             created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
             source=data.get("source", ""),
             priority=int(data.get("priority", 1) or 1),
             score=float(data.get("score", 0.0) or 0.0),
@@ -120,26 +131,37 @@ class ImportantMemoryStore:
     def _build_payload(self, memory: ImportantMemoryItem) -> str:
         return json.dumps(
             {
+                "id": memory.id,
                 "source": memory.source,
+                "updated_at": memory.updated_at,
                 "metadata": dict(memory.metadata or {}),
             },
             ensure_ascii=False,
             separators=(",", ":"),
         )
 
-    def _parse_payload(self, raw_comment: str) -> tuple[str, Dict[str, Any]]:
+    def _parse_payload(self, raw_comment: str) -> tuple[str, str, Dict[str, Any], str]:
         text = str(raw_comment or "").strip()
         if not text:
-            return "unknown", {}
+            return "", "unknown", {}, ""
         if text.startswith("{"):
             try:
                 payload = json.loads(text)
-                return str(payload.get("source") or "unknown"), dict(payload.get("metadata") or {})
+                return (
+                    str(payload.get("id") or ""),
+                    str(payload.get("source") or "unknown"),
+                    dict(payload.get("metadata") or {}),
+                    str(payload.get("updated_at") or ""),
+                )
             except json.JSONDecodeError:
                 logger.debug("Failed to parse important memory payload JSON")
         source_match = re.search(r"source:(.*?)$", text)
         source = source_match.group(1).strip() if source_match else "unknown"
-        return source, {}
+        return "", source, {}, ""
+
+    def _ensure_memory_id(self, *, owner_user_id: str, content: str, created_at: str) -> str:
+        base = f"{owner_user_id}|{created_at}|{content}".encode("utf-8", errors="ignore")
+        return f"imp_{sha1(base).hexdigest()[:16]}"
 
     async def _read_memories(self, user_id: str) -> List[ImportantMemoryItem]:
         file_path = self._get_user_file(user_id)
@@ -167,16 +189,25 @@ class ImportantMemoryStore:
                     content_end = line.find("<!--") if "<!--" in line else len(line)
                     memory_content = line[content_start:content_end].strip()
 
+                    memory_id = ""
                     source = "unknown"
                     metadata: Dict[str, Any] = {}
+                    updated_at = created_at
                     if comment_match:
-                        source, metadata = self._parse_payload(comment_match.group(1))
+                        memory_id, source, metadata, updated_at = self._parse_payload(comment_match.group(1))
+                    memory_id = memory_id or self._ensure_memory_id(
+                        owner_user_id=user_id,
+                        content=memory_content,
+                        created_at=created_at,
+                    )
 
                     if memory_content:
                         memories.append(
                             ImportantMemoryItem(
+                                id=memory_id,
                                 content=memory_content,
                                 created_at=created_at,
+                                updated_at=updated_at or created_at,
                                 source=source,
                                 priority=priority,
                                 owner_user_id=user_id,
@@ -236,14 +267,22 @@ class ImportantMemoryStore:
                     existing.source = source
                 if metadata:
                     existing.metadata.update(dict(metadata))
+                existing.updated_at = datetime.now().isoformat()
 
                 success = await self._write_memories(user_id, memories)
                 if success:
                     return existing
                 return None
 
+        now_iso = datetime.now().isoformat()
         memory = ImportantMemoryItem(
+            id=self._ensure_memory_id(
+                owner_user_id=user_id,
+                content=normalized_content,
+                created_at=now_iso,
+            ),
             content=normalized_content,
+            created_at=now_iso,
             source=source,
             priority=int(priority),
             owner_user_id=user_id,
@@ -308,6 +347,26 @@ class ImportantMemoryStore:
         except Exception as exc:
             logger.error("Failed to delete important memory: user=%s, error=%s", user_id, exc)
             return False
+
+    async def update_memory(self, user_id: str, memory_id: str, content: str) -> bool:
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            return False
+        memories = await self._read_memories(user_id)
+        for memory in memories:
+            if memory.id != memory_id:
+                continue
+            memory.content = normalized_content
+            memory.updated_at = datetime.now().isoformat()
+            return await self._write_memories(user_id, memories)
+        return False
+
+    async def delete_memory_by_id(self, user_id: str, memory_id: str) -> bool:
+        memories = await self._read_memories(user_id)
+        new_memories = [memory for memory in memories if memory.id != memory_id]
+        if len(new_memories) == len(memories):
+            return False
+        return await self._write_memories(user_id, new_memories)
 
     async def clear_memories(self, user_id: str) -> bool:
         file_path = self._get_user_file(user_id)

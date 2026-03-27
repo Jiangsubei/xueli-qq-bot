@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -25,6 +25,7 @@ venv/
 env/
 ENV/
 .venv/
+node_modules/
 
 # IDE
 .idea/
@@ -46,3 +47,17 @@ memories/
 # OS
 .DS_Store
 Thumbs.db
+# Local runtime artifacts
+*.sqlite3
+tests/_tmp/
+
+# Local runtime and generated artifacts
+data/runtime/
+data/webui/avatar/
+src/webui/db.sqlite3
+src/webui/**/__pycache__/
+tmp_patch_test.txt
+
+# Tests should stay local
+tests/
+src/webui/console/tests/

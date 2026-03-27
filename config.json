@@ -3,10 +3,9 @@
     "ws_url": "ws://0.0.0.0:8095",
     "http_url": "http://127.0.0.1:6700"
   },
-
   "ai_service": {
     "api_base": "https://openrouter.ai/api/v1",
-    "api_key": "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",
+    "api_key": "<YOUR_REPLY_MODEL_API_KEY>",
     "model": "stepfun/step-3.5-flash:free",
     "extra_params": {
       "temperature": 1,
@@ -16,7 +15,6 @@
     "extra_headers": {},
     "response_path": "choices.0.message.content"
   },
-
   "vision_service": {
     "enabled": false,
     "api_base": null,
@@ -33,26 +31,24 @@
     "rate_limit_interval": 1.0,
     "log_full_prompt": true
   },
-
   "assistant_profile": {
     "name": "雪梨",
-    "alias": "小梨"
+    "alias": "小梨",
+    "avatar_path": "data/webui/avatar/assistant.png"
   },
-
   "group_reply": {
     "only_reply_when_at": false,
     "interest_reply_enabled": true,
-    "plan_request_interval": 3,
+    "plan_request_interval": 3.0,
     "plan_request_max_parallel": 1,
     "burst_merge_enabled": true,
-    "burst_window_seconds": 5,
+    "burst_window_seconds": 5.0,
     "burst_min_messages": 3,
     "burst_max_messages": 8
   },
-
   "group_reply_decision": {
     "api_base": "https://integrate.api.nvidia.com/v1",
-    "api_key": "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",
+    "api_key": "<YOUR_GROUP_REPLY_DECISION_API_KEY>",
     "model": "qwen/qwen3.5-122b-a10b",
     "extra_params": {
       "temperature": 0.3,
@@ -61,25 +57,28 @@
     "extra_headers": null,
     "response_path": null
   },
-
   "personality": {
     "content": "婵炶揪绲挎慨闈浳ｉ崨濠勨枖闁逞屽墴瀹曪綁顢旈崱妤冩療婵犵數鍋炶彠闁逞屽墮閸婂摜鎹㈠┑鍫熷珰婵ǜ鍎崑鎾存媴鐟欏嫨浠у┑鐐差槺閵嗗妲愬┑鍥ㄤ氦婵☆垳绮粻鎺楁煟閹邦喗鍤€闁活煈鍓熷畷鎺楀箵閹哄棙鐎奸梺闈涙閸婂綊鎯€閸涙潙瀚夊璺侯煬濡插鏌℃径濠傗偓璇测枔閹卞闂傚鍓﹂崑鍌炲船閵堝违?"
   },
-
   "dialogue_style": {
     "content": "婵炶揪绲挎慨鐑界嵁閸ヮ剙鎹堕柕濠忓瘜閸斺偓闂侀潻璐熼崝蹇旂閻楀牆绶為柍鍝勫閹奉偄霉閻樿櫕鏋勭紒妤€鍊块幊鏇熺節閸屾ü鍑介梺鎸庣☉閻線顢氶埡鍐╁珰婵犻潧妫楃拋鎻捗归悩顔煎姎鐎殿噮鍓熼幊鎾诲礃椤撶偛鐏￠梺鍛婄殰瀹ュ洨顦梺娲诲幑閸庢壆绮婚鈧弫宥囦沪閹存帞淇洪梺鍛婎殕濮樸劌鈻撻幋鐑嗘Ч閹兼番鍨绘竟鎰版煏閸℃鈧綊鎯侀敓鐘茬煑闁靛鍔庡Ο鍫㈢磽娴ｈ灏柣鏃戝墲缁犳盯宕ㄥǎ顑藉亾韫囨洘鏆滈柨鏇楀亾闁哄本娅傞梺闈涙閸婂綊寮悙鍝勭疀闊洤娴烽閬嶆倵鐟欏嫮鐓紒妤€顦遍幉鐗堟媴瀹勬壋鏋忛梺鐑╂噰閺嗘槴闂佸搫绉堕崢褏妲愰敓鐘参?"
   },
-
   "behavior": {
     "content": "婵炶揪绲挎慨闈涳耿娴ｅ壊鍤楅柛顐ｇ箓缁讳線鏌ｉ妸銉ヮ伂闁搞倖绮嶇粙澶岀磼濡嘲浜剧憸婵堟濠靛瀚夊璺侯儐椤ρ囨煕婵犲啰鎳勬繝鈧笟鈧幃娆戞喆閸曨剚姣庨梺鍛婂灩缁垶鍩€椤戭兛璁查崑?"
   },
-
+  "memory_rerank": {
+    "api_base": null,
+    "api_key": null,
+    "model": null,
+    "extra_params": null,
+    "extra_headers": null,
+    "response_path": null
+  },
   "memory": {
     "enabled": true,
     "storage_path": "memories",
-    "read_scope": "global", //global,user
+    "read_scope": "global",
     "bm25_top_k": 100,
-    "rerank_enabled": false,
     "rerank_top_k": 20,
     "auto_extract": true,
     "extract_every_n_turns": 3,
@@ -95,4 +94,3 @@
     "ordinary_forget_threshold": 0.5
   }
 }
-
