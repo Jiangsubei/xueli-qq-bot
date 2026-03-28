@@ -315,6 +315,14 @@ class MessageHandler:
             user_message=self.extract_user_message(event),
         )
 
+    async def _build_group_at_reply_context(self, event: MessageEvent) -> Dict[str, Any]:
+        return await self.group_plan_coordinator.build_direct_reply_context(
+            event=event,
+            user_message=self.extract_user_message(event),
+            reply_mode="at",
+            planner_mode="direct_at",
+        )
+
     async def plan_message(self, event: MessageEvent) -> MessageHandlingPlan:
         self._record_background_activity()
         self._clean_expired_conversations()
@@ -340,26 +348,28 @@ class MessageHandler:
 
         if only_at_mode:
             if event.is_at(event.self_id):
+                reply_context = await self._build_group_at_reply_context(event)
                 if planner_available and self.app_config.group_reply.only_reply_when_at:
                     return self._build_rule_plan(
                         MessagePlanAction.REPLY,
                         "群聊仅在被 @ 时回复，当前消息命中 @",
-                        reply_context={"reply_mode": "at"},
+                        reply_context=reply_context,
                     )
                 return self._build_rule_plan(
                     MessagePlanAction.REPLY,
                     "未配置群聊判断模型，当前仅在被 @ 时回复",
-                    reply_context={"reply_mode": "at"},
+                    reply_context=reply_context,
                 )
             if planner_available and self.app_config.group_reply.only_reply_when_at:
                 return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
             return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
         if event.is_at(event.self_id):
+            reply_context = await self._build_group_at_reply_context(event)
             return self._build_rule_plan(
                 MessagePlanAction.REPLY,
                 "群聊消息显式 @ 了助手，直接回复",
-                reply_context={"reply_mode": "at"},
+                reply_context=reply_context,
             )
 
         return await self._plan_group_message(event)

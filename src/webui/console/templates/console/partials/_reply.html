@@ -104,6 +104,21 @@
             </span>
           </span>
         </label>
+        <label class="config-item-card config-switch-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">&#x79C1;&#x804A;&#x5F15;&#x7528;&#x56DE;&#x590D;</span>
+              <span class="config-item-desc">&#x6253;&#x5F00;&#x540E;&#xFF0C;&#x79C1;&#x804A;&#x56DE;&#x590D;&#x4F1A;&#x987A;&#x624B;&#x5F15;&#x7528;&#x539F;&#x6D88;&#x606F;&#x3002;</span>
+            </span>
+            <span class="config-item-head-actions">
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.private_quote_reply_enabled }}">?</span>
+              <span class="config-switch-indicator">
+                <input type="checkbox" name="private_quote_reply_enabled"{% if assistant_advanced_form.private_quote_reply_enabled %} checked{% endif %}>
+                <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+              </span>
+            </span>
+          </span>
+        </label>
         <label class="config-item-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">

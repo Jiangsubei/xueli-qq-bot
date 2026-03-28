@@ -188,13 +188,26 @@ class QQBot:
         try:
             parts = self.message_handler.split_long_message(message)
             if event.message_type == MessageType.PRIVATE.value:
-                for part in parts:
-                    await self._send_private_msg(event.user_id, part)
+                quote_reply_enabled = self._private_quote_reply_enabled()
+                for index, part in enumerate(parts):
+                    use_quote_reply = (
+                        quote_reply_enabled
+                        and index == 0
+                        and int(event.message_id or 0) > 0
+                    )
+                    if use_quote_reply:
+                        await self._send_private_segments(
+                            event.user_id,
+                            [MessageSegment.reply(event.message_id), MessageSegment.text(part)],
+                        )
+                    else:
+                        await self._send_private_msg(event.user_id, part)
                     await asyncio.sleep(0.5)
             else:
                 at_user = self.message_handler.resolve_group_at_user(event, plan)
-                for part in parts:
-                    await self._send_group_msg(event.group_id, part, at_user)
+                for index, part in enumerate(parts):
+                    part_at_user = at_user if index == 0 else None
+                    await self._send_group_msg(event.group_id, part, part_at_user)
                     await asyncio.sleep(0.5)
 
             self.runtime_metrics.inc_messages_replied(len(parts))
@@ -244,11 +257,36 @@ class QQBot:
         await self.connection.send(payload)
         logger.debug("sent private reply: user=%s", user_id)
 
+    async def _send_private_segments(self, user_id: int, segments: List[MessageSegment]) -> None:
+        payload = {
+            "action": "send_private_msg",
+            "params": {
+                "user_id": user_id,
+                "message": [segment.to_dict() for segment in segments],
+            },
+        }
+        await self.connection.send(payload)
+        logger.debug("sent private segment reply: user=%s segments=%s", user_id, len(segments))
+
     async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None):
-        msg_content = f"[CQ:at,qq={at_user}] {message}" if at_user else message
+        if at_user:
+            segments = [MessageSegment.at(at_user)]
+            if message:
+                segments.append(MessageSegment.text(f" {message}"))
+            payload = {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": group_id,
+                    "message": [segment.to_dict() for segment in segments],
+                },
+            }
+            await self.connection.send(payload)
+            logger.debug("sent group reply with mention: group=%s at_user=%s", group_id, at_user)
+            return
+
         payload = {
             "action": "send_group_msg",
-            "params": {"group_id": group_id, "message": msg_content},
+            "params": {"group_id": group_id, "message": message},
         }
         await self.connection.send(payload)
         logger.debug("sent group reply: group=%s", group_id)
@@ -263,6 +301,11 @@ class QQBot:
         }
         await self.connection.send(payload)
         logger.debug("sent group segment reply: group=%s segments=%s", group_id, len(segments))
+
+    def _private_quote_reply_enabled(self) -> bool:
+        app_config = getattr(self.message_handler, "app_config", None)
+        bot_behavior = getattr(app_config, "bot_behavior", None)
+        return bool(getattr(bot_behavior, "private_quote_reply_enabled", False))
 
     async def _on_websocket_message(self, data: Dict[str, Any]):
         try:

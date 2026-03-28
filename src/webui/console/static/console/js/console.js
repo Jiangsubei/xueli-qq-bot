@@ -497,6 +497,7 @@ function collectSectionPayload(section) {
             dialogue_style: String(formData.get("dialogue_style") || ""),
             rate_limit_interval: numberOrZero(formData.get("rate_limit_interval")),
             log_full_prompt: checkboxValue(formData, "log_full_prompt"),
+            private_quote_reply_enabled: checkboxValue(formData, "private_quote_reply_enabled"),
             plan_request_interval: numberOrZero(formData.get("plan_request_interval")),
             plan_request_max_parallel: numberOrZero(formData.get("plan_request_max_parallel")),
             plan_context_message_count: numberOrZero(formData.get("plan_context_message_count")),

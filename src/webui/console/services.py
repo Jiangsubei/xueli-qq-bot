@@ -78,6 +78,7 @@ FIELD_HELP = {
         "max_context_length": "数字越大，助手一次会参考更多聊天内容。",
         "max_message_length": "限制单次回复长度，避免一口气说太多。",
         "response_timeout": "助手等模型返回结果的最长时间。",
+        "private_quote_reply_enabled": "打开后，私聊回复会带上对原消息的引用，方便看出是在回应哪一条。",
         "group_strategy": "决定助手在群里什么时候开口。",
         "personality": "写助手是什么性格。",
         "dialogue_style": "写助手平时怎么说话。",
@@ -832,6 +833,7 @@ def build_dashboard_context() -> Dict[str, Any]:
         "assistant_advanced_form": {
             "rate_limit_interval": app_config.bot_behavior.rate_limit_interval,
             "log_full_prompt": bool(app_config.bot_behavior.log_full_prompt),
+            "private_quote_reply_enabled": bool(app_config.bot_behavior.private_quote_reply_enabled),
             "plan_request_interval": app_config.group_reply.plan_request_interval,
             "plan_request_max_parallel": app_config.group_reply.plan_request_max_parallel,
             "plan_context_message_count": app_config.group_reply.plan_context_message_count,
@@ -1112,6 +1114,7 @@ def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     bot_behavior["response_timeout"] = _coerce_int(payload.get("response_timeout"), default=_safe_int(bot_behavior.get("response_timeout"), 60))
     bot_behavior["rate_limit_interval"] = _coerce_float(payload.get("rate_limit_interval"), default=float(bot_behavior.get("rate_limit_interval", 1.0) or 1.0))
     bot_behavior["log_full_prompt"] = _coerce_bool(payload.get("log_full_prompt"), default=bool(bot_behavior.get("log_full_prompt", False)))
+    bot_behavior["private_quote_reply_enabled"] = _coerce_bool(payload.get("private_quote_reply_enabled"), default=bool(bot_behavior.get("private_quote_reply_enabled", False)))
     raw["bot_behavior"] = bot_behavior
 
     group_reply = dict(raw.get("group_reply") or {})

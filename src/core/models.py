@@ -45,6 +45,10 @@ class MessageSegment:
         return cls(type="at", data={"qq": str(qq)})
 
     @classmethod
+    def reply(cls, message_id: int | str) -> "MessageSegment":
+        return cls(type="reply", data={"id": str(message_id)})
+
+    @classmethod
     def image(cls, file: str, url: Optional[str] = None) -> "MessageSegment":
         """图片消息段"""
         data = {"file": file}

@@ -176,6 +176,34 @@ class GroupPlanCoordinator:
         self._record_plan_metric(plan.action)
         return plan
 
+    async def build_direct_reply_context(
+        self,
+        *,
+        event: MessageEvent,
+        user_message: str,
+        reply_mode: str,
+        planner_mode: str = "direct",
+    ) -> Dict[str, Any]:
+        group_id = str(event.group_id or "unknown_group")
+        history_items = self._get_recent_group_history(group_id)
+        current_message = await self._build_current_message(event=event, user_message=user_message)
+        window_messages = self._compose_window_messages(history_items, current_message)
+
+        try:
+            reply_context = self._merge_reply_context(
+                self._build_group_window_reply_context(window_messages),
+                self._build_planner_batch_context(
+                    group_id=group_id,
+                    mode=planner_mode,
+                    batch_size=1,
+                    is_latest=True,
+                ),
+            )
+            reply_context["reply_mode"] = reply_mode
+            return reply_context
+        finally:
+            self._record_group_user_message(group_id, current_message)
+
     async def record_assistant_reply(self, group_id: Optional[int], message: str) -> None:
         text = str(message or "").strip()
         if group_id is None or not text:
