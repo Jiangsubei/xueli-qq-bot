@@ -1,102 +1,78 @@
-﻿# Claude QQ Bot
+# Claude QQ Bot
 
-一个基于 NapCat 与 OpenAI 兼容 API 的 QQ 机器人项目。当前入口采用 `config.json` 驱动，运行时由 `QQBot -> BotBootstrapper -> NapCatConnection/MessageHandler/MemoryManager` 组成，目标是让启动、消息编排、AI 调用、图片理解和记忆系统都保持可测试、可关闭、可扩展。
+这是一个基于 NapCat 和 OpenAI 兼容接口的 QQ 机器人项目。
 
-## 当前架构
+你可以把它理解成一个桥接层：NapCat 负责把 QQ 消息送进来，这个项目负责处理消息、调用 AI，再把回复发回 QQ。除了基础聊天，它还支持群聊回复、图片理解、长期记忆，以及一个本地 WebUI 控制台。
 
-- `main.py`
-  启动入口，只负责事件循环策略与 `QQBot.run()`。
-- `src/core/config.py`
-  强类型配置入口。`Config.validate()` 会在启动时聚合所有配置错误；模块级 `config` 仍保留兼容访问方式。
-- `src/core/bot.py`
-  运行时协调器，负责信号处理、运行循环、消息任务管理、状态统计和统一关闭。
-- `src/core/bootstrap.py`
-  生命周期装配器，负责配置校验、依赖构造、记忆初始化、消息处理器装配和连接创建。
-- `src/core/lifecycle.py`
-  统一资源关闭与后台任务取消辅助函数。
-- `src/handlers/`
-  `message_handler.py` 只做编排；命令、会话、群聊规划、回复流水线分别下沉到独立协作者。
-- `src/services/ai_client.py`
-  AI facade。请求构造、响应解析、错误映射、HTTP session 生命周期拆在 `src/services/ai/` 内部模块。
-- `src/services/vision_client.py`
-  独立视觉模型门面，负责把图片转换成短文本描述，再交给 planner 或主回复模型复用。
-- `src/memory/memory_manager.py`
-  Memory facade。存储访问、检索编排、抽取调度、索引维护、后台任务管理拆在 `src/memory/internal/` 内部协作者。
-- `tests/`
-  基于 `unittest` 的模块化测试，覆盖 handler、config、bot lifecycle、AI client、vision client、memory manager 等关键路径。
+## 这个项目是做什么的
 
-## 启动流程
+这个项目的用途很直接：把你的 QQ 账号接到 AI 上，让它像一个真正能聊天的 QQ 助手一样工作。
 
-1. `main.py` 创建 `QQBot` 并调用 `QQBot.run()`。
-2. `QQBot.initialize()` 调用 `BotBootstrapper.build()`。
-3. `Config.validate()` 加载并校验 `config.json`，一次性返回全部配置错误。
-4. Bootstrapper 按顺序构造 `MemoryManager`、`MessageHandler`、`NapCatConnection`，并按配置决定是否启用 `VisionClient`。
-5. `QQBot` 启动 WebSocket 运行循环，并在关闭时统一回收 connection、handler、memory、vision 和后台任务。
+它能做的事情包括：
 
-## 配置说明
+- 在私聊里自动回复消息
+- 在群聊里按规则判断要不要回复
+- 保留一定上下文，让对话更连贯
+- 在启用视觉模型后理解图片内容
+- 在启用记忆模块后记录和召回长期记忆
+- 提供一个网页控制台查看运行状态
 
-项目默认读取仓库根目录下的 `config.json`，不再依赖 `.env`。当前结构保持兼容，重点分区如下：
+如果你已经有：
 
-- `napcat`
-  NapCat WebSocket 与 HTTP 地址。
-- `ai_service`
-  主 AI 服务配置，包括 `api_base`、`api_key`、`model`、`extra_params`、`extra_headers`、`response_path`。
-- `vision_service`
-  独立视觉模型配置。结构与 `ai_service` 对齐，只有在 `enabled=true` 且 `api_base`、`api_key`、`model` 都完整时才会真正启用；否则进入 text-only 模式。
-- `bot_behavior`
-  上下文长度、超时、消息长度、限流等运行参数。
-- `assistant_profile`
-  助手名称与别名。
-- `group_reply`
-  群聊触发策略、burst 聚合窗口、planner 并发限制。
-- `group_reply_decision`
-  群聊规划器可选的独立模型配置；为空时自动回退到 `ai_service`。
-- `personality` / `dialogue_style` / `behavior`
-  系统提示词片段。
-- `memory`
-  memory 开关、读范围、检索参数、抽取参数、衰减参数与独立 extraction client 配置；为空时自动回退到 `ai_service`。
+- 一个能正常工作的 NapCat
+- 一个能用的 OpenAI 兼容接口
 
-### 推荐读取方式
+那这个项目就是把这两边接起来的那一层。
 
-新代码优先使用强类型入口：
+## 你该怎么用它
 
-```python
-from src.core.config import config, get_vision_service_status
+当前项目主要使用仓库根目录下的 `config.json` 作为配置文件。仓库里如果还有旧的 `.env` 示例或旧脚本，请优先以 `config.json` 和这份 README 为准。
 
-app = config.app
-model = app.ai_service.model
-vision_status = get_vision_service_status(app)
-plan_context = app.group_reply.plan_context_message_count
-read_scope = app.memory.read_scope
-```
+### 1. 先准备运行环境
 
-模块级 `config` 的扁平属性和 `__getattr__` 兼容层仍然保留，但只用于过渡兼容，不建议在新代码里继续新增 `config.OPENAI_MODEL`、`getattr(config, ...)` 或 `hasattr(config, ...)` 这类访问方式。
+请先准备好这些东西：
 
-### 配置校验
+- Python 3.10 或更高版本
+- 一个已经登录并可正常工作的 NapCat
+- 一个可调用的 OpenAI 兼容接口
 
-启动时会集中校验：
+兼容接口可以是：
 
-- 必填字段缺失
-- 字段类型错误
-- 非法枚举值
-- 数值越界
-- 跨字段约束，例如 `memory.rerank_top_k` 不能大于 `memory.bm25_top_k`
+- OpenAI
+- DeepSeek
+- OpenRouter
+- Ollama
+- 其他兼容 `/v1/chat/completions` 的服务
 
-如果配置存在问题，程序会在启动期一次性输出错误列表，而不是在运行过程中零散失败。
+### 2. 安装依赖
 
-## 运行项目
-
-### 1. 安装依赖
+Windows：
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+python -m venv venv
+venv\Scripts\activate
+python -m pip install -r requirements.txt
 ```
 
-### 2. 准备 `config.json`
+Linux / macOS：
 
-直接编辑仓库根目录下的 `config.json`。至少需要确认下面几项可用：
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+### 3. 修改 `config.json`
+
+你至少需要确认下面这些配置是正确的：
+
+- `napcat.ws_url`
+- `napcat.http_url`
+- `ai_service.api_base`
+- `ai_service.api_key`
+- `ai_service.model`
+
+一个最小可运行示例：
 
 ```json
 {
@@ -106,7 +82,7 @@ pip install -r requirements.txt
   },
   "ai_service": {
     "api_base": "https://your-openai-compatible-endpoint/v1",
-    "api_key": "sk-...",
+    "api_key": "sk-xxxx",
     "model": "your-model",
     "extra_params": {},
     "extra_headers": {},
@@ -119,177 +95,151 @@ pip install -r requirements.txt
     "model": null,
     "extra_params": null,
     "extra_headers": null,
-    "response_path": null
+    "response_path": "choices.0.message.content"
   }
 }
 ```
 
-当 `vision_service` 处于 `enabled` 状态时，机器人会走“图片下载 -> 视觉模型 -> 文本描述 -> planner / 主回复模型”的文本化图片链路。
+常见 `api_base` 示例：
 
-如果 `vision_service` 是 `disabled` 或 `unconfigured`，系统会进入 text-only 模式：
+- OpenAI: `https://api.openai.com/v1`
+- DeepSeek: `https://api.deepseek.com/v1`
+- OpenRouter: `https://openrouter.ai/api/v1`
+- Ollama: `http://127.0.0.1:11434/v1`
 
-- 私聊图文：只保留文字，忽略图片。
-- 私聊纯图片：直接返回“这次没看清图片”一类自然降级回复，不调用主模型。
-- 群聊图文：planner 和 reply 都只看文字部分。
-- 群聊纯图片：直接忽略，不触发回复。
+你可以这样理解这几个配置块：
 
-### 3. 启动
+- `napcat`：告诉程序去哪里连接 QQ
+- `ai_service`：告诉程序去哪里调用主模型
+- `vision_service`：如果你想让它看图，就配置这里
+- `memory`：如果你想让它记住长期信息，就配置这里
+
+如果你只是第一次上手，我建议先只配好 `napcat` 和 `ai_service`，先把最基础的聊天跑通。
+
+### 4. 启动项目
+
+直接运行：
 
 ```bash
 python main.py
 ```
 
-如果启动成功，日志中会看到配置校验完成、memory 初始化状态、视觉状态摘要（`disabled / unconfigured / enabled`）和 NapCat 连接状态。
+程序启动后会按这个顺序工作：
 
-## 模块职责
+1. 读取并校验 `config.json`
+2. 初始化机器人运行组件
+3. 连接 NapCat
+4. 启动 WebUI
 
-### Handler 分层
+如果 WebUI 启动成功，默认地址通常是：
 
-- `MessageHandler`
-  负责 plan、prepare、dispatch、限流和生命周期入口。
-- `CommandHandler`
-  负责命令识别与状态文案，内部通过 `CommandRegistry` 注册命令。
-- `ConversationSessionManager`
-  负责会话 key、上下文缓存和过期清理。
-- `GroupPlanCoordinator`
-  Handle per-message group planning, recent context history, image pre-analysis, and planner dispatch.
-- `group_reply.plan_context_message_count`
-  Controls how many recent group records are included for each single-message planning request; assistant replies are included too.
-- `ReplyPipeline`
-  负责 prompt 组装、视觉结果复用、AI 调用、对话登记、记忆后置动作。
-
-### 图片理解链路
-
-当 `vision_service` 状态为 `enabled` 时，图片消息会先经过独立视觉模型，再把文本化结果交给后续链路：
-
-- 私聊无图：保持现状。
-- 私聊纯图片：先识图，再把“图片描述”交给主模型回复。
-- 私聊图文混合：把“用户原文 + 每图描述 + 合并摘要”拼成增强后的文本消息交给主模型。
-- 群聊消息：进入 burst buffer 后，在 flush 执行 planner 前先补图片描述；planner 基于“文字 + 图片描述”共同决策。
-- planner 阶段产出的图片描述会挂在 `reply_context.window_messages` 上，reply 阶段优先复用，不重复识图。
-- 视觉结果会写入会话历史，但不会直接写入长期 memory，也不会直接进入 shared/private 记忆判定。
-
-当视觉模型未启用或未完整配置时，会进入 text-only 降级：
-
-- 私聊图文：只保留文字，忽略图片。
-- 私聊纯图：返回自然的“没看清图”降级回复，不调用主模型。
-- 群聊图文：按文字继续判断。
-- 群聊纯图：直接 `ignore`。
-
-当视觉模型已启用但本次识图失败时：
-
-- 私聊图文：按文字继续。
-- 私聊纯图：返回自然的“没看清图”降级回复。
-- 群聊图文：按文字继续判断。
-- 群聊纯图：优先 `wait`。
-
-### AI 服务层
-
-- `AIClient` 保持对外入口稳定。
-- `request_builder` 负责请求参数合并规则。
-- `response_parser` 负责 `response_path`、回退提取和 `tool_calls` 解析。
-- `error_mapper` 负责 HTTP、超时、JSON 解析、客户端异常映射。
-- `session_manager` 负责 `aiohttp` session 生命周期。
-
-### Memory 边界
-
-- `MemoryManager` 作为稳定门面。
-- `MemoryIndexCoordinator` 负责索引初始化与刷新。
-- `MemoryRetrievalCoordinator` 负责检索、important memory、上下文拼装。
-- `MemoryBackgroundCoordinator` 负责会话保存、抽取触发与关闭收尾。
-- `MemoryTaskManager` 负责后台任务登记、取消与 flush。
-
-当前 memory 不再只用“private/shared”一个维度判断是否可读，而是同时看：
-
-- `visibility`
-  这条记忆能不能跨边界读取。
-- `applicability_scope`
-  这条记忆只在哪个场景生效。
-
-共享判定规则如下：
-
-- 私聊来源不是自动全部 private；只有规则允许共享的公共规则才会 shared。
-- 群聊来源也不是自动 shared。
-- 个人信息、偏好、禁忌、计划、背景默认都按 `private`。
-- 只有 `group_rule`、`bot_rule`、明确授权共享的公共规则，才允许 `shared`。
-- 判不清时默认按 `private`。
-- conversation 历史始终私有，不参与 shared 召回。
-
-称呼要求单独建模为 `addressing_preference`，不混进普通偏好，也不当作公共 shared 规则：
-
-- 私聊称呼要求只在该用户私聊里生效。
-- 群聊称呼要求按 `group_id + user_id` 生效。
-- 私聊和群聊称呼互不继承。
-
-### Prompt 注入与控长
-
-Memory prompt 注入顺序固定为：
-
-1. 助手身份
-2. 群聊窗口上下文
-3. 当前用户重要记忆
-4. 当前场景称呼要求
-5. 当前场景共享规则 / 共享重要记忆
-6. 动态相关普通记忆
-7. 基础系统提示词
-
-为了避免 prompt 越来越长，memory 使用三层控长机制：
-
-- 写入时做去重和合并，尽量保留更稳定、更短的表达。
-- 读取时按预算裁剪，不再只按条数限制。
-- 后台定期整理压缩，优先整理 shared 规则和重复的场景规则。
-
-读取阶段会分别给“用户重要记忆 / 场景称呼要求 / shared 规则 / 动态相关记忆”分配预算；如果记忆存在压缩摘要，会优先注入摘要版。
-
-### 命令注册表
-
-内建命令通过 `CommandRegistry` 维护，当前已注册：
-
-- `/help`
-- `/status`
-- `/reset`
-
-`/help` 会根据注册表自动生成；后续新增命令时只需要注册 `CommandSpec`，不再继续堆 `if/else`。
-
-### 运行指标
-
-运行态指标统一由 `RuntimeMetrics` 维护，`QQBot.get_status()` 和 `/status` 读取同一份 snapshot。当前覆盖：
-
-- 生命周期: `ready`、`connected`、`uptime_seconds`、`last_error_at`
-- 消息: `messages_received`、`messages_replied`、`reply_parts_sent`、`message_errors`
-- 命令: `command_hits`、`command_hits_by_name`
-- Group planning: `planner_reply`, `planner_wait`, `planner_ignore`
-- 图片理解: `vision_requests`、`vision_images_processed`、`vision_failures`、`vision_reused_from_plan`
-- Memory: `memory_reads`、`memory_shared_reads`、`memory_scene_rule_hits`、`memory_access_denied`、`memory_writes`、`memory_migrations`、`memory_compactions`、`background_tasks`
-- 运行态: `active_message_tasks`、`active_conversations`
-
-## 测试
-
-运行全部测试：
-
-```bash
-python -m unittest discover -s tests -v
+```text
+http://127.0.0.1:8000/
 ```
 
-常见测试范围：
+### 5. 实际使用方式
 
-- handler 编排与协作者边界
-- 配置注释 JSON、fallback client config、聚合报错
-- bot 生命周期正常启动、初始化失败、重复关闭
-- AI 请求构造、响应解析、错误映射
-- vision client 解析结构化结果、文本回退与错误分支
-- memory 初始化、检索、抽取、后台任务回收
+启动完成后，你主要从两个地方使用它：
 
-## 故障排查
+- QQ：直接私聊机器人，或者在群里触发它回复
+- 浏览器：打开 WebUI 查看状态和做一些控制操作
 
-- 启动即失败
-  先看 `ConfigValidationError` 输出，它会列出全部配置问题。
-- 能启动但连不上 NapCat
-  检查 `napcat.ws_url` 是否与 NapCat 实际监听地址一致。
-- 图片消息没有走视觉模型
-  检查 `vision_service.enabled` 是否开启，以及 `vision_service` 的 `api_base`、`api_key`、`model` 是否完整；未完整配置时状态会显示为 `unconfigured`，系统会进入 text-only 模式，不会回退到 `ai_service` 或主模型多模态。
-- AI 返回异常
-  检查 `ai_service.api_base`、`api_key`、`model` 与 `response_path` 是否匹配当前上游。
-- 关闭后仍有悬挂任务
-  先执行生命周期测试；当前关闭链路应统一回收 connection、message handler、memory manager、vision client 和 memory 后台任务。
+如果你是第一次部署，我建议按这个顺序来：
 
+1. 先只测试私聊回复
+2. 再测试群聊回复
+3. 最后再开启图片理解和记忆功能
+
+这样比较容易排查问题，也不会一开始就把变量堆太多。
+
+## 它的整体架构是什么样
+
+这个项目从结构上看，可以分成四层。
+
+### 1. 入口层
+
+- `main.py`
+
+这是程序入口。你运行 `python main.py` 时，整个项目就是从这里开始启动的。
+
+### 2. 核心运行层
+
+- `src/core/`
+
+这一层负责整个项目的主流程控制，主要包括：
+
+- 读取和校验配置
+- 组装运行时依赖
+- 管理机器人生命周期
+- 控制启动、关闭和重启
+
+如果你把这个项目看成一个系统，这一层就是“总控”。
+
+### 3. 消息处理层
+
+- `src/handlers/`
+- `src/services/`
+- `src/emoji/`
+
+这一层负责真正处理消息逻辑。收到 QQ 消息后，大部分“机器人到底怎么想、怎么回”的事情都发生在这里，比如：
+
+- 这条消息要不要回复
+- 要不要读取上下文
+- 要不要调用 AI
+- 要不要先做图片理解
+- 最后把什么内容发回去
+
+### 4. 数据与界面层
+
+- `src/memory/`
+- `src/webui/`
+- `data/`
+- `memories/`
+
+这一层负责两类事情：
+
+- 存和读数据
+- 展示运行状态
+
+具体来说：
+
+- `memory` 负责长期记忆
+- `webui` 负责网页控制台
+- `data` 和 `memories` 负责本地运行数据
+
+## 一条消息在项目里怎么流动
+
+如果你想快速理解整个项目，可以直接看这条链路：
+
+1. NapCat 收到一条 QQ 消息
+2. NapCat 把消息转给这个项目
+3. 项目判断这条消息要不要回复
+4. 如果要回复，就调用 AI
+5. 如果开启了视觉或记忆，也会在这个过程中参与
+6. 最后项目再通过 NapCat 把回复发回 QQ
+
+换成一句更直白的话就是：
+
+`QQ 消息 -> 项目处理 -> AI 生成回复 -> 发回 QQ`
+
+## 目录怎么快速看懂
+
+如果你是第一次看这个仓库，先认这几个位置就够了：
+
+```text
+main.py                     启动入口
+config.json                 主配置文件
+src/core/                   核心运行逻辑
+src/handlers/               消息处理逻辑
+src/services/               AI、视觉等服务封装
+src/memory/                 记忆系统
+src/webui/                  WebUI 控制台
+tests/                      测试
+```
+
+如果你的目标只是把项目跑起来，重点看：
+
+- `config.json`
+- `main.py`
+
+如果你的目标是继续开发，再去看 `src/` 下的各个模块。
