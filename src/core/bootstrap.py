@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from src.core.config import Config, config, get_vision_service_status, is_group_reply_decision_configured
+from src.core.config import Config, get_vision_service_status, is_group_reply_decision_configured
 from src.core.connection import NapCatConnection
 from src.core.lifecycle import close_resource
 from src.core.runtime_metrics import RuntimeMetrics
@@ -25,8 +25,8 @@ class BotRuntimeComponents:
 class BotBootstrapper:
     """Validate config and assemble runtime components."""
 
-    def __init__(self, config_obj: Config = config):
-        self.config = config_obj
+    def __init__(self, config_obj: Config | None = None):
+        self.config = config_obj or Config()
 
     async def build(
         self,
@@ -38,7 +38,7 @@ class BotBootstrapper:
         status_provider: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> BotRuntimeComponents:
         app_config = self.config.validate()
-        logger.info("starting bot: %s", self.config.get_assistant_name())
+        logger.info("开始启动助手：%s", self.config.get_assistant_name())
         self._log_runtime_config()
 
         memory_manager = await self._initialize_memory_manager(runtime_metrics=runtime_metrics)
@@ -77,17 +77,17 @@ class BotBootstrapper:
         group_reply = app_config.group_reply
         decision_config = self.config.get_group_reply_decision_client_config()
 
-        logger.info("AI service: %s", ai_service.api_base)
-        logger.info("default model: %s", ai_service.model)
+        logger.info("AI 服务地址：%s", ai_service.api_base)
+        logger.info("默认模型：%s", ai_service.model)
         logger.info(
-            "[vision] status=%s model=%s api_base=%s",
+            "视觉服务：状态=%s，模型=%s，地址=%s",
             vision_status,
             vision_service.get("model"),
             vision_service.get("api_base"),
         )
-        logger.info("[assistant] name: %s", self.config.get_assistant_name())
+        logger.info("助手名称：%s", self.config.get_assistant_name())
         logger.info(
-            "[planner] only_at=%s interest=%s interval=%s max_parallel=%s context_count=%s proactive_at=%s repeat_echo=%s model=%s",
+            "群聊规划：仅@回复=%s，兴趣回复=%s，触发间隔=%s，并行上限=%s，上下文条数=%s，主动回复时@用户=%s，复读回声=%s，决策模型=%s",
             group_reply.only_reply_when_at,
             group_reply.interest_reply_enabled,
             group_reply.plan_request_interval,
@@ -97,7 +97,7 @@ class BotBootstrapper:
             group_reply.repeat_echo_enabled,
             decision_config.get("model"),
         )
-        logger.info("[planner] configured=%s", is_group_reply_decision_configured(app_config))
+        logger.info("群聊规划决策已配置：%s", is_group_reply_decision_configured(app_config))
 
     async def _initialize_memory_manager(
         self,
@@ -106,7 +106,7 @@ class BotBootstrapper:
     ):
         app_config = self.config.app
         memory_config = app_config.memory
-        logger.info("memory module: %s", "enabled" if memory_config.enabled else "disabled")
+        logger.info("记忆模块：%s", "已启用" if memory_config.enabled else "未启用")
 
         if not memory_config.enabled:
             return None
@@ -115,8 +115,14 @@ class BotBootstrapper:
 
         memory_client_config = self.config.get_memory_extraction_client_config()
         memory_rerank_client_config = self.config.get_memory_rerank_client_config()
-        logger.info("memory extraction model: %s", memory_client_config.get("model"))
-        logger.info("memory rerank model: %s", memory_rerank_client_config.get("model"))
+        logger.info("记忆提取模型：%s", memory_client_config.get("model"))
+        logger.info("记忆重排模型：%s", memory_rerank_client_config.get("model"))
+        logger.info(
+            "记忆配置：自动提取=%s，每 %s 轮提取一次，对话每 %s 轮落盘一次",
+            memory_config.auto_extract,
+            memory_config.extract_every_n_turns,
+            memory_config.conversation_save_interval,
+        )
 
         manager_config = MemoryManagerConfig(
             storage_base_path=memory_config.storage_path,
@@ -125,6 +131,12 @@ class BotBootstrapper:
                 bm25_top_k=memory_config.bm25_top_k,
                 rerank_enabled=bool(memory_rerank_client_config.get("api_base") and memory_rerank_client_config.get("api_key") and memory_rerank_client_config.get("model")),
                 rerank_top_k=memory_config.rerank_top_k,
+                pre_rerank_top_k=memory_config.pre_rerank_top_k,
+                dynamic_memory_limit=memory_config.dynamic_memory_limit,
+                dynamic_dedup_enabled=memory_config.dynamic_dedup_enabled,
+                dynamic_dedup_similarity_threshold=memory_config.dynamic_dedup_similarity_threshold,
+                rerank_candidate_max_chars=memory_config.rerank_candidate_max_chars,
+                rerank_total_prompt_budget=memory_config.rerank_total_prompt_budget,
                 reranker_type="api",
                 api_endpoint=memory_rerank_client_config.get("api_base", ""),
                 api_key=memory_rerank_client_config.get("api_key", ""),
@@ -132,6 +144,11 @@ class BotBootstrapper:
                 api_extra_params=memory_rerank_client_config.get("extra_params", {}),
                 api_extra_headers=memory_rerank_client_config.get("extra_headers", {}),
                 api_response_path=memory_rerank_client_config.get("response_path", "choices.0.message.content"),
+                local_bm25_weight=memory_config.local_bm25_weight,
+                local_importance_weight=memory_config.local_importance_weight,
+                local_mention_weight=memory_config.local_mention_weight,
+                local_recency_weight=memory_config.local_recency_weight,
+                local_scene_weight=memory_config.local_scene_weight,
             ),
             extraction_config=ExtractionConfig(
                 extract_every_n_turns=memory_config.extract_every_n_turns,
@@ -155,8 +172,8 @@ class BotBootstrapper:
             await close_resource(memory_manager, label="memory_manager")
             raise
 
-        logger.info("[memory] read_scope=%s", memory_config.read_scope)
-        logger.info("memory manager initialized")
+        logger.info("记忆读取范围：%s", memory_config.read_scope)
+        logger.info("记忆管理器初始化完成")
         return memory_manager
 
     def _build_memory_llm_callback(self, client_config: Dict[str, Any]):
@@ -196,7 +213,7 @@ class BotBootstrapper:
         on_disconnect: Callable[[], Awaitable[None]],
     ) -> NapCatConnection:
         host, port = self._parse_ws_endpoint()
-        logger.info("listen NapCat connection: ws://%s:%s", host, port)
+        logger.info("准备连接 NapCat：ws://%s:%s", host, port)
         return NapCatConnection(
             host=host,
             port=port,

@@ -154,7 +154,7 @@ class ImportantMemoryStore:
                     str(payload.get("updated_at") or ""),
                 )
             except json.JSONDecodeError:
-                logger.debug("Failed to parse important memory payload JSON")
+                logger.debug("解析重要记忆负载 JSON 失败")
         source_match = re.search(r"source:(.*?)$", text)
         source = source_match.group(1).strip() if source_match else "unknown"
         return "", source, {}, ""
@@ -215,11 +215,11 @@ class ImportantMemoryStore:
                             )
                         )
                 except Exception as exc:
-                    logger.debug("Failed to parse important memory line: %s", exc)
+                    logger.debug("解析重要记忆行失败：%s", exc)
 
             return memories
         except Exception as exc:
-            logger.error("Failed to read important memories: user=%s, error=%s", user_id, exc)
+            logger.error("读取重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return []
 
     async def _write_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
@@ -241,7 +241,7 @@ class ImportantMemoryStore:
                 await file.write("\n".join(lines))
             return True
         except Exception as exc:
-            logger.error("Failed to write important memories: user=%s, error=%s", user_id, exc)
+            logger.error("写入重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return False
 
     async def add_memory(
@@ -345,7 +345,7 @@ class ImportantMemoryStore:
                 return False
             return await self._write_memories(user_id, new_memories)
         except Exception as exc:
-            logger.error("Failed to delete important memory: user=%s, error=%s", user_id, exc)
+            logger.error("删除重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return False
 
     async def update_memory(self, user_id: str, memory_id: str, content: str) -> bool:
@@ -377,8 +377,8 @@ class ImportantMemoryStore:
             file_path.unlink()
             return True
         except Exception as exc:
-            logger.error("Failed to clear important memories: user=%s, error=%s", user_id, exc)
-            return False
+                logger.error("清空重要记忆失败：用户=%s，错误=%s", user_id, exc)
+                return False
 
     async def replace_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
         return await self._write_memories(user_id, memories)

@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -93,6 +94,11 @@ class ReplyPipeline:
                 system_prompt=system_prompt,
                 user_message=model_user_message,
                 base64_images=base64_images,
+                context_messages=self._build_context_messages(
+                    event=event,
+                    conversation=conversation,
+                    plan=plan,
+                ),
                 related_history_messages=related_history_messages,
             )
         return PreparedReplyRequest(
@@ -114,23 +120,23 @@ class ReplyPipeline:
             response = AIResponse(content=prepared.fallback_response) if prepared.fallback_response is not None else await self._request_model_reply(event, prepared)
             self._persist_reply_result(event, prepared, response)
             logger.info(
-                "[reply] reply generated: user=%s group=%s length=%s",
+                "回复生成完成：用户=%s，群=%s，长度=%s",
                 event.user_id,
                 event.group_id,
                 len(response.content),
             )
             return ReplyResult(text=response.content, source=source)
         except AIAPIError as exc:
-            logger.error("[reply] AI request failed: %s", exc)
+            logger.error("AI 请求失败：%s", exc)
             return ReplyResult(text=f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}", source="fallback")
         except Exception as exc:
-            logger.error("[reply] unexpected reply failure: %s", exc, exc_info=True)
+            logger.error("回复流程异常：%s", exc, exc_info=True)
             return ReplyResult(text="处理消息时出错，请稍后再试。", source="fallback")
 
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
         if not event.has_image() or not self._vision_enabled():
             return []
-        logger.info("[reply] processing images")
+        logger.info("开始处理图片输入")
         return await self.host.download_images(event)
 
     def _log_prompt_if_enabled(self, event: MessageEvent, prepared: PreparedReplyRequest) -> None:
@@ -138,7 +144,7 @@ class ReplyPipeline:
             return
         if not prepared.messages:
             logger.info(
-                "[SYSTEM PROMPT]\nuser=%s\nconversation=%s\n[vision fallback reply without model request]",
+                    "[系统提示词]\n用户=%s\n会话=%s\n[视觉兜底回复：未请求模型]",
                 event.user_id,
                 self.host._get_conversation_key(event),
             )
@@ -153,7 +159,7 @@ class ReplyPipeline:
 
     async def _request_model_reply(self, event: MessageEvent, prepared: PreparedReplyRequest) -> AIResponse:
         logger.info(
-            "[reply] sending request: user=%s group=%s images=%s history=%s multimodal=%s",
+            "开始请求 AI：用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
             event.user_id,
             event.group_id,
             len(prepared.base64_images),
@@ -185,7 +191,7 @@ class ReplyPipeline:
                 group_id=str(event.group_id or ""),
             )
         except Exception as exc:
-            logger.warning("[reply] failed to register memory side effects: %s", exc, exc_info=True)
+            logger.warning("记录记忆副作用失败：%s", exc, exc_info=True)
 
     def _schedule_memory_extraction(
         self,
@@ -270,8 +276,10 @@ class ReplyPipeline:
                     if normalized:
                         memory_lines.append(f"{index}. {normalized.splitlines()[-1]}")
                 content = "\n".join(memory_lines) if memory_lines else "没有找到相关记忆"
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                logger.warning("[reply] tool call failed: %s", exc)
+                logger.warning("记忆工具调用失败：%s", exc)
                 content = f"检索失败: {exc}"
 
         return {
@@ -330,8 +338,10 @@ class ReplyPipeline:
                     read_scope=self._get_memory_read_scope(),
                     access_context=access_context,
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                logger.warning("[reply] failed to load important memories: %s", exc)
+                logger.warning("加载重要记忆失败：%s", exc)
                 important = []
             formatted = self._format_legacy_important_memories(important)
             return formatted, [], True
@@ -345,8 +355,10 @@ class ReplyPipeline:
                 read_scope=self._get_memory_read_scope(),
                 access_context=access_context,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            logger.warning("[reply] failed to search memory context: %s", exc)
+            logger.warning("检索记忆上下文失败：%s", exc)
             return await self._load_legacy_memory_context(event=event, user_message=user_message, conversation=conversation)
 
         memories = payload.get("memories", []) if isinstance(payload, dict) else []
@@ -371,8 +383,10 @@ class ReplyPipeline:
                 read_scope=self._get_memory_read_scope(),
                 access_context=self._build_memory_access_context(event),
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            logger.warning("[reply] legacy memory loading failed: %s", exc)
+            logger.warning("旧版记忆加载失败：%s", exc)
             important = []
         return self._format_legacy_important_memories(important), [], len(conversation.messages) == 0
 
@@ -425,6 +439,31 @@ class ReplyPipeline:
             lines.append(f"群ID: {event.group_id}")
         return "\n".join(lines)
 
+    def _build_reply_context_prompt(
+        self,
+        *,
+        event: Optional[MessageEvent],
+        plan: Optional[MessageHandlingPlan],
+    ) -> str:
+        if not plan:
+            return ""
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        lines = [
+            "【本轮回复上下文】",
+            f"回复理由: {plan.reason}",
+        ]
+        reply_mode = str(reply_context.get("reply_mode") or "").strip()
+        if event is not None and str(event.message_type or "").strip().lower() == MessageType.GROUP.value:
+            at_self = event.is_at(event.self_id)
+            lines.append(f"当前消息是否显式@你: {'是' if at_self else '否'}")
+            if at_self:
+                lines.append("当前消息是在群里直接叫你，请按“对你说话”来理解，不要误判成用户在讨论别人。")
+            elif reply_mode == "proactive":
+                lines.append("这次回复属于主动接话，请结合最近群聊上下文自然承接。")
+            elif reply_mode == "repeat_echo":
+                lines.append("这次回复是复读触发，直接复读目标文本，不要额外延展。")
+        return "\n".join(lines)
+
     def build_response_system_prompt(
         self,
         *,
@@ -438,6 +477,7 @@ class ReplyPipeline:
             self.host._build_assistant_identity_prompt(),
             self.host._build_system_prompt(),
             self._build_session_context_prompt(event),
+            self._build_reply_context_prompt(event=event, plan=plan),
         ]
         group_context = self.host._format_group_window_context(getattr(plan, "reply_context", None)) if plan else ""
         if group_context:
@@ -451,13 +491,81 @@ class ReplyPipeline:
         system_prompt: str,
         user_message: str,
         base64_images: List[str],
+        context_messages: List[Dict[str, Any]],
         related_history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         del base64_images
         messages = [self.host.ai_client.build_text_message("system", system_prompt)]
+        messages.extend(list(context_messages or []))
         messages.extend(list(related_history_messages or []))
         messages.append(self.host.ai_client.build_text_message("user", user_message))
         return messages
+
+    def _build_context_messages(
+        self,
+        *,
+        event: MessageEvent,
+        conversation: Conversation,
+        plan: Optional[MessageHandlingPlan],
+    ) -> List[Dict[str, Any]]:
+        if str(event.message_type or "").strip().lower() == MessageType.GROUP.value:
+            messages = self._build_group_window_messages(plan=plan, current_message_id=int(event.message_id or 0))
+            if messages:
+                return messages
+        return self._build_conversation_messages(conversation)
+
+    def _build_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
+        max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
+        if max_length <= 0:
+            return []
+        return [
+            self.host.ai_client.build_text_message(str(item.get("role") or "user"), str(item.get("content") or ""))
+            for item in conversation.get_messages(max_length=max_length)
+            if str(item.get("content") or "").strip()
+        ]
+
+    def _build_group_window_messages(
+        self,
+        *,
+        plan: Optional[MessageHandlingPlan],
+        current_message_id: int,
+    ) -> List[Dict[str, Any]]:
+        if not plan or not getattr(plan, "reply_context", None):
+            return []
+        window_messages = list((plan.reply_context or {}).get("window_messages") or [])
+        max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
+        if max_length <= 0:
+            return []
+        rendered: List[Dict[str, Any]] = []
+        for item in window_messages:
+            if bool(item.get("is_latest")):
+                continue
+            if current_message_id and int(item.get("message_id", 0) or 0) == current_message_id:
+                continue
+            content = self._format_window_message_for_model(item)
+            if not content:
+                continue
+            role = "assistant" if str(item.get("speaker_role") or "").strip().lower() == "assistant" else "user"
+            rendered.append(self.host.ai_client.build_text_message(role, content))
+        return rendered[-max_length:]
+
+    def _format_window_message_for_model(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("text") or item.get("raw_text") or "").strip()
+        if text:
+            return text
+        merged_description = str(item.get("merged_description") or "").strip()
+        if merged_description:
+            return f"图片摘要: {merged_description}"
+        per_image_descriptions = [
+            str(value).strip()
+            for value in (item.get("per_image_descriptions") or [])
+            if str(value).strip()
+        ]
+        if per_image_descriptions:
+            return "图片摘要: " + "；".join(per_image_descriptions)
+        if bool(item.get("has_image")):
+            return "[图片]"
+        return ""
 
     async def _resolve_vision_analysis(
         self,

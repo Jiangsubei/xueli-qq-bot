@@ -42,7 +42,7 @@ class ConversationSessionManager:
         ]
         for key in expired_keys:
             del self._conversations[key]
-            logger.debug("Cleaned expired conversation: %s", key)
+            logger.debug("已清理过期会话：%s", key)
 
     def count_active(self) -> int:
         self.clean_expired()

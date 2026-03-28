@@ -1,4 +1,4 @@
-﻿<div id="page-emoji" class="page-section">
+<div id="page-emoji" class="page-section" data-advanced-page="emoji" data-advanced-visible="false">
   <form class="grid-container console-grid settings-form stacked-form multi-card-form emoji-console-form" data-form-section="emoji">
     <section class="card mica-material col-12 config-section-card">
       <div class="card-bar">
@@ -6,7 +6,8 @@
           <h3 class="card-title">基础设置</h3>
           <p class="card-desc">先决定助手要不要收、分、发表情。</p>
         </div>
-</div>
+      </div>
+
       <div class="config-item-grid four-up">
         <label class="config-item-card config-switch-card">
           <span class="config-item-head">
@@ -23,6 +24,7 @@
             </span>
           </span>
         </label>
+
         <label class="config-item-card config-switch-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">
@@ -38,6 +40,7 @@
             </span>
           </span>
         </label>
+
         <label class="config-item-card config-switch-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">
@@ -53,6 +56,7 @@
             </span>
           </span>
         </label>
+
         <label class="config-item-card config-switch-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">
@@ -70,7 +74,112 @@
         </label>
       </div>
     </section>
-<section class="card mica-material col-12 emoji-library-card">
+
+    <section class="card mica-material col-12 config-section-card" data-advanced-field>
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">高级设置</h3>
+          <p class="card-desc">这些选项更适合细调分类、回复节奏和存储行为。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid two-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">回复冷却</span>
+              <span class="config-item-desc">两次自动发表情之间至少间隔多久。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.reply_cooldown_seconds }}">?</span>
+          </span>
+          <input class="form-control" name="reply_cooldown_seconds" type="number" min="0" step="0.1" value="{{ emoji_advanced_form.reply_cooldown_seconds }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">空闲分类时间</span>
+              <span class="config-item-desc">助手空下来多久后，开始整理表情。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.idle_seconds_before_classify }}">?</span>
+          </span>
+          <input class="form-control" name="idle_seconds_before_classify" type="number" min="0" value="{{ emoji_advanced_form.idle_seconds_before_classify }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">分类间隔</span>
+              <span class="config-item-desc">两次自动分类之间会间隔多久。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.classification_interval_seconds }}">?</span>
+          </span>
+          <input class="form-control" name="classification_interval_seconds" type="number" min="0" value="{{ emoji_advanced_form.classification_interval_seconds }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">存储路径</span>
+              <span class="config-item-desc">表情图片和索引会保存在这个位置。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.storage_path }}">?</span>
+          </span>
+          <input class="form-control" name="storage_path" type="text" value="{{ emoji_advanced_form.storage_path }}">
+        </label>
+
+        <div class="config-item-card config-editor-card full-span">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">分类时段</span>
+              <span class="config-item-desc">只有在这些时段里，才会自动做表情分类。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.classification_windows }}">?</span>
+          </span>
+          <div class="editor-panel window-editor">
+            <div class="editor-list" data-window-list>
+              {% for row in emoji_advanced_form.classification_windows %}
+              <div class="editor-row window-row" data-window-row>
+                <input class="form-control" type="time" value="{{ row.start }}" data-window-start>
+                <span class="window-separator">-</span>
+                <input class="form-control" type="time" value="{{ row.end }}" data-window-end>
+                <button class="btn-outline btn-icon-lite" type="button" data-remove-window-row><i class="fa-solid fa-xmark"></i></button>
+              </div>
+              {% endfor %}
+            </div>
+            <button class="btn-outline editor-add-button" type="button" data-add-window-row>添加时段</button>
+          </div>
+        </div>
+
+        <div class="config-item-card config-editor-card full-span">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">情绪标签</span>
+              <span class="config-item-desc">这里维护表情分类时可用的情绪标签。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.emotion_labels }}">?</span>
+          </span>
+          <div class="editor-panel tag-editor" data-tag-editor>
+            <div class="tag-chip-list" data-tag-list>
+              {% for item in emoji_advanced_form.emotion_labels %}
+              <span class="tag-chip" data-tag-item>
+                <span class="tag-chip-text">{{ item }}</span>
+                <button class="tag-chip-move" type="button" data-move-tag="prev" aria-label="上移"><i class="fa-solid fa-arrow-left"></i></button>
+                <button class="tag-chip-move" type="button" data-move-tag="next" aria-label="下移"><i class="fa-solid fa-arrow-right"></i></button>
+                <button class="tag-chip-remove" type="button" data-remove-tag aria-label="删除"><i class="fa-solid fa-xmark"></i></button>
+              </span>
+              {% endfor %}
+            </div>
+            <div class="tag-input-row">
+              <input class="form-control" type="text" placeholder="输入一个标签" data-tag-input>
+              <button class="btn-outline editor-add-button" type="button" data-add-tag>添加标签</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mica-material col-12 emoji-library-card">
       <div class="emoji-library-head">
         <div>
           <h3 class="card-title">表情库</h3>
@@ -89,135 +198,5 @@
         </div>
       </div>
     </section>
-<details class="card mica-material col-12 config-section-card config-collapse-card">
-      <summary class="config-collapse-summary">
-        <div class="config-collapse-copy">
-          <h3 class="card-title">更多设置</h3>
-          <p class="card-desc">分类、回复和存储这几项默认收起，需要时再展开。</p>
-        </div>
-        <span class="config-collapse-action"><span>展开更多设置</span><i class="fa-solid fa-chevron-down"></i></span>
-      </summary>
-      <div class="config-collapse-body">
-        <div class="grid-container console-grid collapse-grid">
-          <section class="card mica-material col-12 config-section-card collapse-inner-card">
-            <div class="card-bar">
-              <div>
-                <h3 class="card-title">分类设置</h3>
-                <p class="card-desc">这里决定什么时候整理表情，以及怎么分类型。</p>
-              </div>
-</div>
-            <div class="config-item-grid two-up">
-              <label class="config-item-card">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">空闲分类时间</span>
-                    <span class="config-item-desc">助手空下来多久后，开始整理表情。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.idle_seconds_before_classify }}">?</span>
-                </span>
-                <input class="form-control" name="idle_seconds_before_classify" type="number" min="0" value="{{ emoji_advanced_form.idle_seconds_before_classify }}">
-              </label>
-              <label class="config-item-card">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">分类间隔</span>
-                    <span class="config-item-desc">两次自动分类之间会间隔多久。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.classification_interval_seconds }}">?</span>
-                </span>
-                <input class="form-control" name="classification_interval_seconds" type="number" min="0" value="{{ emoji_advanced_form.classification_interval_seconds }}">
-              </label>
-              <div class="config-item-card config-editor-card full-span">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">分类时段</span>
-                    <span class="config-item-desc">只有在这些时段里，才会自动做表情分类。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.classification_windows }}">?</span>
-                </span>
-                <div class="editor-panel window-editor">
-                  <div class="editor-list" data-window-list>
-                    {% for row in emoji_advanced_form.classification_windows %}
-                    <div class="editor-row window-row" data-window-row>
-                      <input class="form-control" type="time" value="{{ row.start }}" data-window-start>
-                      <span class="window-separator">-</span>
-                      <input class="form-control" type="time" value="{{ row.end }}" data-window-end>
-                      <button class="btn-outline btn-icon-lite" type="button" data-remove-window-row><i class="fa-solid fa-xmark"></i></button>
-                    </div>
-                    {% endfor %}
-                  </div>
-                  <button class="btn-outline editor-add-button" type="button" data-add-window-row>添加时段</button>
-                </div>
-              </div>
-              <div class="config-item-card config-editor-card full-span">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">情绪标签</span>
-                    <span class="config-item-desc">这里维护表情分类时可用的情绪标签。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.emotion_labels }}">?</span>
-                </span>
-                <div class="editor-panel tag-editor" data-tag-editor>
-                  <div class="tag-chip-list" data-tag-list>
-                    {% for item in emoji_advanced_form.emotion_labels %}
-                    <span class="tag-chip" data-tag-item>
-                      <span class="tag-chip-text">{{ item }}</span>
-                      <button class="tag-chip-move" type="button" data-move-tag="prev" aria-label="上移"><i class="fa-solid fa-arrow-left"></i></button>
-                      <button class="tag-chip-move" type="button" data-move-tag="next" aria-label="下移"><i class="fa-solid fa-arrow-right"></i></button>
-                      <button class="tag-chip-remove" type="button" data-remove-tag aria-label="删除"><i class="fa-solid fa-xmark"></i></button>
-                    </span>
-                    {% endfor %}
-                  </div>
-                  <div class="tag-input-row">
-                    <input class="form-control" type="text" placeholder="输入一个标签" data-tag-input>
-                    <button class="btn-outline editor-add-button" type="button" data-add-tag>添加标签</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-<section class="card mica-material col-6 config-section-card collapse-inner-card">
-            <div class="card-bar">
-              <div>
-                <h3 class="card-title">回复设置</h3>
-                <p class="card-desc">这里控制表情回复的节奏。</p>
-              </div>
-</div>
-            <div class="config-item-grid one-up">
-              <label class="config-item-card">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">回复冷却</span>
-                    <span class="config-item-desc">两次自动发表情之间至少间隔多久。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.reply_cooldown_seconds }}">?</span>
-                </span>
-                <input class="form-control" name="reply_cooldown_seconds" type="number" min="0" step="0.1" value="{{ emoji_advanced_form.reply_cooldown_seconds }}">
-              </label>
-            </div>
-          </section>
-<section class="card mica-material col-6 config-section-card collapse-inner-card">
-            <div class="card-bar">
-              <div>
-                <h3 class="card-title">存储设置</h3>
-                <p class="card-desc">这里决定表情文件会存到哪里。</p>
-              </div>
-</div>
-            <div class="config-item-grid one-up">
-              <label class="config-item-card">
-                <span class="config-item-head">
-                  <span class="config-item-title-stack">
-                    <span class="config-item-title">存储路径</span>
-                    <span class="config-item-desc">表情图片和索引会保存在这个位置。</span>
-                  </span>
-                  <span class="field-help" tabindex="0" data-help="{{ field_help.emoji.storage_path }}">?</span>
-                </span>
-                <input class="form-control" name="storage_path" type="text" value="{{ emoji_advanced_form.storage_path }}">
-              </label>
-            </div>
-          </section>
-        </div>
-      </div>
-    </details>
   </form>
 </div>

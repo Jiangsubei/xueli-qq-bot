@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Optional
 
 from src.core.bot import QQBot
+from src.core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class BotRuntimeSupervisor:
 
     async def restart_bot(self) -> Dict[str, str]:
         async with self._lock:
-            logger.info("Bot restart requested from WebUI")
+            logger.info("收到来自 WebUI 的重启请求")
             self._state = "restarting"
             self._last_error = ""
             await self._stop_locked()
@@ -52,9 +53,9 @@ class BotRuntimeSupervisor:
             except Exception as exc:
                 self._state = "error"
                 self._last_error = str(exc)
-                logger.exception("Bot restart failed: %s", exc)
+                logger.exception("助手重启失败：%s", exc)
                 raise
-            logger.info("Bot restart completed")
+            logger.info("助手重启完成")
             return result
 
     async def shutdown(self) -> None:
@@ -70,7 +71,7 @@ class BotRuntimeSupervisor:
 
         self._state = "starting"
         self._last_error = ""
-        bot = QQBot(manage_signals=False)
+        bot = QQBot(manage_signals=False, config_obj=Config())
         task = asyncio.create_task(self._run_bot(bot), name="bot-runtime")
         self._bot = bot
         self._bot_task = task
@@ -101,7 +102,7 @@ class BotRuntimeSupervisor:
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.warning("Bot stopped with error: %s", exc, exc_info=True)
+                logger.warning("助手停止时出现异常：%s", exc, exc_info=True)
 
         self._bot = None
         self._bot_task = None
@@ -128,7 +129,7 @@ class BotRuntimeSupervisor:
         except Exception as exc:
             self._state = "error"
             self._last_error = str(exc)
-            logger.exception("Bot runtime crashed: %s", exc)
+            logger.exception("助手运行异常退出：%s", exc)
             raise
         else:
             if self._state not in {"stopping", "restarting"}:

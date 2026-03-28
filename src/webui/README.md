@@ -15,7 +15,7 @@ python src/webui/manage.py runserver
 
 - 当前版本是控制台静态占位页，使用 Django `templates + static` 组织页面。
 - 页面结构保留 7 个主要分区，后续可以逐块替换成真实业务数据。
-- 当前不会读取 `config.json`，也不会把 API key、token 等敏感信息渲染到前端。
+- 当前会读取仓库根目录的 `config.toml`，但不会把 API key、token 等敏感信息渲染到前端。
 - 旧的 React/Vite 方案不再作为默认运行方式。
 
 ## 目录说明

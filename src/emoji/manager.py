@@ -116,7 +116,7 @@ class EmojiManager:
             )
             sticker_count += 1
             logger.info(
-                "[emoji] detected sticker: id=%s confidence=%.2f user=%s group=%s",
+                "检测到表情包：ID=%s，置信度=%.2f，用户=%s，群=%s",
                 record.emoji_id,
                 record.sticker_confidence,
                 event.user_id,
@@ -164,7 +164,7 @@ class EmojiManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("[emoji] background classification loop failed: %s", exc, exc_info=True)
+            logger.error("表情包后台分类循环失败：%s", exc, exc_info=True)
         finally:
             await self._sync_metrics(active_classifiers=0)
             self._worker_task = None
@@ -201,7 +201,7 @@ class EmojiManager:
             await self.repository.mark_classification_failed(emoji_id, str(exc))
             if self.runtime_metrics:
                 self.runtime_metrics.record_emoji_classification_failure(1)
-            logger.warning("[emoji] classify sticker failed: id=%s error=%s", emoji_id, exc)
+            logger.warning("表情包分类失败：ID=%s，错误=%s", emoji_id, exc)
 
     def _can_run_classification_now(self) -> bool:
         if not self.classification_enabled:

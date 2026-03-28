@@ -8,7 +8,7 @@ import sys
 from typing import Any, Dict, List, Optional, Set
 
 from src.core.bootstrap import BotBootstrapper
-from src.core.config import config
+from src.core.config import Config
 from src.core.dispatcher import EventContext, EventDispatcher
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
 from src.core.models import MessageEvent, MessageSegment, MessageType
@@ -27,13 +27,14 @@ logger = logging.getLogger(__name__)
 class QQBot:
     """Main bot runtime facade."""
 
-    def __init__(self, *, manage_signals: bool = True):
+    def __init__(self, *, manage_signals: bool = True, config_obj: Config | None = None):
         self.dispatcher = EventDispatcher()
         self._manage_signals = manage_signals
+        self.config = config_obj or Config()
         self.runtime_metrics = RuntimeMetrics()
-        self.bootstrapper = BotBootstrapper(config)
+        self.bootstrapper = BotBootstrapper(self.config)
         self.webui_snapshot = WebUISnapshotPublisher(
-            app_config=config.app,
+            app_config=self.config.app,
             status_provider=self.get_status,
         )
 
@@ -75,7 +76,11 @@ class QQBot:
                 runtime_metrics=self.runtime_metrics,
                 status_provider=self.get_status,
             )
+        except asyncio.CancelledError:
+            await self.close()
+            raise
         except Exception:
+            logger.exception("初始化机器人运行时失败")
             await self.close()
             raise
 
@@ -91,7 +96,7 @@ class QQBot:
         self._initialized = True
         self._sync_runtime_counters()
         self._sync_status_cache()
-        logger.info("bot initialized")
+        logger.info("机器人运行时初始化完成")
 
     def _setup_handlers(self):
         """Register dispatcher handlers once."""
@@ -106,7 +111,7 @@ class QQBot:
             if not hasattr(event, "message_type"):
                 return
             msg_type = "private" if event.message_type == MessageType.PRIVATE.value else "group"
-            logger.info("received %s message: user=%s", msg_type, event.user_id)
+            logger.info("收到%s消息：用户=%s", "私聊" if msg_type == "private" else "群聊", event.user_id)
 
         @self.dispatcher.on_message
         async def handle_message(event: MessageEvent):
@@ -128,7 +133,7 @@ class QQBot:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.error("[message] background message task failed: %s", exc, exc_info=True)
+            logger.error("消息任务执行失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
 
@@ -150,7 +155,7 @@ class QQBot:
             plan = await self.message_handler.plan_message(event)
             planner_log_context = self._build_planner_log_context(plan)
             logger.info(
-                "[planner] action=%s source=%s batch_mode=%s batch_size=%s latest=%s merged=%s reason=%s user=%s group=%s",
+                "消息处理计划：action=%s，source=%s，batch_mode=%s，batch_size=%s，is_latest=%s，merged_into_latest=%s，reason=%s，user=%s，group=%s",
                 plan.action,
                 plan.source,
                 planner_log_context["batch_mode"],
@@ -178,11 +183,11 @@ class QQBot:
                 await self.message_handler.record_group_reply_sent(event, reply_result.text)
                 await self._send_emoji_follow_up_if_needed(event, reply_result, plan)
         except Exception as exc:
-            logger.error("[message] failed to handle message: %s", exc, exc_info=True)
+            logger.error("处理消息事件失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             if plan is not None and plan.should_reply:
-                await self._send_response(event, "处理消息时出错，请稍后再试。")
+                await self._send_response(event, "抱歉，这次处理消息时出了点问题。")
 
     async def _send_response(self, event: MessageEvent, message: str, plan: Any = None) -> bool:
         try:
@@ -213,14 +218,14 @@ class QQBot:
             self.runtime_metrics.inc_messages_replied(len(parts))
             self._sync_status_cache()
             logger.info(
-                "[reply_send] target=%s type=%s parts=%s",
+                "消息发送完成：target=%s，message_type=%s，parts=%s",
                 event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
                 event.message_type,
                 len(parts),
             )
             return True
         except Exception as exc:
-            logger.error("failed to send reply: %s", exc, exc_info=True)
+            logger.error("发送回复失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             return False
@@ -240,12 +245,12 @@ class QQBot:
             await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)])
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
             logger.info(
-                "[emoji_reply] sent follow-up emoji: group=%s emoji_id=%s",
+                "群聊表情跟进已发送：group=%s，emoji_id=%s",
                 event.group_id,
                 getattr(selection.emoji, "emoji_id", ""),
             )
         except Exception as exc:
-            logger.error("failed to send emoji follow-up: %s", exc, exc_info=True)
+            logger.error("发送表情跟进失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
 
@@ -255,7 +260,7 @@ class QQBot:
             "params": {"user_id": user_id, "message": message},
         }
         await self.connection.send(payload)
-        logger.debug("sent private reply: user=%s", user_id)
+        logger.debug("已发送私聊消息：user=%s", user_id)
 
     async def _send_private_segments(self, user_id: int, segments: List[MessageSegment]) -> None:
         payload = {
@@ -266,7 +271,7 @@ class QQBot:
             },
         }
         await self.connection.send(payload)
-        logger.debug("sent private segment reply: user=%s segments=%s", user_id, len(segments))
+        logger.debug("已发送私聊分段消息：user=%s，segments=%s", user_id, len(segments))
 
     async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None):
         if at_user:
@@ -281,7 +286,7 @@ class QQBot:
                 },
             }
             await self.connection.send(payload)
-            logger.debug("sent group reply with mention: group=%s at_user=%s", group_id, at_user)
+            logger.debug("已发送群聊@消息：group=%s，at_user=%s", group_id, at_user)
             return
 
         payload = {
@@ -289,7 +294,7 @@ class QQBot:
             "params": {"group_id": group_id, "message": message},
         }
         await self.connection.send(payload)
-        logger.debug("sent group reply: group=%s", group_id)
+        logger.debug("已发送群聊消息：group=%s", group_id)
 
     async def _send_group_segments(self, group_id: int, segments: List[MessageSegment]) -> None:
         payload = {
@@ -300,7 +305,7 @@ class QQBot:
             },
         }
         await self.connection.send(payload)
-        logger.debug("sent group segment reply: group=%s segments=%s", group_id, len(segments))
+        logger.debug("已发送群聊分段消息：group=%s，segments=%s", group_id, len(segments))
 
     def _private_quote_reply_enabled(self) -> bool:
         app_config = getattr(self.message_handler, "app_config", None)
@@ -311,7 +316,7 @@ class QQBot:
         try:
             await self.dispatcher.dispatch(data)
         except Exception as exc:
-            logger.error("dispatcher failed: %s", exc, exc_info=True)
+            logger.error("处理 WebSocket 消息失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error()
             self._sync_status_cache()
 
@@ -319,13 +324,13 @@ class QQBot:
         self.runtime_metrics.set_connected(True)
         self.runtime_metrics.set_ready(True)
         self._sync_status_cache()
-        logger.info("NapCat connected")
+        logger.info("NapCat 已连接")
 
     async def _on_disconnect(self):
         self.runtime_metrics.set_connected(False)
         self.runtime_metrics.set_ready(False)
         self._sync_status_cache()
-        logger.warning("NapCat disconnected")
+        logger.warning("NapCat 连接已断开")
 
     async def _run_webui_snapshot_heartbeat(self) -> None:
         while not self._shutdown_event.is_set():
@@ -337,7 +342,7 @@ class QQBot:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("webui snapshot heartbeat failed: %s", exc, exc_info=True)
+                logger.debug("WebUI 快照心跳异常：%s", exc, exc_info=True)
                 await asyncio.sleep(5)
 
     async def run(self):
@@ -347,14 +352,14 @@ class QQBot:
         if self._manage_signals:
             def signal_handler(signum, frame):
                 del frame
-                logger.info("received shutdown signal: %s", signum)
+                logger.info("收到系统信号：%s", signum)
                 self._shutdown_event.set()
 
             try:
                 signal.signal(signal.SIGINT, signal_handler)
                 signal.signal(signal.SIGTERM, signal_handler)
             except (AttributeError, ValueError):
-                pass
+                logger.debug("当前运行环境不支持注册系统信号处理器")
 
         self._running = True
         self._connection_task = asyncio.create_task(self.connection.run())
@@ -363,10 +368,10 @@ class QQBot:
         try:
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
-            logger.info("bot run task cancelled")
+            logger.info("机器人运行任务被取消")
         finally:
             await self.close()
-            logger.info("bot closed")
+            logger.info("机器人主循环已退出")
 
     async def close(self) -> None:
         if self._closed:

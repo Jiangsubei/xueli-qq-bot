@@ -1,204 +1,106 @@
-# QQ 机器人框架 - OpenAI 兼容版
+# QQ 机器人项目摘要
 
-## 项目概述
+## 当前项目定位
 
-一个完全通用的 **OpenAI 兼容 QQ 机器人框架**，支持连接任意遵循 OpenAI API 规范的服务，包括：
+这是一个基于 NapCat 和 OpenAI 兼容接口的 QQ 机器人项目，当前以仓库根目录的 `config.toml` 作为主配置入口。
 
-- **OpenAI** (官方 API)
-- **DeepSeek**
-- **OpenRouter**
-- **Azure OpenAI**
-- **本地 Ollama**
-- **其他自定义服务**
+项目当前支持：
 
-## 核心特性
+- 私聊与群聊回复
+- 群聊规划与复读触发
+- 图片理解
+- 长期记忆提取、检索与写入
+- 本地 WebUI 控制台
 
-### 1. 完全通用的 OpenAI 兼容架构
-- **统一配置**：只需修改 3 个核心参数即可切换任意服务
-- **标准接口**：完全遵循 OpenAI API 规范
-- **灵活扩展**：支持自定义请求参数、请求头、响应解析
+## 当前配置方式
 
-### 2. 模块化设计
-- `src/core/config.py` - 通用配置管理
-- `src/services/ai_client.py` - 通用 OpenAI 兼容客户端
-- `src/handlers/message_handler.py` - 消息处理逻辑
-- `src/core/bot.py` - 机器人主类
-- `src/core/connection.py` - WebSocket 连接管理
-- `src/core/dispatcher.py` - 事件分发
-- `src/memory/` - 记忆提取、检索与存储模块
+项目已经切换到 **`config.toml` 配置模式**。
 
-### 3. 完整功能支持
-- 私聊消息处理
-- 群聊 @ 消息处理
-- 多轮对话上下文
-- 频率限制保护
-- 长消息自动分割
-- 自动重连机制
-- 命令支持 (/reset, /help, /status)
+以下旧说明不再作为当前主流程依据：
 
-## 快速开始
+- `.env` 启动方式
+- `.env.example` 作为主配置入口
+- `OPENAI_API_BASE` / `OPENAI_API_KEY` / `OPENAI_MODEL` 作为唯一配置来源
 
-### 1. 安装依赖
+如果文档或旧脚本里仍提到 `.env`，请以 `config.toml` 和 `src/core/config.py` 的实际实现为准。
 
-```bash
-pip install -r requirements.txt
+## 当前关键配置块
+
+`config.toml` 主要包含这些配置区块：
+
+- `napcat`
+- `ai_service`
+- `vision_service`
+- `bot_behavior`
+- `assistant_profile`
+- `group_reply`
+- `group_reply_decision`
+- `personality`
+- `dialogue_style`
+- `behavior`
+- `memory_rerank`
+- `memory`
+
+其中：
+
+- `ai_service` 是主模型配置
+- `vision_service` 是图片理解模型配置
+- `group_reply_decision` 是群聊判断模型配置，未单独填写时会回退到 `ai_service`
+- `memory.extraction_*` 是记忆提取模型配置，未单独填写时会回退到 `ai_service`
+- `memory_rerank` 是记忆重排配置，未完整配置时视为未启用
+
+## 当前项目结构
+
+```text
+main.py                     启动入口
+config.toml                 主配置文件
+src/core/                   核心运行与配置装配
+src/handlers/               消息处理与回复流程
+src/services/               AI / Vision / Image 客户端
+src/emoji/                  表情包采集、分类、追发
+src/memory/                 记忆提取、检索、存储
+src/webui/                  本地 WebUI
+tests/                      自动化测试
 ```
 
-### 2. 配置环境
+## 当前运行主链路
 
-```bash
-cp .env.example .env
-```
+1. `main.py` 启动程序
+2. `src/core/config.py` 读取 `config.toml`
+3. `src/core/bootstrap.py` 组装各个运行组件
+4. `src/core/bot.py` 连接 NapCat 并处理消息
+5. `src/handlers/` 调用 AI、视觉、记忆与群聊规划逻辑
+6. `src/webui/` 提供运行状态控制台
 
-### 3. 修改 `.env` 文件
+## 当前重点模块
 
-```env
-# 只需修改这三项即可切换任意服务
+### 核心模块
+- `src/core/config.py`
+- `src/core/bootstrap.py`
+- `src/core/runtime_supervisor.py`
+- `src/core/bot.py`
 
-# 示例：DeepSeek
-OPENAI_API_BASE=https://api.deepseek.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-OPENAI_MODEL=deepseek-chat
-```
+### 消息与回复模块
+- `src/handlers/message_handler.py`
+- `src/handlers/reply_pipeline.py`
+- `src/handlers/group_reply_planner.py`
+- `src/handlers/group_plan_coordinator.py`
 
-### 4. 测试 API
+### 记忆模块
+- `src/memory/memory_manager.py`
+- `src/memory/extraction/memory_extractor.py`
+- `src/memory/internal/background_coordinator.py`
+- `src/memory/retrieval/two_stage_retriever.py`
 
-```bash
-python test_api.py
-```
+## 当前已确认的行为
 
-### 5. 启动机器人
+- `memory.extract_every_n_turns` 已接入实际提取链路
+- `memory.extraction_api_*` 为空时，会回退到 `ai_service`
+- `group_reply_decision` 未完整配置时，会回退到 `ai_service`
+- WebUI 启动失败不会阻塞机器人主流程
 
-```bash
-python main.py
-```
+## 当前建议关注点
 
-## 服务商配置示例
-
-### OpenAI
-```env
-OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
-OPENAI_MODEL=gpt-4o
-```
-
-### DeepSeek
-```env
-OPENAI_API_BASE=https://api.deepseek.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
-OPENAI_MODEL=deepseek-chat
-```
-
-### OpenRouter
-```env
-OPENAI_API_BASE=https://openrouter.ai/api/v1
-OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
-OPENAI_MODEL=stepfun/step-3.5-flash:free
-```
-
-### 本地 Ollama
-```env
-OPENAI_API_BASE=http://localhost:11434/v1
-OPENAI_API_KEY=not-needed
-OPENAI_MODEL=llama2
-```
-
-### Azure OpenAI
-```env
-OPENAI_API_BASE=https://your-resource.openai.azure.com/openai/deployments/your-deployment
-OPENAI_API_KEY=your-azure-api-key
-OPENAI_MODEL=gpt-35-turbo
-OPENAI_EXTRA_HEADERS={"api-version": "2023-05-15"}
-```
-
-## 高级配置
-
-### 自定义请求参数
-
-```env
-OPENAI_EXTRA_PARAMS={"temperature": 0.7, "max_tokens": 2000, "top_p": 0.9}
-```
-
-### 自定义请求头
-
-```env
-OPENAI_EXTRA_HEADERS={"X-Custom-Header": "value"}
-```
-
-### 自定义响应解析路径
-
-```env
-# 标准 OpenAI 格式（默认）
-OPENAI_RESPONSE_PATH=choices.0.message.content
-
-# 如果服务返回格式不同
-OPENAI_RESPONSE_PATH=output.choices.0.message.content
-```
-
-## 项目结构
-
-```
-.
-├── main.py                     # 入口文件
-├── src/
-│   ├── core/                  # 核心模块
-│   │   ├── bot.py             # 机器人主类
-│   │   ├── config.py          # 通用配置管理
-│   │   ├── connection.py      # WebSocket 连接管理
-│   │   ├── dispatcher.py      # 事件分发
-│   │   └── models.py          # 数据模型
-│   ├── handlers/
-│   │   └── message_handler.py # 消息处理器
-│   ├── services/
-│   │   ├── ai_client.py       # OpenAI 兼容客户端
-│   │   └── image_client.py    # 图片服务客户端
-│   └── memory/
-│       ├── extraction/        # 记忆提取
-│       ├── retrieval/         # 记忆检索
-│       ├── storage/           # 记忆存储
-│       └── memory_manager.py  # 记忆管理入口
-├── memories/                  # 本地运行期数据
-├── test_api.py                # API 测试工具
-├── test_ai.py                 # AI 对话测试
-├── test_memory.py             # 记忆模块测试
-├── .env.example               # 环境变量模板
-├── API_CONFIG_GUIDE.md        # API 配置指南
-├── PROJECT_SUMMARY.md         # 项目概述（本文档）
-├── requirements.txt           # 依赖列表
-├── start.bat                  # Windows 启动脚本
-├── start.sh                   # Linux/Mac 启动脚本
-└── .gitignore                 # Git 忽略文件
-```
-
-## 代码统计
-
-- **总代码行数**: ~2000+ 行
-- **核心模块**: `src/` 下按 core / handlers / services / memory 分层组织
-- **配置文件**: 3 个 (.env.example, .md 文档)
-- **测试工具**: 3 个 (`test_api.py`、`test_ai.py`、`test_memory.py`)
-
-## 技术栈
-
-- **Python 3.8+** - 主语言
-- **aiohttp** - 异步 HTTP 客户端
-- **websockets** - WebSocket 连接
-- **python-dotenv** - 环境变量管理
-
-## 许可证
-
-MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 支持
-
-如有问题，请查看：
-1. `API_CONFIG_GUIDE.md` - 详细配置指南
-2. `.env.example` - 配置模板和示例
-3. `test_api.py` - API 测试工具
-
----
-
-**让 AI 服务切换像修改配置文件一样简单！**
+- 文档统一以 `config.toml` 为准
+- 继续减少过宽的异常捕获
+- 为记忆提取、关闭 flush、群聊规划补更多回归测试

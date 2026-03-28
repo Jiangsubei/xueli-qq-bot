@@ -66,7 +66,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-WEBUI_CONFIG_PATH = REPO_ROOT / "config.json"
+WEBUI_CONFIG_PATH = REPO_ROOT / "config.toml"
 WEBUI_RUNTIME_SNAPSHOT_PATH = REPO_ROOT / "data" / "runtime" / "webui_snapshot.json"
 WEBUI_SNAPSHOT_TTL_SECONDS = 30
 WEBUI_AVATAR_ROOT = REPO_ROOT / "data" / "webui" / "avatar"

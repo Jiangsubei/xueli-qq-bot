@@ -501,6 +501,38 @@ input[type="range"]::-webkit-slider-runnable-track {
     display: none !important;
 }
 
+[data-advanced-page][data-advanced-visible="false"] [data-advanced-field] {
+    display: none !important;
+}
+
+.advanced-settings-block {
+    display: grid;
+    gap: 14px;
+    padding-top: 16px;
+    border-top: 1px dashed rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.2);
+}
+
+.advanced-settings-head {
+    display: grid;
+    gap: 4px;
+}
+
+.advanced-settings-head h4 {
+    font-size: 14px;
+    line-height: 1.2;
+}
+
+.advanced-settings-head p {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.config-editor-body {
+    display: grid;
+    gap: 12px;
+}
+
 .header-bar {
     justify-content: space-between;
     gap: 16px;
@@ -2260,12 +2292,27 @@ body::before {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-height: 24px;
     padding: 6px 10px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.7);
     color: var(--text-muted);
     font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+[data-theme="dark"] .memory-chip {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.memory-chip.is-kind {
+    background: rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.12);
+    border-color: rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.18);
+    color: var(--primary-color);
 }
 
 .memory-chip.is-shared {
@@ -3085,6 +3132,15 @@ body::before {
 }
 
 @media (max-width: 900px) {
+    .advanced-callout-card {
+        flex-direction: column;
+    }
+
+    .advanced-toggle-button {
+        width: 100%;
+        justify-content: center;
+    }
+
     .config-item-grid.three-up,
     .config-item-grid.four-up {
         grid-template-columns: 1fr;
@@ -3451,6 +3507,7 @@ body::before {
 .config-item-card .form-textarea,
 .config-item-card .strategy-trigger,
 .config-item-card .input-with-indicator,
+.config-item-card .config-editor-body,
 .config-item-card .editor-panel,
 .config-item-card .tag-input-row {
     width: 100%;
@@ -3483,6 +3540,17 @@ body::before {
     justify-content: flex-end;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.header-advanced-toggle {
+    min-width: 0;
+    padding-inline: 14px;
+    white-space: nowrap;
+}
+
+.header-advanced-toggle.is-active {
+    background: rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.14);
+    border-color: rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.24);
 }
 
 .status-pill-warning {

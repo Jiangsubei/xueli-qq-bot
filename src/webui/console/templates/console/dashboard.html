@@ -33,6 +33,10 @@
                 <span>&#x6709;&#x6539;&#x52A8;&#xFF0C;&#x8BB0;&#x5F97;&#x4FDD;&#x5B58;&#x5E76;&#x91CD;&#x542F;</span>
             </button>
             <button class="btn-outline btn-primary-fill header-save-button hidden" id="dirtySaveButton" type="button">&#x4FDD;&#x5B58;&#x8BBE;&#x7F6E;</button>
+            <button class="btn-outline header-advanced-toggle hidden" id="advancedToggleButton" type="button" aria-pressed="false">
+                <i class="fa-solid fa-sliders"></i>
+                <span id="advancedToggleLabel">&#x663E;&#x793A;&#x9AD8;&#x7EA7;&#x8BBE;&#x7F6E;</span>
+            </button>
             <div class="status-pill{% if runtime.online %} is-online{% else %} is-offline{% endif %}" data-runtime-online>
                 <span class="status-dot"></span>
                 <span data-runtime-key="online_label">{{ runtime.online_label }}</span>

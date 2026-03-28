@@ -27,3 +27,4 @@ pillow>=10.0.0
 
 # WebUI
 django>=5.2,<6
+tomlkit>=0.13.2

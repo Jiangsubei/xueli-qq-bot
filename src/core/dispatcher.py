@@ -104,6 +104,8 @@ class EventDispatcher:
                     await preprocessor(ctx)
                 else:
                     preprocessor(ctx)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(
                     "预处理器执行失败: 名称=%s, 错误=%s",
@@ -133,6 +135,8 @@ class EventDispatcher:
                     else:
                         result = handler(raw_data)
                 results.append(result)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(
                     "处理器执行失败: 类型=%s, 名称=%s, 错误=%s",
@@ -148,6 +152,8 @@ class EventDispatcher:
                     await postprocessor(ctx, results)
                 else:
                     postprocessor(ctx, results)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(
                     "后处理器执行失败: 名称=%s, 错误=%s",

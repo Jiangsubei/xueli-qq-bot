@@ -48,6 +48,8 @@ def dashboard_data(request):
 def restart_runtime(request):
     try:
         return JsonResponse(restart_backend_runtime())
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -66,6 +68,8 @@ def memory_items(request):
 def update_memory(request):
     try:
         return JsonResponse(update_memory_item(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -74,6 +78,8 @@ def update_memory(request):
 def delete_memory(request):
     try:
         return JsonResponse(delete_memory_item(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -82,6 +88,8 @@ def delete_memory(request):
 def save_network(request):
     try:
         return JsonResponse(save_network_settings(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -90,6 +98,8 @@ def save_network(request):
 def save_models(request):
     try:
         return JsonResponse(save_model_settings(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -98,6 +108,8 @@ def save_models(request):
 def save_assistant(request):
     try:
         return JsonResponse(save_assistant_settings(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -106,6 +118,8 @@ def save_assistant(request):
 def save_emoji(request):
     try:
         return JsonResponse(save_emoji_settings(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 
@@ -114,6 +128,8 @@ def save_emoji(request):
 def save_memory(request):
     try:
         return JsonResponse(save_memory_settings(_parse_json_body(request)))
+    except ValueError as exc:
+        return JsonResponse(handle_save_error(exc), status=400)
     except Exception as exc:
         return JsonResponse(handle_save_error(exc), status=400)
 

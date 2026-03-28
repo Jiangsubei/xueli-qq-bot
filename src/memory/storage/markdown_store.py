@@ -1,4 +1,4 @@
-"""
+﻿"""
 记忆存储层。
 
 使用 Markdown 持久化记忆，支持透明查看/编辑，以及普通记忆的衰减与归档。
@@ -11,11 +11,21 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiofiles
 
 logger = logging.getLogger(__name__)
+_ANCHOR_METADATA_KEYS = {
+    "source_session_id",
+    "source_dialogue_key",
+    "source_turn_start",
+    "source_turn_end",
+    "source_message_ids",
+    "source_message_type",
+    "source_group_id",
+    "group_id",
+}
 
 
 def _now_iso() -> str:
@@ -224,7 +234,7 @@ class MemoryItem:
                 metadata=metadata,
                 owner_user_id=parsed_meta.get("owner", ""),
             )
-        except Exception as e:
+        except (ValueError, TypeError, json.JSONDecodeError) as e:
             logger.warning("解析记忆失败: 内容=%s, 错误=%s", line[:80], e)
             return None
 
@@ -375,7 +385,95 @@ class MarkdownMemoryStore:
     def _prepare_new_metadata(self, metadata: Optional[Dict]) -> Dict:
         prepared = dict(metadata or {})
         prepared.setdefault("mention_count", 1)
+        observation = self._build_source_observation(prepared)
+        if observation is not None:
+            prepared["source_observations"] = [observation]
         return prepared
+
+    def _build_source_observation(self, metadata: Optional[Dict[str, Any]], *, recorded_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        prepared = dict(metadata or {})
+        session_id = str(prepared.get("source_session_id") or "").strip()
+        if not session_id:
+            return None
+        try:
+            turn_start = int(prepared.get("source_turn_start", 0) or 0)
+            turn_end = int(prepared.get("source_turn_end", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if turn_start <= 0 or turn_end <= 0 or turn_start > turn_end:
+            return None
+        message_ids = prepared.get("source_message_ids")
+        if isinstance(message_ids, list):
+            normalized_message_ids = [str(item) for item in message_ids if str(item)]
+        elif message_ids is None:
+            normalized_message_ids = []
+        else:
+            normalized_message_ids = [str(message_ids)]
+        return {
+            "session_id": session_id,
+            "dialogue_key": str(prepared.get("source_dialogue_key") or "").strip(),
+            "turn_start": turn_start,
+            "turn_end": turn_end,
+            "message_ids": normalized_message_ids,
+            "message_type": str(prepared.get("source_message_type") or "private").strip() or "private",
+            "group_id": str(prepared.get("source_group_id", prepared.get("group_id", "")) or "").strip(),
+            "owner_user_id": str(prepared.get("owner_user_id") or "").strip(),
+            "recorded_at": str(recorded_at or prepared.get("recorded_at") or _now_iso()),
+        }
+
+    def _normalize_source_observations(self, metadata: Dict[str, Any], *, now_iso: str) -> List[Dict[str, Any]]:
+        existing = metadata.get("source_observations")
+        normalized: List[Dict[str, Any]] = []
+        if isinstance(existing, list):
+            for item in existing:
+                if not isinstance(item, dict):
+                    continue
+                observation = self._normalize_observation_item(item, now_iso=now_iso)
+                if observation is not None and not self._observation_exists(normalized, observation):
+                    normalized.append(observation)
+        if normalized:
+            return normalized
+        observation = self._build_source_observation(metadata, recorded_at=now_iso)
+        return [observation] if observation is not None else []
+
+    def _normalize_observation_item(self, item: Dict[str, Any], *, now_iso: str) -> Optional[Dict[str, Any]]:
+        prepared = dict(item)
+        try:
+            turn_start = int(prepared.get("turn_start", 0) or 0)
+            turn_end = int(prepared.get("turn_end", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        session_id = str(prepared.get("session_id") or "").strip()
+        if not session_id or turn_start <= 0 or turn_end <= 0 or turn_start > turn_end:
+            return None
+        message_ids = prepared.get("message_ids")
+        if isinstance(message_ids, list):
+            normalized_message_ids = [str(value) for value in message_ids if str(value)]
+        else:
+            normalized_message_ids = []
+        return {
+            "session_id": session_id,
+            "dialogue_key": str(prepared.get("dialogue_key") or "").strip(),
+            "turn_start": turn_start,
+            "turn_end": turn_end,
+            "message_ids": normalized_message_ids,
+            "message_type": str(prepared.get("message_type") or "private").strip() or "private",
+            "group_id": str(prepared.get("group_id") or "").strip(),
+            "owner_user_id": str(prepared.get("owner_user_id") or "").strip(),
+            "recorded_at": str(prepared.get("recorded_at") or now_iso),
+        }
+
+    def _observation_identity(self, observation: Dict[str, Any]) -> tuple[str, int, int, tuple[str, ...]]:
+        return (
+            str(observation.get("session_id") or ""),
+            int(observation.get("turn_start", 0) or 0),
+            int(observation.get("turn_end", 0) or 0),
+            tuple(str(item) for item in observation.get("message_ids", []) if str(item)),
+        )
+
+    def _observation_exists(self, observations: List[Dict[str, Any]], candidate: Dict[str, Any]) -> bool:
+        candidate_key = self._observation_identity(candidate)
+        return any(self._observation_identity(item) == candidate_key for item in observations)
 
     def _reinforce_existing_memory(
         self,
@@ -387,6 +485,8 @@ class MarkdownMemoryStore:
         now_iso: str,
     ):
         incoming_metadata = dict(metadata or {})
+        existing_observations = self._normalize_source_observations(mem.metadata, now_iso=now_iso)
+        incoming_observation = self._build_source_observation(incoming_metadata, recorded_at=now_iso)
 
         if source and not mem.source:
             mem.source = source
@@ -396,7 +496,16 @@ class MarkdownMemoryStore:
         if len(incoming_content.strip()) > len(mem.content.strip()):
             mem.content = incoming_content.strip()
 
-        mem.metadata.update(incoming_metadata)
+        for key, value in incoming_metadata.items():
+            if key in _ANCHOR_METADATA_KEYS and mem.metadata.get(key) not in (None, "", [], {}):
+                continue
+            if key == "source_observations":
+                continue
+            mem.metadata[key] = value
+        if incoming_observation is not None and not self._observation_exists(existing_observations, incoming_observation):
+            existing_observations.append(incoming_observation)
+        if existing_observations:
+            mem.metadata["source_observations"] = existing_observations
         mem.updated_at = now_iso
 
         mention_count = int(mem.metadata.get("mention_count", 1)) + 1
@@ -422,7 +531,7 @@ class MarkdownMemoryStore:
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
-        except Exception as e:
+        except OSError as e:
             logger.error("读取记忆文件失败: %s, 错误=%s", file_path, e)
             return []
 
@@ -446,7 +555,7 @@ class MarkdownMemoryStore:
                 async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
                     await f.write("\n\n".join(blocks))
                 return True
-            except Exception as e:
+            except OSError as e:
                 logger.error("写入记忆文件失败: %s, 错误=%s", file_path, e)
                 return False
 
@@ -454,7 +563,7 @@ class MarkdownMemoryStore:
         if file_path.exists():
             try:
                 file_path.unlink()
-            except Exception as e:
+            except OSError as e:
                 logger.warning("删除空归档文件失败: %s, 错误=%s", file_path, e)
 
     async def _sync_archive_file(self, file_path: Path, archived: List[MemoryItem], label: str):
@@ -572,3 +681,6 @@ class MarkdownMemoryStore:
         memories = await self.get_all_memories(user_id) if user_id else await self.get_global_memories()
         keyword_lower = keyword.lower()
         return [mem for mem in memories if keyword_lower in mem.content.lower()]
+
+
+

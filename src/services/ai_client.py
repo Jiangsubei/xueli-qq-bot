@@ -70,7 +70,7 @@ class AIClient:
         self._semaphore = asyncio.Semaphore(5)
 
         logger.debug(
-            "[%s] AI client prepared: model=%s url=%s timeout=%s",
+            "[%s] AI 客户端已准备：模型=%s，地址=%s，超时=%s 秒",
             self.log_label,
             self.model,
             self.chat_completions_url,
@@ -182,7 +182,7 @@ class AIClient:
         async with self._semaphore:
             try:
                 logger.debug(
-                    "[%s] AI request: model=%s messages=%s stream=%s url=%s",
+                    "[%s] 发起 AI 请求：模型=%s，消息数=%s，流式=%s，地址=%s",
                     self.log_label,
                     body.get("model"),
                     len(messages),
@@ -196,7 +196,7 @@ class AIClient:
 
                 if status != 200:
                     logger.error(
-                        "[%s] AI request failed: HTTP %s %s",
+                        "[%s] AI 请求失败：HTTP %s，响应=%s",
                         self.log_label,
                         status,
                         response_text[:200],
@@ -207,7 +207,7 @@ class AIClient:
                     data = json.loads(response_text)
                 except json.JSONDecodeError as exc:
                     logger.error(
-                        "[%s] invalid AI JSON response: %s %s",
+                        "[%s] AI 响应 JSON 无效：%s，原文=%s",
                         self.log_label,
                         exc,
                         response_text[:200],
@@ -216,10 +216,10 @@ class AIClient:
 
                 return self._parse_response(data)
             except aiohttp.ClientError as exc:
-                logger.error("[%s] AI client error: %s", self.log_label, exc)
+                logger.error("[%s] AI 客户端异常：%s", self.log_label, exc)
                 raise map_client_error(exc)
             except asyncio.TimeoutError:
-                logger.error("[%s] AI request timeout: %s seconds", self.log_label, self.timeout)
+                logger.error("[%s] AI 请求超时：%s 秒", self.log_label, self.timeout)
                 raise map_timeout_error()
 
 

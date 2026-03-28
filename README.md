@@ -26,7 +26,7 @@
 
 ## 你该怎么用它
 
-当前项目主要使用仓库根目录下的 `config.json` 作为配置文件。仓库里如果还有旧的 `.env` 示例或旧脚本，请优先以 `config.json` 和这份 README 为准。
+当前项目主要使用仓库根目录下的 `config.toml` 作为配置文件。仓库里如果还有旧的 `.env` 示例或旧脚本，请优先以 `config.toml` 和这份 README 为准。
 
 ### 1. 先准备运行环境
 
@@ -62,7 +62,7 @@ source venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-### 3. 修改 `config.json`
+### 3. 修改 `config.toml`
 
 你至少需要确认下面这些配置是正确的：
 
@@ -74,30 +74,20 @@ python3 -m pip install -r requirements.txt
 
 一个最小可运行示例：
 
-```json
-{
-  "napcat": {
-    "ws_url": "ws://127.0.0.1:8095",
-    "http_url": "http://127.0.0.1:6700"
-  },
-  "ai_service": {
-    "api_base": "https://your-openai-compatible-endpoint/v1",
-    "api_key": "sk-xxxx",
-    "model": "your-model",
-    "extra_params": {},
-    "extra_headers": {},
-    "response_path": "choices.0.message.content"
-  },
-  "vision_service": {
-    "enabled": false,
-    "api_base": null,
-    "api_key": null,
-    "model": null,
-    "extra_params": null,
-    "extra_headers": null,
-    "response_path": "choices.0.message.content"
-  }
-}
+```toml
+[napcat]
+ws_url = "ws://127.0.0.1:8095"
+http_url = "http://127.0.0.1:6700"
+
+[ai_service]
+api_base = "https://your-openai-compatible-endpoint/v1"
+api_key = "sk-xxxx"
+model = "your-model"
+response_path = "choices.0.message.content"
+
+[ai_service.extra_params]
+
+[ai_service.extra_headers]
 ```
 
 常见 `api_base` 示例：
@@ -126,7 +116,7 @@ python main.py
 
 程序启动后会按这个顺序工作：
 
-1. 读取并校验 `config.json`
+1. 读取并校验 `config.toml`
 2. 初始化机器人运行组件
 3. 连接 NapCat
 4. 启动 WebUI
@@ -228,7 +218,7 @@ http://127.0.0.1:8000/
 
 ```text
 main.py                     启动入口
-config.json                 主配置文件
+config.toml                 主配置文件
 src/core/                   核心运行逻辑
 src/handlers/               消息处理逻辑
 src/services/               AI、视觉等服务封装
@@ -239,7 +229,7 @@ tests/                      测试
 
 如果你的目标只是把项目跑起来，重点看：
 
-- `config.json`
+- `config.toml`
 - `main.py`
 
 如果你的目标是继续开发，再去看 `src/` 下的各个模块。

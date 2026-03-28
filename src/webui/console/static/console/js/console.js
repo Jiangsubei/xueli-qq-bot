@@ -2,7 +2,8 @@ const STORAGE_KEYS = {
     theme: "console-theme",
     colors: "console-rgb",
     page: "console-page",
-    collapsed: "console-sidebar-collapsed"
+    collapsed: "console-sidebar-collapsed",
+    advancedPrefix: "console:advanced"
 };
 
 function readJsonScript(id, fallback = {}) {
@@ -42,6 +43,7 @@ const SECTION_PAGE_MAP = {
     emoji: "page-emoji",
     memory: "page-memory"
 };
+const ADVANCED_SECTION_KEYS = new Set(["model", "assistant", "emoji", "memory"]);
 const dirtyState = {
     baselines: {},
     dirtySections: new Set(),
@@ -143,6 +145,7 @@ function setActivePage(targetId, item) {
     if (targetId === "page-recall") loadRecall();
     if (targetId === "page-memory") loadMemoryItems();
     localStorage.setItem(STORAGE_KEYS.page, targetId);
+    syncAdvancedToggleButton();
     updateDirtyNotice();
 }
 
@@ -339,6 +342,77 @@ function restoreState() {
     }
 }
 
+function getAdvancedStorageKey(pageKey) {
+    return `${STORAGE_KEYS.advancedPrefix}:${pageKey}`;
+}
+
+function getAdvancedToggleButton() {
+    return document.getElementById("advancedToggleButton");
+}
+
+function syncAdvancedToggleButton() {
+    const button = getAdvancedToggleButton();
+    const label = document.getElementById("advancedToggleLabel");
+    if (!button || !label) return;
+    const activeSection = getActiveSection();
+    if (!activeSection || !ADVANCED_SECTION_KEYS.has(activeSection)) {
+        button.classList.add("hidden");
+        button.classList.remove("is-active");
+        button.setAttribute("aria-pressed", "false");
+        return;
+    }
+    const page = document.querySelector(`[data-advanced-page="${activeSection}"]`);
+    if (!page) {
+        button.classList.add("hidden");
+        button.classList.remove("is-active");
+        button.setAttribute("aria-pressed", "false");
+        return;
+    }
+    const visible = page.dataset.advancedVisible === "true";
+    button.classList.remove("hidden");
+    button.classList.toggle("is-active", visible);
+    button.setAttribute("aria-pressed", visible ? "true" : "false");
+    label.textContent = visible ? "隐藏高级设置" : "显示高级设置";
+}
+
+function setAdvancedMode(pageKey, visible) {
+    const page = document.querySelector(`[data-advanced-page="${pageKey}"]`);
+    if (!page) return;
+    page.dataset.advancedVisible = visible ? "true" : "false";
+    const button = page.querySelector("[data-advanced-toggle]");
+    if (button) {
+        button.textContent = visible ? "隐藏高级设置" : "显示高级设置";
+        button.setAttribute("aria-pressed", visible ? "true" : "false");
+    }
+    localStorage.setItem(getAdvancedStorageKey(pageKey), visible ? "1" : "0");
+    syncAdvancedToggleButton();
+}
+
+function initAdvancedSettings() {
+    document.querySelectorAll("[data-advanced-page]").forEach((page) => {
+        const pageKey = page.getAttribute("data-advanced-page");
+        if (!pageKey) return;
+        const visible = localStorage.getItem(getAdvancedStorageKey(pageKey)) === "1";
+        setAdvancedMode(pageKey, visible);
+        const button = page.querySelector("[data-advanced-toggle]");
+        if (!button) return;
+        button.addEventListener("click", () => {
+            setAdvancedMode(pageKey, page.dataset.advancedVisible !== "true");
+        });
+    });
+    const headerButton = getAdvancedToggleButton();
+    if (headerButton) {
+        headerButton.addEventListener("click", () => {
+            const activeSection = getActiveSection();
+            if (!activeSection || !ADVANCED_SECTION_KEYS.has(activeSection)) return;
+            const page = document.querySelector(`[data-advanced-page="${activeSection}"]`);
+            if (!page) return;
+            setAdvancedMode(activeSection, page.dataset.advancedVisible !== "true");
+        });
+    }
+    syncAdvancedToggleButton();
+}
+
 function updateRuntime(data) {
     const fields = data.fields || {};
     Object.entries(fields).forEach(([key, value]) => {
@@ -503,6 +577,9 @@ function collectSectionPayload(section) {
             plan_context_message_count: numberOrZero(formData.get("plan_context_message_count")),
             at_user_when_proactive_reply: checkboxValue(formData, "at_user_when_proactive_reply"),
             repeat_echo_enabled: checkboxValue(formData, "repeat_echo_enabled"),
+            repeat_echo_window_seconds: numberOrZero(formData.get("repeat_echo_window_seconds")),
+            repeat_echo_min_count: numberOrZero(formData.get("repeat_echo_min_count")),
+            repeat_echo_cooldown_seconds: numberOrZero(formData.get("repeat_echo_cooldown_seconds")),
             behavior: String(formData.get("behavior") || "")
         };
     }
@@ -528,11 +605,22 @@ function collectSectionPayload(section) {
             bm25_top_k: numberOrZero(formData.get("bm25_top_k")),
             rerank_top_k: numberOrZero(formData.get("rerank_top_k")),
             extract_every_n_turns: numberOrZero(formData.get("extract_every_n_turns")),
+            pre_rerank_top_k: numberOrZero(formData.get("pre_rerank_top_k")),
+            dynamic_memory_limit: numberOrZero(formData.get("dynamic_memory_limit")),
+            dynamic_dedup_enabled: checkboxValue(formData, "dynamic_dedup_enabled"),
+            dynamic_dedup_similarity_threshold: numberOrZero(formData.get("dynamic_dedup_similarity_threshold")),
+            rerank_candidate_max_chars: numberOrZero(formData.get("rerank_candidate_max_chars")),
+            rerank_total_prompt_budget: numberOrZero(formData.get("rerank_total_prompt_budget")),
             conversation_save_interval: numberOrZero(formData.get("conversation_save_interval")),
             ordinary_decay_enabled: checkboxValue(formData, "ordinary_decay_enabled"),
             ordinary_half_life_days: numberOrZero(formData.get("ordinary_half_life_days")),
             ordinary_forget_threshold: numberOrZero(formData.get("ordinary_forget_threshold")),
-            storage_path: String(formData.get("storage_path") || "").trim()
+            storage_path: String(formData.get("storage_path") || "").trim(),
+            local_bm25_weight: numberOrZero(formData.get("local_bm25_weight")),
+            local_importance_weight: numberOrZero(formData.get("local_importance_weight")),
+            local_mention_weight: numberOrZero(formData.get("local_mention_weight")),
+            local_recency_weight: numberOrZero(formData.get("local_recency_weight")),
+            local_scene_weight: numberOrZero(formData.get("local_scene_weight"))
         };
     }
     return {};
@@ -1150,6 +1238,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindAvatarCropInteractions();
     bindMemoryBoard();
     restoreState();
+    initAdvancedSettings();
     initDirtyState();
     updateRuntime(RUNTIME_DATA);
     pollRuntime();

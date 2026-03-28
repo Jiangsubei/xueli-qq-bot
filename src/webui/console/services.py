@@ -12,8 +12,16 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from django.conf import settings
 from django.urls import reverse
+from tomlkit import dumps
 
 from src.core.config import Config, ConfigValidationError, get_vision_service_status
+from src.core.toml_utils import (
+    dumps_toml_document,
+    parse_toml_document,
+    prune_none_values,
+    sync_toml_container,
+    toml_to_plain_data,
+)
 from src.core.webui_runtime_registry import get_runtime_state, run_coro_threadsafe
 from src.memory.internal.access_policy import MemoryAccessPolicy
 from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
@@ -118,12 +126,38 @@ FIELD_HELP = {
     },
 }
 
+FIELD_HELP["model"]["temperature"] = "常用采样温度，越高越发散，越低越稳定。"
+FIELD_HELP["assistant"].update(
+    {
+        "repeat_echo_window_seconds": "统计群里短时间重复内容时使用的时间窗口。",
+        "repeat_echo_min_count": "达到多少次重复后才会触发复读。",
+        "repeat_echo_cooldown_seconds": "两次群聊复读之间至少要间隔多久。",
+    }
+)
+FIELD_HELP["memory"].update(
+    {
+        "pre_rerank_top_k": "本地预排序后，最多送多少条候选给后续精排阶段。",
+        "dynamic_memory_limit": "最终提示词里最多保留多少条动态记忆。",
+        "dynamic_dedup_enabled": "是否对动态记忆做相似内容去重。",
+        "dynamic_dedup_similarity_threshold": "动态记忆去重阈值，越高越严格。",
+        "rerank_candidate_max_chars": "单条候选记忆进入重排提示词时允许的最大长度。",
+        "rerank_total_prompt_budget": "重排提示词允许占用的总字符预算。",
+        "local_bm25_weight": "本地排序里 BM25 分数的权重。",
+        "local_importance_weight": "本地排序里记忆重要度的权重。",
+        "local_mention_weight": "本地排序里提及次数的权重。",
+        "local_recency_weight": "本地排序里新近程度的权重。",
+        "local_scene_weight": "本地排序里场景匹配的权重。",
+    }
+)
+
 _CONFIG_CACHE_LOCK = Lock()
 _CONFIG_CACHE: Dict[str, Any] = {
     "path": None,
     "mtime_ns": None,
     "config": None,
 }
+
+_OPTIONAL_MODEL_SECTIONS = {"group_reply_decision", "vision_service", "memory_rerank"}
 
 
 def _repo_root() -> Path:
@@ -133,6 +167,34 @@ def _repo_root() -> Path:
 
 def _config_path() -> Path:
     return Path(settings.WEBUI_CONFIG_PATH)
+
+
+def _clear_config_cache() -> None:
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE["path"] = None
+        _CONFIG_CACHE["mtime_ns"] = None
+        _CONFIG_CACHE["config"] = None
+
+
+def _load_config_document() -> tuple[Any, Dict[str, Any]]:
+    doc = parse_toml_document(_config_path())
+    raw = toml_to_plain_data(doc)
+    return doc, raw if isinstance(raw, dict) else {}
+
+
+def _drop_empty_optional_model_sections(raw: Dict[str, Any]) -> None:
+    for section_name in _OPTIONAL_MODEL_SECTIONS:
+        section = raw.get(section_name)
+        if not isinstance(section, dict):
+            raw.pop(section_name, None)
+            continue
+        meaningful = {
+            key: value
+            for key, value in section.items()
+            if value not in (None, "", [], {}) and not (section_name == "vision_service" and key == "enabled" and value is False)
+        }
+        if not meaningful:
+            raw.pop(section_name, None)
 
 
 def _snapshot_path() -> Path:
@@ -509,6 +571,11 @@ def _serialize_memory_item(item: MemoryItem | ImportantMemoryItem, *, kind: str,
         "created_at": str(getattr(item, "created_at", "") or ""),
         "source": str(getattr(item, "source", "") or ""),
         "priority": _safe_int(getattr(item, "priority", 0), 0),
+        "bm25_score": getattr(item, "bm25_score", None),
+        "local_score": getattr(item, "local_score", None),
+        "rerank_score": getattr(item, "rerank_score", None),
+        "combined_score": getattr(item, "combined_score", None),
+        "ranking_stage": getattr(item, "ranking_stage", None),
     }
 
 
@@ -733,6 +800,10 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "api_base": app_config.ai_service.api_base,
                 "model": app_config.ai_service.model,
                 "api_key": _mask_secret(app_config.ai_service.api_key),
+                "temperature": _temperature_value(app_config.ai_service.extra_params),
+                "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(app_config.ai_service.extra_params)),
+                "header_rows": _mapping_to_editor_rows(app_config.ai_service.extra_headers),
+                "response_path": app_config.ai_service.response_path,
                 "status_label": _model_status(app_config.ai_service.api_base, app_config.ai_service.model, app_config.ai_service.api_key),
                 "secret_saved": bool(str(app_config.ai_service.api_key or "").strip()),
                 "secret_hint": "密钥已保存" if str(app_config.ai_service.api_key or "").strip() else "留空为不启用",
@@ -744,6 +815,10 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "api_base": group_client["api_base"],
                 "model": group_client["model"],
                 "api_key": _mask_secret(group_client["api_key"]),
+                "temperature": _temperature_value(group_client["extra_params"]),
+                "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(group_client["extra_params"])),
+                "header_rows": _mapping_to_editor_rows(group_client["extra_headers"]),
+                "response_path": group_client["response_path"] or "",
                 "status_label": _model_status(group_client["api_base"], group_client["model"], group_client["api_key"]),
                 "secret_saved": bool(str(group_client["api_key"] or "").strip()),
                 "secret_hint": "密钥已保存" if str(group_client["api_key"] or "").strip() else "留空为不启用",
@@ -755,6 +830,10 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "api_base": vision_client["api_base"],
                 "model": vision_client["model"],
                 "api_key": _mask_secret(vision_client["api_key"]),
+                "temperature": _temperature_value(vision_client["extra_params"]),
+                "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(vision_client["extra_params"])),
+                "header_rows": _mapping_to_editor_rows(vision_client["extra_headers"]),
+                "response_path": vision_client["response_path"] or "",
                 "status_label": _vision_status_label(vision_status),
                 "secret_saved": bool(str(vision_client["api_key"] or "").strip()),
                 "secret_hint": "密钥已保存" if str(vision_client["api_key"] or "").strip() else "留空为不启用",
@@ -766,6 +845,10 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "api_base": memory_rerank_client["api_base"],
                 "model": memory_rerank_client["model"],
                 "api_key": _mask_secret(memory_rerank_client["api_key"]),
+                "temperature": _temperature_value(memory_rerank_client["extra_params"]),
+                "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(memory_rerank_client["extra_params"])),
+                "header_rows": _mapping_to_editor_rows(memory_rerank_client["extra_headers"]),
+                "response_path": memory_rerank_client["response_path"] or "",
                 "status_label": _model_status(memory_rerank_client["api_base"], memory_rerank_client["model"], memory_rerank_client["api_key"]),
                 "secret_saved": bool(str(memory_rerank_client["api_key"] or "").strip()),
                 "secret_hint": "密钥已保存" if str(memory_rerank_client["api_key"] or "").strip() else "留空为不启用",
@@ -777,6 +860,10 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "api_base": memory_extraction_client["api_base"],
                 "model": memory_extraction_client["model"],
                 "api_key": _mask_secret(memory_extraction_client["api_key"]),
+                "temperature": _temperature_value(memory_extraction_client["extra_params"]),
+                "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(memory_extraction_client["extra_params"])),
+                "header_rows": _mapping_to_editor_rows(memory_extraction_client["extra_headers"]),
+                "response_path": memory_extraction_client["response_path"] or "",
                 "status_label": _model_status(memory_extraction_client["api_base"], memory_extraction_client["model"], memory_extraction_client["api_key"]),
                 "secret_saved": bool(str(memory_extraction_client["api_key"] or "").strip()),
                 "secret_hint": "密钥已保存" if str(memory_extraction_client["api_key"] or "").strip() else "留空为不启用",
@@ -839,6 +926,9 @@ def build_dashboard_context() -> Dict[str, Any]:
             "plan_context_message_count": app_config.group_reply.plan_context_message_count,
             "at_user_when_proactive_reply": bool(app_config.group_reply.at_user_when_proactive_reply),
             "repeat_echo_enabled": bool(app_config.group_reply.repeat_echo_enabled),
+            "repeat_echo_window_seconds": app_config.group_reply.repeat_echo_window_seconds,
+            "repeat_echo_min_count": app_config.group_reply.repeat_echo_min_count,
+            "repeat_echo_cooldown_seconds": app_config.group_reply.repeat_echo_cooldown_seconds,
             "behavior": app_config.behavior.content,
         },
         "emoji_form": {
@@ -859,17 +949,28 @@ def build_dashboard_context() -> Dict[str, Any]:
             "enabled": bool(app_config.memory.enabled),
             "read_scope": app_config.memory.read_scope,
             "auto_extract": bool(app_config.memory.auto_extract),
-            "bm25_top_k": app_config.memory.bm25_top_k,
+            "extract_every_n_turns": app_config.memory.extract_every_n_turns,
             "read_scope_options": MEMORY_SCOPE_OPTIONS,
         },
         "memory_advanced_form": {
+            "bm25_top_k": app_config.memory.bm25_top_k,
             "rerank_top_k": app_config.memory.rerank_top_k,
-            "extract_every_n_turns": app_config.memory.extract_every_n_turns,
+            "pre_rerank_top_k": app_config.memory.pre_rerank_top_k,
+            "dynamic_memory_limit": app_config.memory.dynamic_memory_limit,
+            "dynamic_dedup_enabled": bool(app_config.memory.dynamic_dedup_enabled),
+            "dynamic_dedup_similarity_threshold": app_config.memory.dynamic_dedup_similarity_threshold,
+            "rerank_candidate_max_chars": app_config.memory.rerank_candidate_max_chars,
+            "rerank_total_prompt_budget": app_config.memory.rerank_total_prompt_budget,
             "conversation_save_interval": app_config.memory.conversation_save_interval,
             "ordinary_decay_enabled": bool(app_config.memory.ordinary_decay_enabled),
             "ordinary_half_life_days": app_config.memory.ordinary_half_life_days,
             "ordinary_forget_threshold": app_config.memory.ordinary_forget_threshold,
             "storage_path": app_config.memory.storage_path,
+            "local_bm25_weight": app_config.memory.local_bm25_weight,
+            "local_importance_weight": app_config.memory.local_importance_weight,
+            "local_mention_weight": app_config.memory.local_mention_weight,
+            "local_recency_weight": app_config.memory.local_recency_weight,
+            "local_scene_weight": app_config.memory.local_scene_weight,
         },
         "emoji_stats": {
             "total": str(emoji_stats.get("emoji_total", 0)),
@@ -930,6 +1031,21 @@ def _mapping_to_editor_rows(mapping: Optional[Dict[str, Any]]) -> List[Dict[str,
     return [{"key": str(key), "value": _stringify_mapping_value(value)} for key, value in payload.items()]
 
 
+def _temperature_value(mapping: Optional[Dict[str, Any]]) -> str:
+    payload = dict(mapping or {})
+    if "temperature" not in payload:
+        return ""
+    return _stringify_mapping_value(payload.get("temperature"))
+
+
+def _mapping_without_temperature(mapping: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if mapping is None:
+        return None
+    payload = dict(mapping)
+    payload.pop("temperature", None)
+    return payload
+
+
 def _parse_editor_scalar(value: Any) -> Any:
     text = str(value or "").strip()
     if not text:
@@ -963,6 +1079,30 @@ def _rows_to_mapping(rows: Any, *, smart_values: bool, empty_as_none: bool = Fal
         raw_value = row.get("value")
         value = _parse_editor_scalar(raw_value) if smart_values else str(raw_value or "").strip()
         mapping[key] = value
+    if not mapping and empty_as_none:
+        return None
+    return mapping
+
+
+def _rows_with_temperature(
+    rows: Any,
+    temperature_value: Any,
+    *,
+    empty_as_none: bool,
+) -> Optional[Dict[str, Any]]:
+    mapping = _rows_to_mapping(rows, smart_values=True, empty_as_none=False) or {}
+    temperature_text = "" if temperature_value is None else str(temperature_value).strip()
+    if temperature_text:
+        mapping.update(
+            _rows_to_mapping(
+                [{"key": "temperature", "value": temperature_text}],
+                smart_values=True,
+                empty_as_none=False,
+            )
+            or {}
+        )
+    else:
+        mapping.pop("temperature", None)
     if not mapping and empty_as_none:
         return None
     return mapping
@@ -1010,24 +1150,27 @@ def _preserve_secret(current: Any, submitted: Any) -> Any:
 
 
 def _write_validated_config(raw_data: Dict[str, Any]) -> None:
+    normalized_raw = prune_none_values(dict(raw_data))
     config_path = _config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as temp_file:
-        json.dump(raw_data, temp_file, ensure_ascii=False, indent=2)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".toml") as temp_file:
+        temp_file.write(dumps_toml_document(normalized_raw))
         temp_path = Path(temp_file.name)
     try:
         Config(str(temp_path)).validate()
+        target_doc = parse_toml_document(config_path)
+        sync_toml_container(target_doc, normalized_raw)
         target_tmp = config_path.with_suffix(".tmp")
-        target_tmp.write_text(json.dumps(raw_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        target_tmp.write_text(dumps(target_doc), encoding="utf-8")
         target_tmp.replace(config_path)
+        _clear_config_cache()
     finally:
         if temp_path.exists():
             temp_path.unlink()
 
 
 def save_network_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
     napcat = dict(raw.get("napcat") or {})
     napcat["ws_url"] = str(payload.get("ws_url") or "").strip()
     napcat["http_url"] = str(payload.get("http_url") or "").strip()
@@ -1037,15 +1180,18 @@ def save_network_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
 
     ai_service = dict(raw.get("ai_service") or {})
     ai_payload = dict(payload.get("ai_service") or {})
     ai_service["api_base"] = str(ai_payload.get("api_base") or ai_service.get("api_base") or "").strip()
     ai_service["model"] = str(ai_payload.get("model") or ai_service.get("model") or "").strip()
     ai_service["api_key"] = _preserve_secret(ai_service.get("api_key", ""), ai_payload.get("api_key"))
-    ai_service["extra_params"] = _rows_to_mapping(ai_payload.get("extra_params_rows"), smart_values=True, empty_as_none=False) or {}
+    ai_service["extra_params"] = _rows_with_temperature(
+        ai_payload.get("extra_params_rows"),
+        ai_payload.get("temperature"),
+        empty_as_none=False,
+    ) or {}
     ai_service["extra_headers"] = _rows_to_mapping(ai_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=False) or {}
     ai_response_path = str(ai_payload.get("response_path") or "").strip()
     ai_service["response_path"] = ai_response_path or ai_service.get("response_path") or "choices.0.message.content"
@@ -1056,7 +1202,11 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     decision["api_base"] = _normalize_nullable_string(decision_payload.get("api_base") or decision.get("api_base"))
     decision["model"] = _normalize_nullable_string(decision_payload.get("model") or decision.get("model"))
     decision["api_key"] = _preserve_secret(decision.get("api_key", ""), decision_payload.get("api_key")) or None
-    decision["extra_params"] = _rows_to_mapping(decision_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
+    decision["extra_params"] = _rows_with_temperature(
+        decision_payload.get("extra_params_rows"),
+        decision_payload.get("temperature"),
+        empty_as_none=True,
+    )
     decision["extra_headers"] = _rows_to_mapping(decision_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
     decision["response_path"] = _normalize_nullable_string(decision_payload.get("response_path"))
     raw["group_reply_decision"] = decision
@@ -1069,7 +1219,11 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     vision["api_base"] = vision_api_base
     vision["model"] = vision_model
     vision["api_key"] = vision_api_key
-    vision["extra_params"] = _rows_to_mapping(vision_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
+    vision["extra_params"] = _rows_with_temperature(
+        vision_payload.get("extra_params_rows"),
+        vision_payload.get("temperature"),
+        empty_as_none=True,
+    )
     vision["extra_headers"] = _rows_to_mapping(vision_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
     vision["response_path"] = _normalize_nullable_string(vision_payload.get("response_path"))
     vision["enabled"] = bool(vision_api_base and vision_model and vision_api_key)
@@ -1080,7 +1234,11 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     memory_rerank["api_base"] = _normalize_nullable_string(rerank_payload.get("api_base") or memory_rerank.get("api_base"))
     memory_rerank["model"] = _normalize_nullable_string(rerank_payload.get("model") or memory_rerank.get("model"))
     memory_rerank["api_key"] = _preserve_secret(memory_rerank.get("api_key", ""), rerank_payload.get("api_key")) or None
-    memory_rerank["extra_params"] = _rows_to_mapping(rerank_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
+    memory_rerank["extra_params"] = _rows_with_temperature(
+        rerank_payload.get("extra_params_rows"),
+        rerank_payload.get("temperature"),
+        empty_as_none=True,
+    )
     memory_rerank["extra_headers"] = _rows_to_mapping(rerank_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
     memory_rerank["response_path"] = _normalize_nullable_string(rerank_payload.get("response_path"))
     raw["memory_rerank"] = memory_rerank
@@ -1090,18 +1248,23 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     memory["extraction_api_base"] = _normalize_nullable_string(extraction_payload.get("api_base") or memory.get("extraction_api_base"))
     memory["extraction_model"] = _normalize_nullable_string(extraction_payload.get("model") or memory.get("extraction_model"))
     memory["extraction_api_key"] = _preserve_secret(memory.get("extraction_api_key", ""), extraction_payload.get("api_key")) or None
-    memory["extraction_extra_params"] = _rows_to_mapping(extraction_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
+    memory["extraction_extra_params"] = _rows_with_temperature(
+        extraction_payload.get("extra_params_rows"),
+        extraction_payload.get("temperature"),
+        empty_as_none=True,
+    )
     memory["extraction_extra_headers"] = _rows_to_mapping(extraction_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
     memory["extraction_response_path"] = _normalize_nullable_string(extraction_payload.get("response_path"))
     raw["memory"] = memory
+
+    _drop_empty_optional_model_sections(raw)
 
     _write_validated_config(raw)
     return {"ok": True, "message": "已经记好了，重启助手后生效"}
 
 
 def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
 
     assistant_profile = dict(raw.get("assistant_profile") or {})
     assistant_profile["name"] = str(payload.get("name") or assistant_profile.get("name") or "").strip()
@@ -1128,6 +1291,9 @@ def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     group_reply.pop("burst_min_messages", None)
     group_reply.pop("burst_max_messages", None)
     group_reply["repeat_echo_enabled"] = _coerce_bool(payload.get("repeat_echo_enabled"), default=bool(group_reply.get("repeat_echo_enabled", False)))
+    group_reply["repeat_echo_window_seconds"] = _coerce_float(payload.get("repeat_echo_window_seconds"), default=float(group_reply.get("repeat_echo_window_seconds", 20.0) or 20.0))
+    group_reply["repeat_echo_min_count"] = _coerce_int(payload.get("repeat_echo_min_count"), default=_safe_int(group_reply.get("repeat_echo_min_count"), 2))
+    group_reply["repeat_echo_cooldown_seconds"] = _coerce_float(payload.get("repeat_echo_cooldown_seconds"), default=float(group_reply.get("repeat_echo_cooldown_seconds", 90.0) or 90.0))
     raw["group_reply"] = group_reply
 
     personality = dict(raw.get("personality") or {})
@@ -1147,8 +1313,7 @@ def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_emoji_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
     emoji = dict(raw.get("emoji") or {})
     emoji["enabled"] = _coerce_bool(payload.get("enabled"), default=bool(emoji.get("enabled", True)))
     emoji["capture_enabled"] = _coerce_bool(payload.get("capture_enabled"), default=bool(emoji.get("capture_enabled", True)))
@@ -1166,8 +1331,7 @@ def save_emoji_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_memory_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
     memory = dict(raw.get("memory") or {})
     memory["enabled"] = _coerce_bool(payload.get("enabled"), default=bool(memory.get("enabled", False)))
     memory["read_scope"] = str(payload.get("read_scope") or memory.get("read_scope") or "user").strip()
@@ -1175,11 +1339,22 @@ def save_memory_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     memory["bm25_top_k"] = _coerce_int(payload.get("bm25_top_k"), default=_safe_int(memory.get("bm25_top_k"), 100))
     memory["rerank_top_k"] = _coerce_int(payload.get("rerank_top_k"), default=_safe_int(memory.get("rerank_top_k"), 20))
     memory["extract_every_n_turns"] = _coerce_int(payload.get("extract_every_n_turns"), default=_safe_int(memory.get("extract_every_n_turns"), 3))
+    memory["pre_rerank_top_k"] = _coerce_int(payload.get("pre_rerank_top_k"), default=_safe_int(memory.get("pre_rerank_top_k"), 12))
+    memory["dynamic_memory_limit"] = _coerce_int(payload.get("dynamic_memory_limit"), default=_safe_int(memory.get("dynamic_memory_limit"), 8))
+    memory["dynamic_dedup_enabled"] = _coerce_bool(payload.get("dynamic_dedup_enabled"), default=bool(memory.get("dynamic_dedup_enabled", True)))
+    memory["dynamic_dedup_similarity_threshold"] = _coerce_float(payload.get("dynamic_dedup_similarity_threshold"), default=float(memory.get("dynamic_dedup_similarity_threshold", 0.72) or 0.72))
+    memory["rerank_candidate_max_chars"] = _coerce_int(payload.get("rerank_candidate_max_chars"), default=_safe_int(memory.get("rerank_candidate_max_chars"), 160))
+    memory["rerank_total_prompt_budget"] = _coerce_int(payload.get("rerank_total_prompt_budget"), default=_safe_int(memory.get("rerank_total_prompt_budget"), 2400))
     memory["conversation_save_interval"] = _coerce_int(payload.get("conversation_save_interval"), default=_safe_int(memory.get("conversation_save_interval"), 10))
     memory["ordinary_decay_enabled"] = _coerce_bool(payload.get("ordinary_decay_enabled"), default=bool(memory.get("ordinary_decay_enabled", True)))
     memory["ordinary_half_life_days"] = _coerce_float(payload.get("ordinary_half_life_days"), default=float(memory.get("ordinary_half_life_days", 30.0) or 30.0))
     memory["ordinary_forget_threshold"] = _coerce_float(payload.get("ordinary_forget_threshold"), default=float(memory.get("ordinary_forget_threshold", 0.5) or 0.5))
     memory["storage_path"] = str(payload.get("storage_path") or memory.get("storage_path") or "memories").strip()
+    memory["local_bm25_weight"] = _coerce_float(payload.get("local_bm25_weight"), default=float(memory.get("local_bm25_weight", 1.0) or 1.0))
+    memory["local_importance_weight"] = _coerce_float(payload.get("local_importance_weight"), default=float(memory.get("local_importance_weight", 0.35) or 0.35))
+    memory["local_mention_weight"] = _coerce_float(payload.get("local_mention_weight"), default=float(memory.get("local_mention_weight", 0.2) or 0.2))
+    memory["local_recency_weight"] = _coerce_float(payload.get("local_recency_weight"), default=float(memory.get("local_recency_weight", 0.15) or 0.15))
+    memory["local_scene_weight"] = _coerce_float(payload.get("local_scene_weight"), default=float(memory.get("local_scene_weight", 0.3) or 0.3))
     raw["memory"] = memory
     _write_validated_config(raw)
     return {"ok": True, "message": "已经记好了，重启助手后生效"}
@@ -1213,8 +1388,7 @@ def save_assistant_avatar(uploaded_file) -> Dict[str, Any]:
 
     relative_path = Path("data") / "webui" / "avatar" / file_path.name
 
-    config_obj = load_config()
-    raw = dict(config_obj.raw_data)
+    _, raw = _load_config_document()
     assistant_profile = dict(raw.get("assistant_profile") or {})
     assistant_profile["avatar_path"] = relative_path.as_posix()
     raw["assistant_profile"] = assistant_profile

@@ -393,7 +393,7 @@ class ConversationStore:
                 return ConversationRecord.from_dict(json.loads(await handle.read()))
         except Exception as exc:
             logger.warning(
-                "failed to load conversation session: user=%s session=%s error=%s",
+                "加载对话会话失败：用户=%s，会话=%s，错误=%s",
                 user_id,
                 session_id,
                 exc,
@@ -412,7 +412,7 @@ class ConversationStore:
                 async with aiofiles.open(file_path, "r", encoding="utf-8") as handle:
                     records.append(ConversationRecord.from_dict(json.loads(await handle.read())))
             except Exception as exc:
-                logger.warning("failed to read conversation file=%s error=%s", file_path.name, exc)
+                logger.warning("读取对话文件失败：文件=%s，错误=%s", file_path.name, exc)
         return records
 
     def active_session_ids(self) -> List[str]:

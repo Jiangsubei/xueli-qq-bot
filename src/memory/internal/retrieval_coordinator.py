@@ -4,8 +4,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.memory.retrieval.bm25_index import SearchResult
-from src.memory.retrieval.two_stage_retriever import TwoStageRetriever
+from src.memory.retrieval.bm25_index import ChineseTokenizer, SearchResult
+from src.memory.retrieval.two_stage_retriever import RetrievalContext, TwoStageRetriever
 from src.memory.storage.conversation_store import ConversationStore
 from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
 from src.memory.storage.markdown_store import MemoryItem, MarkdownMemoryStore
@@ -65,6 +65,8 @@ class MemoryRetrievalCoordinator:
     def get_search_result_score(self, result: SearchResult) -> float:
         if result.combined_score is not None:
             return float(result.combined_score)
+        if result.local_score is not None:
+            return float(result.local_score)
         if result.rerank_score is not None:
             return float(result.rerank_score)
         return float(result.bm25_score or 0.0)
@@ -95,6 +97,7 @@ class MemoryRetrievalCoordinator:
                     query=query,
                     top_k=per_user_top_k,
                     use_rerank=use_rerank,
+                    access_context=context,
                 )
             )
 
@@ -208,11 +211,14 @@ class MemoryRetrievalCoordinator:
             )
             == "shared"
         ]
-        dynamic_memories = self._build_dynamic_memory_entries(
-            query=query,
-            user_id=str(user_id),
-            important_memories=important_memories,
-            ordinary_memories=ordinary_memories,
+        dynamic_memories = (
+            await self._build_dynamic_memory_entries(
+                query=query,
+                user_id=str(user_id),
+                context=context,
+                important_memories=important_memories,
+                ordinary_memories=ordinary_memories,
+            )
         )[: max(1, int(self.prompt_budgets["dynamic"] / 80))]
 
         user_important = self.access_policy.dedupe_entries(user_important)
@@ -367,18 +373,39 @@ class MemoryRetrievalCoordinator:
         query: str,
         top_k: int = 5,
         use_rerank: Optional[bool] = None,
+        access_context: Optional[MemoryAccessContext] = None,
     ) -> List[SearchResult]:
+        del use_rerank
         await self.index_coordinator.ensure_fresh(owner_user_id)
 
         results = await self.retriever.retrieve(
             user_id=owner_user_id,
             query=query,
             top_k=top_k,
+            retrieval_context=self._build_retrieval_context(owner_user_id=owner_user_id, access_context=access_context),
         )
         for result in results:
             if result.memory:
                 result.memory.owner_user_id = owner_user_id
         return results
+
+    def _build_retrieval_context(
+        self,
+        *,
+        owner_user_id: str,
+        access_context: Optional[MemoryAccessContext],
+    ) -> RetrievalContext:
+        context = self._resolve_access_context(
+            user_id=owner_user_id,
+            read_scope=access_context.read_scope if access_context else self.memory_read_scope,
+            access_context=access_context,
+        )
+        return RetrievalContext(
+            requester_user_id=context.requester_user_id,
+            message_type=context.message_type,
+            group_id=context.group_id,
+            read_scope=context.read_scope,
+        )
 
     def _resolve_access_context(
         self,
@@ -432,37 +459,193 @@ class MemoryRetrievalCoordinator:
             self._inc_memory_access_denied(denied)
         return accessible
 
-    def _build_dynamic_memory_entries(
+    async def _build_dynamic_memory_entries(
         self,
         *,
         query: str,
         user_id: str,
+        context: MemoryAccessContext,
         important_memories: List[ImportantMemoryItem],
         ordinary_memories: List[MemoryItem],
     ) -> List[Dict[str, Any]]:
         scored: List[Tuple[float, Dict[str, Any]]] = []
-        for memory in ordinary_memories:
-            score = self._score_text(query, memory.content)
-            if score <= 0:
+        seen_ids: set[str] = set()
+        dynamic_limit = max(1, int(getattr(self.retriever.config, "dynamic_memory_limit", 8) or 8))
+
+        retrieved = await self.search_memories(
+            user_id=user_id,
+            query=query,
+            top_k=max(dynamic_limit * 2, 5),
+            read_scope=context.read_scope,
+            access_context=context,
+        )
+        for result in retrieved:
+            memory = getattr(result, "memory", None)
+            if memory is None:
                 continue
-            if self.access_policy.is_addressing(memory.metadata):
+            memory_id = str(getattr(memory, "id", "") or "")
+            if memory_id and memory_id in seen_ids:
+                continue
+            if self._should_skip_dynamic_memory(memory, query=query):
+                continue
+            if self.access_policy.is_addressing(getattr(memory, "metadata", {})):
                 continue
             entry = self._memory_to_prompt_entry(memory, section="dynamic", requester_user_id=user_id)
+            score = self.get_search_result_score(result)
             entry["score"] = score
+            entry["bm25_score"] = result.bm25_score
+            entry["local_score"] = result.local_score
+            entry["rerank_score"] = result.rerank_score
+            entry["combined_score"] = result.combined_score
+            entry["ranking_stage"] = result.ranking_stage
             scored.append((score, entry))
+            if memory_id:
+                seen_ids.add(memory_id)
+            if len(scored) >= dynamic_limit:
+                break
 
-        for memory in important_memories:
-            score = self._score_text(query, memory.content)
-            if score <= 0.45:
-                continue
-            if self.access_policy.is_addressing(memory.metadata):
-                continue
-            entry = self._memory_to_prompt_entry(memory, section="dynamic", requester_user_id=user_id)
-            entry["score"] = max(score, 0.8)
-            scored.append((entry["score"], entry))
+        if not scored:
+            for memory in ordinary_memories:
+                score = self._score_text(query, memory.content)
+                if score <= 0:
+                    continue
+                if self._should_skip_dynamic_memory(memory, query=query):
+                    continue
+                if self.access_policy.is_addressing(memory.metadata):
+                    continue
+                entry = self._memory_to_prompt_entry(memory, section="dynamic", requester_user_id=user_id)
+                entry["score"] = score
+                scored.append((score, entry))
+                if len(scored) >= dynamic_limit:
+                    break
 
-        scored.sort(key=lambda item: (item[0], item[1].get("content", "")), reverse=True)
-        return [entry for _, entry in scored]
+        scored.sort(
+            key=lambda item: (
+                self._dynamic_scene_bucket(item[1], context=context),
+                item[0],
+                item[1].get("content", ""),
+            ),
+            reverse=True,
+        )
+        return self._dedupe_dynamic_entries(scored, context=context, limit=dynamic_limit)
+
+    def _should_skip_dynamic_memory(self, memory: Any, *, query: str) -> bool:
+        metadata = dict(getattr(memory, "metadata", {}) or {})
+        if str(metadata.get("memory_type", "") or "").strip().lower() == "important":
+            return True
+        content = str(getattr(memory, "content", "") or "").strip()
+        if len(content) < 3:
+            return True
+        if self._score_text(query, content) < 0.12:
+            return True
+        return False
+
+    def _dedupe_dynamic_entries(
+        self,
+        scored_entries: List[Tuple[float, Dict[str, Any]]],
+        *,
+        context: MemoryAccessContext,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        if not getattr(self.retriever.config, "dynamic_dedup_enabled", True):
+            return [entry for _, entry in scored_entries[:limit]]
+
+        accepted: List[Dict[str, Any]] = []
+        for _, entry in scored_entries:
+            if self._is_duplicate_dynamic_entry(entry, accepted):
+                continue
+            accepted.append(entry)
+            if len(accepted) >= limit:
+                break
+        accepted.sort(
+            key=lambda entry: (
+                self._dynamic_scene_bucket(entry, context=context),
+                float(entry.get("score", 0.0) or 0.0),
+                entry.get("content", ""),
+            ),
+            reverse=True,
+        )
+        return accepted
+
+    def _dynamic_scene_bucket(self, entry: Dict[str, Any], *, context: MemoryAccessContext) -> int:
+        metadata = dict(entry.get("metadata") or {})
+        source_message_type = str(metadata.get("source_message_type", "") or "").strip().lower()
+        source_group_id = str(metadata.get("source_group_id", metadata.get("group_id", "")) or "").strip()
+        owner_user_id = str(entry.get("owner_user_id") or entry.get("memory_owner") or metadata.get("owner_user_id") or "").strip()
+
+        same_group = context.message_type == "group" and bool(context.group_id) and source_group_id == context.group_id
+        same_message_type = bool(source_message_type) and source_message_type == context.message_type
+        same_owner = bool(context.requester_user_id) and owner_user_id == context.requester_user_id
+
+        if same_group and same_owner:
+            return 4
+        if same_group:
+            return 3
+        if same_message_type and same_owner:
+            return 2
+        if same_message_type:
+            return 1
+        return 0
+
+    def _is_duplicate_dynamic_entry(
+        self,
+        entry: Dict[str, Any],
+        accepted_entries: List[Dict[str, Any]],
+    ) -> bool:
+        threshold = float(getattr(self.retriever.config, "dynamic_dedup_similarity_threshold", 0.72) or 0.72)
+        content = self._normalize_dynamic_memory_text(entry.get("content", ""))
+        if not content:
+            return False
+        for accepted in accepted_entries:
+            accepted_content = self._normalize_dynamic_memory_text(accepted.get("content", ""))
+            if not accepted_content:
+                continue
+            if content == accepted_content:
+                return True
+            if content in accepted_content or accepted_content in content:
+                return True
+            if self._dynamic_text_similarity(content, accepted_content) >= threshold:
+                return True
+        return False
+
+    def _normalize_dynamic_memory_text(self, text: Any) -> str:
+        raw_text = str(text or "").lower()
+        compact_raw = re.sub(r"\s+", " ", raw_text).strip()
+        normalized = re.sub(r"\s+", "", raw_text)
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]", "", normalized)
+        return normalized or compact_raw
+
+    def _dynamic_text_similarity(self, left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        left_tokens = set(ChineseTokenizer.tokenize(left))
+        right_tokens = set(ChineseTokenizer.tokenize(right))
+        token_score = self._overlap_coefficient(left_tokens, right_tokens)
+        if token_score > 0:
+            return token_score
+
+        left_bigrams = self._to_character_bigrams(left)
+        right_bigrams = self._to_character_bigrams(right)
+        bigram_score = self._overlap_coefficient(left_bigrams, right_bigrams)
+        if bigram_score > 0:
+            return bigram_score
+
+        if left == right:
+            return 1.0
+        if left in right or right in left:
+            return min(len(left), len(right)) / max(len(left), len(right))
+        return 0.0
+
+    def _to_character_bigrams(self, text: str) -> set[str]:
+        compact = re.sub(r"\s+", "", str(text or ""))
+        if len(compact) < 2:
+            return set()
+        return {compact[index : index + 2] for index in range(len(compact) - 1)}
+
+    def _overlap_coefficient(self, left: set[str], right: set[str]) -> float:
+        if not left or not right:
+            return 0.0
+        return len(left & right) / min(len(left), len(right))
 
     def _memory_to_prompt_entry(
         self,
@@ -483,6 +666,11 @@ class MemoryRetrievalCoordinator:
             "memory_owner": owner_user_id,
             "owner_user_id": owner_user_id,
             "source": source,
+            "bm25_score": getattr(memory, "bm25_score", None),
+            "local_score": getattr(memory, "local_score", None),
+            "rerank_score": getattr(memory, "rerank_score", None),
+            "combined_score": getattr(memory, "combined_score", None),
+            "ranking_stage": getattr(memory, "ranking_stage", "storage"),
             "metadata": metadata,
         }
 
@@ -544,7 +732,7 @@ class MemoryRetrievalCoordinator:
         try:
             record = await self.conversation_store.load_session(owner_user_id, anchor["session_id"])
         except Exception as exc:
-            logger.warning("Failed to load anchored session context: %s", exc)
+            logger.warning("加载锚点会话上下文失败：%s", exc)
             return []
         if record is None:
             return []
@@ -567,21 +755,33 @@ class MemoryRetrievalCoordinator:
 
     def _extract_memory_anchor(self, metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         prepared = dict(metadata or {})
-        session_id = str(prepared.get("source_session_id") or "").strip()
+        observations = prepared.get("source_observations")
+        if isinstance(observations, list):
+            for item in reversed(observations):
+                anchor = self._normalize_memory_anchor(item)
+                if anchor is not None:
+                    return anchor
+        return self._normalize_memory_anchor(
+            {
+                "session_id": prepared.get("source_session_id"),
+                "turn_start": prepared.get("source_turn_start"),
+                "turn_end": prepared.get("source_turn_end"),
+            }
+        )
+
+    def _normalize_memory_anchor(self, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        prepared = dict(payload or {})
+        session_id = str(prepared.get("session_id") or "").strip()
         if not session_id:
             return None
         try:
-            turn_start = int(prepared.get("source_turn_start", 0) or 0)
-            turn_end = int(prepared.get("source_turn_end", 0) or 0)
+            turn_start = int(prepared.get("turn_start", 0) or 0)
+            turn_end = int(prepared.get("turn_end", 0) or 0)
         except (TypeError, ValueError):
             return None
         if turn_start <= 0 or turn_end <= 0 or turn_start > turn_end:
             return None
-        return {
-            "session_id": session_id,
-            "turn_start": turn_start,
-            "turn_end": turn_end,
-        }
+        return {"session_id": session_id, "turn_start": turn_start, "turn_end": turn_end}
 
     def _score_text(self, query: str, content: str) -> float:
         normalized_query = re.sub(r"\s+", "", str(query or "").lower())

@@ -14,6 +14,12 @@ from src.webui.runtime_server import create_webui_runtime_server_from_env
 logger = logging.getLogger(__name__)
 
 
+def _log_webui_entry(address: str) -> None:
+    logger.info("---------------------------------")
+    logger.info("管理页面地址：%s", address)
+    logger.info("---------------------------------")
+
+
 async def main():
     supervisor = BotRuntimeSupervisor()
     loop = asyncio.get_running_loop()
@@ -21,7 +27,7 @@ async def main():
 
     def handle_shutdown(signum, frame):
         del frame
-        logger.info('main received shutdown signal: %s', signum)
+        logger.info("主程序收到退出信号：%s", signum)
         shutdown_event.set()
 
     try:
@@ -34,16 +40,15 @@ async def main():
     webui_server = create_webui_runtime_server_from_env()
     webui_started = webui_server.start()
 
-    if webui_started:
-        logger.info('WebUI URL: %s', webui_server.display_url)
-
     try:
         await supervisor.start_bot()
+        if webui_started:
+            _log_webui_entry(webui_server.display_address)
         await shutdown_event.wait()
     except KeyboardInterrupt:
-        logger.info('keyboard interrupt received in main')
+        logger.info("主程序收到键盘中断，准备退出")
     except Exception as exc:
-        print(f'Runtime error: {exc}')
+        print(f"Runtime error: {exc}")
         raise
     finally:
         await supervisor.shutdown()
@@ -51,8 +56,8 @@ async def main():
         webui_server.stop()
 
 
-if __name__ == '__main__':
-    if sys.platform == 'win32' and sys.version_info < (3, 16):
+if __name__ == "__main__":
+    if sys.platform == "win32" and sys.version_info < (3, 16):
         try:
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         except AttributeError:

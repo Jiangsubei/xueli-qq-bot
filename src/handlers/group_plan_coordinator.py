@@ -287,7 +287,7 @@ class GroupPlanCoordinator:
             return await self.image_analyzer(event, user_message)
         except Exception as exc:
             logger.warning(
-                "[planner] image analysis failed before planning: message_id=%s error=%s",
+                "规划前图片分析失败：消息ID=%s，错误=%s",
                 event.message_id,
                 exc,
                 exc_info=True,

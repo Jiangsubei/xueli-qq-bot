@@ -27,7 +27,7 @@ class GroupReplyPlanner:
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
-            logger.info("[planner] group reply decision model is not configured; planner disabled")
+            logger.info("未配置群聊判断模型，群聊规划器已禁用")
             return None
 
         decision = self.app_config.group_reply_decision
@@ -39,7 +39,7 @@ class GroupReplyPlanner:
             "extra_headers": dict(decision.extra_headers or {}),
             "response_path": decision.response_path or "choices.0.message.content",
         }
-        logger.info("[planner] initialize planner model: model=%s", client_config.get("model"))
+        logger.info("初始化群聊规划模型：模型=%s", client_config.get("model"))
         return AIClient(log_label="planner", app_config=self.app_config, **client_config)
 
     def _assistant_name(self) -> str:
@@ -317,7 +317,7 @@ class GroupReplyPlanner:
             response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
             return self._parse_plan(response.content)
         except (AIAPIError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("[planner] planner failed, using fallback: %s", exc)
+            logger.warning("群聊规划失败，改用回退策略：%s", exc)
             return self._build_fallback_plan(event, str(exc))
 
     async def close(self) -> None:

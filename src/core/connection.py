@@ -72,8 +72,10 @@ class NapCatConnection:
             logger.warning("检测到旧连接，准备断开")
             try:
                 await self.websocket.close()
-            except:
-                pass
+            except ConnectionClosed:
+                logger.debug("旧连接关闭时已断开")
+            except Exception as e:
+                logger.debug(f"关闭旧连接时出错: {e}")
 
         self.websocket = websocket
         self._connected = True

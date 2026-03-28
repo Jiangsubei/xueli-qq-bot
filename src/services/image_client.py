@@ -5,6 +5,7 @@
 """
 import aiohttp
 import base64
+import binascii
 import logging
 from typing import Optional, Dict, Any
 
@@ -87,6 +88,9 @@ class ImageClient:
         except aiohttp.ClientError as e:
             logger.error(f"图片下载请求失败: {e}")
             return None
+        except asyncio.TimeoutError:
+            logger.error("图片下载超时")
+            return None
         except Exception as e:
             logger.error(f"图片下载失败: {e}", exc_info=True)
             return None
@@ -110,7 +114,7 @@ class ImageClient:
             logger.debug(f"Base64 解码完成: {len(image_bytes)} 字节")
             return image_bytes
 
-        except Exception as e:
+        except (binascii.Error, ValueError) as e:
             logger.error(f"Base64 解码失败: {e}")
             return None
 
@@ -154,13 +158,16 @@ class ImageClient:
                         with open(file_field, 'rb') as f:
                             image_bytes = f.read()
                         return base64.b64encode(image_bytes).decode('utf-8')
-                    except Exception as e:
+                    except OSError as e:
                         logger.error(f"读取本地图片失败: {e}")
                 return None
 
             logger.warning("图片消息缺少 url 或 file 字段")
             return None
 
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError, binascii.Error) as e:
+            logger.error(f"处理图片消息失败: {e}", exc_info=True)
+            return None
         except Exception as e:
             logger.error(f"处理图片消息失败: {e}", exc_info=True)
             return None

@@ -92,7 +92,7 @@ class VisionClient:
             "extra_headers": dict(self.app_config.vision_service.extra_headers or {}),
             "response_path": self.app_config.vision_service.response_path or "choices.0.message.content",
         }
-        logger.info("[vision] initialize vision model: model=%s", client_config.get("model"))
+        logger.info("初始化视觉模型：模型=%s", client_config.get("model"))
         return AIClient(
             api_base=client_config["api_base"],
             api_key=client_config["api_key"],
@@ -243,7 +243,7 @@ class VisionClient:
                 success_count=0,
                 failure_count=len(base64_images),
                 source=self.status(),
-                error="vision service unavailable",
+                error="视觉服务不可用",
             )
 
         messages = [
@@ -260,7 +260,7 @@ class VisionClient:
             result.source = "vision"
             return result
         except AIAPIError as exc:
-            logger.warning("[vision] image analysis failed: %s", exc)
+            logger.warning("图片分析失败：%s", exc)
             return ImageAnalysisResult(
                 success_count=0,
                 failure_count=len(base64_images),
@@ -268,7 +268,7 @@ class VisionClient:
                 error=str(exc),
             )
         except Exception as exc:
-            logger.warning("[vision] unexpected image analysis failure: %s", exc, exc_info=True)
+            logger.warning("图片分析出现异常：%s", exc, exc_info=True)
             return ImageAnalysisResult(
                 success_count=0,
                 failure_count=len(base64_images),
@@ -286,7 +286,7 @@ class VisionClient:
         if not labels:
             labels = ["开心", "无语", "生气", "伤心"]
         if not self.is_available() or self.ai_client is None:
-            raise RuntimeError("vision service unavailable")
+            raise RuntimeError("视觉服务不可用")
 
         messages = [
             self.ai_client.build_text_message("system", self._build_emotion_system_prompt(labels)),

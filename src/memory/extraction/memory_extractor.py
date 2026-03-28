@@ -63,6 +63,7 @@ class MemoryExtractor:
         self._session_turns: Dict[str, List[Dict[str, Any]]] = {}
         self._session_owner: Dict[str, str] = {}
         self._session_dialogue_key: Dict[str, str] = {}
+        self._session_extracted_upto: Dict[str, int] = {}
 
     def add_dialogue_turn(
         self,
@@ -100,30 +101,38 @@ class MemoryExtractor:
         )
 
     def should_extract(self, session_id: str) -> bool:
-        turns = self._session_turns.get(str(session_id or "").strip(), [])
-        turn_count = len(turns)
-        return turn_count > 0 and turn_count % self.config.extract_every_n_turns == 0
+        interval = max(1, int(self.config.extract_every_n_turns))
+        return self.get_pending_turn_count(session_id) >= interval
 
-    async def extract_memories(self, user_id: str, *, session_id: str) -> List[MemoryItem]:
+    def get_turn_count(self, session_id: str) -> int:
+        return len(self._session_turns.get(str(session_id or "").strip(), []))
+
+    def get_pending_turn_count(self, session_id: str) -> int:
+        return len(self._get_pending_turns(session_id))
+
+    async def extract_memories(self, user_id: str, *, session_id: str, force: bool = False) -> List[MemoryItem]:
         session_key = str(session_id or "").strip()
-        turns = list(self._session_turns.get(session_key, []))
-        if not turns:
+        pending_turns = self._get_pending_turns(session_key)
+        if not pending_turns:
             return []
 
-        visible_turns = turns[-self.config.max_dialogue_length :]
+        visible_turns = pending_turns[-self.config.max_dialogue_length :]
+        latest_turn_id = max(int(turn.get("turn_id", 0) or 0) for turn in pending_turns)
         dialogue_text = self._format_dialogue(visible_turns, user_id)
         if dialogue_text.strip() == "无":
+            self._mark_session_extracted(session_key, latest_turn_id)
             return []
 
         try:
             extracted = await self._call_llm_for_extraction(user_id=user_id, dialogue_text=dialogue_text)
         except Exception as exc:
             if self._is_rate_limit_error(exc):
-                logger.warning("memory extraction skipped by rate limit: user=%s session=%s", user_id, session_key)
+                logger.warning("记忆提取触发限流：用户=%s，会话=%s", user_id, session_key)
                 return []
-            logger.error("memory extraction failed: user=%s session=%s error=%s", user_id, session_key, exc, exc_info=True)
+            logger.error("记忆提取失败：用户=%s，会话=%s，错误=%s", user_id, session_key, exc, exc_info=True)
             return []
 
+        self._mark_session_extracted(session_key, latest_turn_id)
         allowed_turn_ids = {int(turn["turn_id"]) for turn in visible_turns}
         related_dialogue = self._build_related_dialogue_snapshot(visible_turns)
         saved_memories: List[MemoryItem] = []
@@ -133,7 +142,7 @@ class MemoryExtractor:
         for item in extracted:
             if not self._is_valid_anchor(item, allowed_turn_ids):
                 logger.debug(
-                    "discarding extracted memory with invalid anchor: session=%s anchor=%s-%s content=%s",
+                    "丢弃来源锚点无效的记忆：会话=%s，锚点=%s-%s，内容=%s",
                     session_key,
                     item.source_turn_start,
                     item.source_turn_end,
@@ -196,7 +205,7 @@ class MemoryExtractor:
                 )
 
         logger.info(
-            "memory extraction complete: user=%s session=%s saved=%s important=%s ordinary=%s",
+            "记忆提取完成：用户=%s，会话=%s，写入=%s，重要=%s，普通=%s",
             user_id,
             session_key,
             len(saved_memories),
@@ -224,12 +233,33 @@ class MemoryExtractor:
             self._session_turns.clear()
             self._session_owner.clear()
             self._session_dialogue_key.clear()
+            self._session_extracted_upto.clear()
             return
 
         session_key = str(session_id or "").strip()
         self._session_turns.pop(session_key, None)
         self._session_owner.pop(session_key, None)
         self._session_dialogue_key.pop(session_key, None)
+        self._session_extracted_upto.pop(session_key, None)
+
+    def _get_pending_turns(self, session_id: str) -> List[Dict[str, Any]]:
+        session_key = str(session_id or "").strip()
+        turns = self._session_turns.get(session_key, [])
+        if not turns:
+            return []
+        extracted_upto = int(self._session_extracted_upto.get(session_key, 0) or 0)
+        return [
+            turn
+            for turn in turns
+            if int(turn.get("turn_id", 0) or 0) > extracted_upto
+        ]
+
+    def _mark_session_extracted(self, session_id: str, turn_id: int) -> None:
+        session_key = str(session_id or "").strip()
+        if not session_key:
+            return
+        current_value = int(self._session_extracted_upto.get(session_key, 0) or 0)
+        self._session_extracted_upto[session_key] = max(current_value, int(turn_id or 0))
 
     def _is_valid_anchor(self, item: ExtractedMemory, allowed_turn_ids: set[int]) -> bool:
         if item.source_turn_start <= 0 or item.source_turn_end <= 0:
@@ -431,7 +461,7 @@ class MemoryExtractor:
                 metadata=dict(metadata or {}),
             )
         except Exception as exc:
-            logger.warning("failed to sync important memory: user=%s error=%s", user_id, exc)
+            logger.warning("同步重要记忆失败：用户=%s，错误=%s", user_id, exc)
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         message = str(exc).lower()

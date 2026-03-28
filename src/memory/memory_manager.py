@@ -91,7 +91,7 @@ class MemoryManager:
                 important_memory_store=self.important_memory_store,
             )
         else:
-            logger.warning("No llm_callback provided; automatic extraction is disabled")
+            logger.warning("未提供 llm_callback，自动记忆提取已禁用")
 
         self.task_manager = MemoryTaskManager()
         self.index_coordinator = MemoryIndexCoordinator(
@@ -125,7 +125,7 @@ class MemoryManager:
         )
 
     async def initialize(self):
-        logger.info("Initializing memory manager")
+        logger.info("开始初始化记忆管理器")
         migration_count = await self._migrate_existing_memories()
         if migration_count:
             self._inc_memory_migrations(migration_count)
@@ -133,7 +133,7 @@ class MemoryManager:
         if compaction_count:
             self._inc_memory_compactions(compaction_count)
         await self.index_coordinator.initialize()
-        logger.info("Memory manager initialized")
+        logger.info("记忆管理器初始化完成")
 
     async def rebuild_index(self, user_id: str):
         return await self.index_coordinator.rebuild_index(user_id)
@@ -204,6 +204,8 @@ class MemoryManager:
         top_k: int = 5,
         use_rerank: Optional[bool] = None,
         read_scope: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> List[SearchResult]:
         return await self.retrieval_coordinator.search_memories(
@@ -212,7 +214,13 @@ class MemoryManager:
             top_k=top_k,
             use_rerank=use_rerank,
             read_scope=read_scope,
-            access_context=access_context,
+            access_context=self._resolve_memory_access_context(
+                user_id=user_id,
+                read_scope=read_scope,
+                message_type=message_type,
+                group_id=group_id,
+                access_context=access_context,
+            ),
         )
 
     async def quick_check_relevance(
@@ -234,6 +242,8 @@ class MemoryManager:
         top_k: int = 5,
         include_conversations: bool = True,
         read_scope: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
         return await self.retrieval_coordinator.search_memories_with_context(
@@ -242,7 +252,13 @@ class MemoryManager:
             top_k=top_k,
             include_conversations=include_conversations,
             read_scope=read_scope,
-            access_context=access_context,
+            access_context=self._resolve_memory_access_context(
+                user_id=user_id,
+                read_scope=read_scope,
+                message_type=message_type,
+                group_id=group_id,
+                access_context=access_context,
+            ),
         )
 
     async def build_prompt_context(
@@ -251,13 +267,21 @@ class MemoryManager:
         user_id: str,
         query: str,
         read_scope: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
         return await self.retrieval_coordinator.build_prompt_context(
             user_id=user_id,
             query=query,
             read_scope=read_scope,
-            access_context=access_context,
+            access_context=self._resolve_memory_access_context(
+                user_id=user_id,
+                read_scope=read_scope,
+                message_type=message_type,
+                group_id=group_id,
+                access_context=access_context,
+            ),
         )
 
     async def search_important_memories(
@@ -266,6 +290,8 @@ class MemoryManager:
         query: str,
         limit: int = 5,
         read_scope: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> List[Dict[str, Any]]:
         return await self.retrieval_coordinator.search_important_memories(
@@ -273,7 +299,31 @@ class MemoryManager:
             query=query,
             limit=limit,
             read_scope=read_scope,
-            access_context=access_context,
+            access_context=self._resolve_memory_access_context(
+                user_id=user_id,
+                read_scope=read_scope,
+                message_type=message_type,
+                group_id=group_id,
+                access_context=access_context,
+            ),
+        )
+
+    def _resolve_memory_access_context(
+        self,
+        *,
+        user_id: str,
+        read_scope: Optional[str],
+        message_type: str,
+        group_id: Optional[str],
+        access_context: Optional[MemoryAccessContext],
+    ) -> MemoryAccessContext:
+        if access_context is not None:
+            return access_context
+        return self.build_access_context(
+            user_id=str(user_id),
+            message_type=message_type,
+            group_id=group_id,
+            read_scope=read_scope,
         )
 
     async def get_user_memories(self, user_id: str) -> List[MemoryItem]:
@@ -472,7 +522,7 @@ class MemoryManager:
         self._sync_background_task_metric()
         if self.retriever:
             await self.retriever.close()
-        logger.info("Memory manager closed")
+        logger.info("记忆管理器已关闭")
 
     def get_stats(self) -> Dict[str, Any]:
         self._sync_background_task_metric()

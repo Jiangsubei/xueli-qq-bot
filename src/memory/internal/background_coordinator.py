@@ -52,7 +52,7 @@ class MemoryBackgroundCoordinator:
             message_id=message_id,
         )
         logger.debug(
-            "registered dialogue turn: user=%s session=%s turn=%s",
+            "已登记对话轮次：用户=%s，会话=%s，轮次=%s",
             user_id,
             registration.session_id,
             registration.turn_id,
@@ -98,12 +98,35 @@ class MemoryBackgroundCoordinator:
                     force=force,
                 )
                 if result:
-                    logger.info("saved conversation session: user=%s session=%s", user_id, result.session_id)
+                    logger.info("对话会话已保存：用户=%s，会话=%s", user_id, result.session_id)
             except Exception as exc:
-                logger.error("conversation save failed: user=%s error=%s", user_id, exc, exc_info=True)
+                logger.error("保存对话会话失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
         task_name = f"memory-save-{session_id or dialogue_key or user_id}"
         return self.task_manager.create_task(save_conversation(), name=task_name)
+
+    async def _finalize_session(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        extract_pending: bool,
+    ) -> List[MemoryItem]:
+        saved_memories: List[MemoryItem] = []
+        try:
+            await self.conversation_store.save_conversation(
+                user_id=user_id,
+                session_id=session_id,
+                force=True,
+            )
+            if extract_pending and self.auto_extract_memory and self.extractor:
+                saved_memories = await self.extractor.extract_memories(user_id, session_id=session_id, force=True)
+                if saved_memories:
+                    self.on_memory_changed(user_id)
+            return saved_memories
+        finally:
+            if self.extractor:
+                self.extractor.clear_buffer(session_id=session_id)
 
     async def maybe_extract_memories(
         self,
@@ -115,10 +138,10 @@ class MemoryBackgroundCoordinator:
         session_id: Optional[str] = None,
     ) -> List[MemoryItem]:
         if not self.auto_extract_memory:
-            logger.info("automatic memory extraction disabled: user=%s", user_id)
+            logger.info("自动记忆提取未启用：用户=%s", user_id)
             return []
         if not self.extractor:
-            logger.warning("memory extractor unavailable: user=%s", user_id)
+            logger.warning("记忆提取器不可用：用户=%s", user_id)
             return []
 
         resolved_session_id = self._resolve_session_id(
@@ -132,6 +155,17 @@ class MemoryBackgroundCoordinator:
             return []
 
         if not self.extractor.should_extract(resolved_session_id):
+            pending_turns = self.extractor.get_pending_turn_count(resolved_session_id)
+            interval = max(1, int(self.extractor.config.extract_every_n_turns))
+            turns_until_next = max(interval - pending_turns, 0)
+            logger.info(
+                "自动记忆提取暂不触发：用户=%s，会话=%s，当前待提取轮次=%s/%s，还差=%s 轮",
+                user_id,
+                resolved_session_id,
+                pending_turns,
+                interval,
+                turns_until_next,
+            )
             return []
 
         await self.conversation_store.save_conversation(user_id=user_id, session_id=resolved_session_id, force=True)
@@ -159,9 +193,9 @@ class MemoryBackgroundCoordinator:
                     session_id=session_id,
                 )
                 if memories:
-                    logger.info("memory extraction complete: user=%s count=%s", user_id, len(memories))
+                    logger.info("后台记忆提取完成：用户=%s，写入=%s 条", user_id, len(memories))
             except Exception as exc:
-                logger.error("memory extraction task failed: user=%s error=%s", user_id, exc, exc_info=True)
+                logger.error("后台记忆提取任务失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
         task_name = f"memory-extract-{session_id or dialogue_key or user_id}"
         return self.task_manager.create_task(extract(), name=task_name)
@@ -189,7 +223,7 @@ class MemoryBackgroundCoordinator:
             if not resolved_session_id:
                 return []
             await self.conversation_store.save_conversation(user_id=user_id, session_id=resolved_session_id, force=True)
-            memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id)
+            memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id, force=True)
             if memories:
                 self.on_memory_changed(user_id)
             return memories
@@ -213,9 +247,26 @@ class MemoryBackgroundCoordinator:
         )
         if not session_id:
             return None
-        if self.extractor:
-            self.extractor.clear_buffer(session_id=session_id)
-        return self.schedule_conversation_save(user_id, session_id=session_id, force=True)
+
+        async def finalize_session() -> List[MemoryItem]:
+            try:
+                return await self._finalize_session(
+                    user_id=user_id,
+                    session_id=session_id,
+                    extract_pending=True,
+                )
+            except Exception as exc:
+                logger.error(
+                    "conversation flush failed: user=%s session=%s error=%s",
+                    user_id,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+                return []
+
+        task_name = f"memory-flush-{session_id}"
+        return self.task_manager.create_task(finalize_session(), name=task_name)
 
     async def flush_conversation_buffers(self) -> None:
         for session_id in list(self.conversation_store.active_session_ids()):
@@ -233,7 +284,25 @@ class MemoryBackgroundCoordinator:
         await self.task_manager.flush()
 
     async def close(self) -> None:
-        self.conversation_store.close_all_sessions()
+        closed_session_ids = self.conversation_store.close_all_sessions()
+        for session_id in closed_session_ids:
+            owner_user_id = self.conversation_store.get_session_owner(session_id)
+            if not owner_user_id:
+                continue
+            try:
+                await self._finalize_session(
+                    user_id=owner_user_id,
+                    session_id=session_id,
+                    extract_pending=True,
+                )
+            except Exception as exc:
+                logger.error(
+                    "conversation close flush failed: user=%s session=%s error=%s",
+                    owner_user_id,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
         await self.flush_conversation_buffers()
         await self.task_manager.cancel_all()
 

@@ -1,0 +1,4 @@
+from __future__ import annotations
+
+MIN_RERANK_CANDIDATE_MAX_CHARS = 20
+MIN_RERANK_TOTAL_PROMPT_BUDGET = 200

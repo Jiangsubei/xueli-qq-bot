@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import logging
@@ -42,10 +42,10 @@ class MemoryIndexCoordinator:
             if success:
                 self.index_built[user_id] = True
                 self.index_dirty[user_id] = False
-                logger.debug("索引重建完成: user=%s, memories=%s", user_id, len(memories))
+                logger.debug("索引重建完成：用户=%s，记忆数=%s", user_id, len(memories))
             return success
         except Exception as exc:
-            logger.error("索引重建失败: user=%s, error=%s", user_id, exc)
+            logger.error("索引重建失败：用户=%s，错误=%s", user_id, exc)
             return False
 
     async def rebuild_all_indices(self) -> None:
@@ -54,14 +54,14 @@ class MemoryIndexCoordinator:
             return
 
         user_files = list(users_path.glob("*.md"))
-        logger.info("开始重建索引: users=%s", len(user_files))
+        logger.info("开始重建索引：用户数=%s", len(user_files))
         tasks = [self.rebuild_index(path.stem) for path in user_files]
         if not tasks:
             return
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         success_count = sum(1 for item in results if item is True)
-        logger.info("索引重建完成: success=%s/%s", success_count, len(tasks))
+        logger.info("索引重建完成：成功=%s/%s", success_count, len(tasks))
 
     def mark_dirty(self, user_id: str) -> None:
         self.index_dirty[user_id] = True
@@ -72,3 +72,5 @@ class MemoryIndexCoordinator:
 
         if not self.index_built.get(user_id, False):
             await self.rebuild_index(user_id)
+
+

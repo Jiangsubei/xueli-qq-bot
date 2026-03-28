@@ -1,11 +1,14 @@
 ﻿from __future__ import annotations
 
-import json
 import logging
 import os
 import re
+import tomllib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from src.memory_limits import MIN_RERANK_CANDIDATE_MAX_CHARS, MIN_RERANK_TOTAL_PROMPT_BUDGET
 
 logger = logging.getLogger(__name__)
 _TIME_WINDOW_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -116,6 +119,12 @@ class MemoryConfig:
     read_scope: str = "user"
     bm25_top_k: int = 100
     rerank_top_k: int = 20
+    pre_rerank_top_k: int = 12
+    dynamic_memory_limit: int = 8
+    dynamic_dedup_enabled: bool = True
+    dynamic_dedup_similarity_threshold: float = 0.72
+    rerank_candidate_max_chars: int = 160
+    rerank_total_prompt_budget: int = 2400
     auto_extract: bool = True
     extract_every_n_turns: int = 3
     conversation_save_interval: int = 10
@@ -128,6 +137,11 @@ class MemoryConfig:
     ordinary_decay_enabled: bool = True
     ordinary_half_life_days: float = 30.0
     ordinary_forget_threshold: float = 0.5
+    local_bm25_weight: float = 1.0
+    local_importance_weight: float = 0.35
+    local_mention_weight: float = 0.2
+    local_recency_weight: float = 0.15
+    local_scene_weight: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -286,11 +300,12 @@ class Config:
         self._raw_data = {}
         self._app = AppConfig()
         try:
-            with open(self._path, "r", encoding="utf-8") as file:
-                self._raw_data = json.loads(self._strip_json_comments(file.read()))
-            logger.info("loaded config: %s", self._path)
+            with open(self._path, "rb") as file:
+                payload = tomllib.load(file)
+            self._raw_data = dict(payload) if isinstance(payload, dict) else {}
+            logger.info("配置加载完成：%s", self._path)
         except Exception as exc:
-            self._load_error = f"failed to load config {self._path}: {exc}"
+            self._load_error = f"加载配置失败 {self._path}: {exc}"
             logger.warning(self._load_error)
             return
         self._app = self._build_app_config()
@@ -415,9 +430,9 @@ class Config:
             return os.path.normpath(path)
         current_dir = os.path.dirname(os.path.abspath(__file__))
         candidates = [
-            os.path.join(current_dir, "config.json"),
-            os.path.join(current_dir, "..", "..", "config.json"),
-            os.path.join(os.getcwd(), "config.json"),
+            os.path.join(current_dir, "config.toml"),
+            os.path.join(current_dir, "..", "..", "config.toml"),
+            os.path.join(os.getcwd(), "config.toml"),
         ]
         for candidate in candidates:
             normalized = os.path.normpath(candidate)
@@ -549,6 +564,24 @@ class Config:
             read_scope=self._literal_string(section, "memory", "read_scope", allowed={"user", "global"}, default="user"),
             bm25_top_k=self._bounded_int(section, "memory", "bm25_top_k", default=100, minimum=1),
             rerank_top_k=self._bounded_int(section, "memory", "rerank_top_k", default=20, minimum=1),
+            pre_rerank_top_k=self._bounded_int(section, "memory", "pre_rerank_top_k", default=12, minimum=1),
+            dynamic_memory_limit=self._bounded_int(section, "memory", "dynamic_memory_limit", default=8, minimum=1),
+            dynamic_dedup_enabled=self._bool_value(section, "memory", "dynamic_dedup_enabled", default=True),
+            dynamic_dedup_similarity_threshold=self._bounded_float(section, "memory", "dynamic_dedup_similarity_threshold", default=0.72, minimum=0.0, maximum=1.0),
+            rerank_candidate_max_chars=self._bounded_int(
+                section,
+                "memory",
+                "rerank_candidate_max_chars",
+                default=160,
+                minimum=MIN_RERANK_CANDIDATE_MAX_CHARS,
+            ),
+            rerank_total_prompt_budget=self._bounded_int(
+                section,
+                "memory",
+                "rerank_total_prompt_budget",
+                default=2400,
+                minimum=MIN_RERANK_TOTAL_PROMPT_BUDGET,
+            ),
             auto_extract=self._bool_value(section, "memory", "auto_extract", default=True),
             extract_every_n_turns=self._bounded_int(section, "memory", "extract_every_n_turns", default=3, minimum=1),
             conversation_save_interval=self._bounded_int(section, "memory", "conversation_save_interval", default=10, minimum=1),
@@ -561,18 +594,48 @@ class Config:
             ordinary_decay_enabled=self._bool_value(section, "memory", "ordinary_decay_enabled", default=True),
             ordinary_half_life_days=self._bounded_float(section, "memory", "ordinary_half_life_days", default=30.0, minimum=0.000001),
             ordinary_forget_threshold=self._bounded_float(section, "memory", "ordinary_forget_threshold", default=0.5, minimum=0.0, maximum=1.0),
+            local_bm25_weight=self._bounded_float(section, "memory", "local_bm25_weight", default=1.0, minimum=0.0),
+            local_importance_weight=self._bounded_float(section, "memory", "local_importance_weight", default=0.35, minimum=0.0),
+            local_mention_weight=self._bounded_float(section, "memory", "local_mention_weight", default=0.2, minimum=0.0),
+            local_recency_weight=self._bounded_float(section, "memory", "local_recency_weight", default=0.15, minimum=0.0),
+            local_scene_weight=self._bounded_float(section, "memory", "local_scene_weight", default=0.3, minimum=0.0),
         )
-        if config.rerank_top_k > config.bm25_top_k:
+        rerank_top_k = config.rerank_top_k
+        pre_rerank_top_k = config.pre_rerank_top_k
+        if rerank_top_k > config.bm25_top_k:
             self._add_error("memory.rerank_top_k cannot be greater than memory.bm25_top_k")
+        if pre_rerank_top_k > config.bm25_top_k:
+            self._add_error("memory.pre_rerank_top_k cannot be greater than memory.bm25_top_k")
+        if rerank_top_k > config.bm25_top_k or pre_rerank_top_k > config.bm25_top_k:
             config = MemoryConfig(
-                enabled=config.enabled, storage_path=config.storage_path, read_scope=config.read_scope,
-                bm25_top_k=config.bm25_top_k, rerank_top_k=config.bm25_top_k,
-                auto_extract=config.auto_extract, extract_every_n_turns=config.extract_every_n_turns,
-                conversation_save_interval=config.conversation_save_interval, extraction_api_base=config.extraction_api_base,
-                extraction_api_key=config.extraction_api_key, extraction_model=config.extraction_model,
-                extraction_extra_params=config.extraction_extra_params, extraction_extra_headers=config.extraction_extra_headers,
-                extraction_response_path=config.extraction_response_path, ordinary_decay_enabled=config.ordinary_decay_enabled,
-                ordinary_half_life_days=config.ordinary_half_life_days, ordinary_forget_threshold=config.ordinary_forget_threshold,
+                enabled=config.enabled,
+                storage_path=config.storage_path,
+                read_scope=config.read_scope,
+                bm25_top_k=config.bm25_top_k,
+                rerank_top_k=min(rerank_top_k, config.bm25_top_k),
+                pre_rerank_top_k=min(pre_rerank_top_k, config.bm25_top_k),
+                dynamic_memory_limit=config.dynamic_memory_limit,
+                dynamic_dedup_enabled=config.dynamic_dedup_enabled,
+                dynamic_dedup_similarity_threshold=config.dynamic_dedup_similarity_threshold,
+                rerank_candidate_max_chars=config.rerank_candidate_max_chars,
+                rerank_total_prompt_budget=config.rerank_total_prompt_budget,
+                auto_extract=config.auto_extract,
+                extract_every_n_turns=config.extract_every_n_turns,
+                conversation_save_interval=config.conversation_save_interval,
+                extraction_api_base=config.extraction_api_base,
+                extraction_api_key=config.extraction_api_key,
+                extraction_model=config.extraction_model,
+                extraction_extra_params=config.extraction_extra_params,
+                extraction_extra_headers=config.extraction_extra_headers,
+                extraction_response_path=config.extraction_response_path,
+                ordinary_decay_enabled=config.ordinary_decay_enabled,
+                ordinary_half_life_days=config.ordinary_half_life_days,
+                ordinary_forget_threshold=config.ordinary_forget_threshold,
+                local_bm25_weight=config.local_bm25_weight,
+                local_importance_weight=config.local_importance_weight,
+                local_mention_weight=config.local_mention_weight,
+                local_recency_weight=config.local_recency_weight,
+                local_scene_weight=config.local_scene_weight,
             )
         return config
 
@@ -731,44 +794,6 @@ class Config:
 
     def _add_error(self, message: str) -> None:
         self._errors.append(message)
-
-    def _strip_json_comments(self, text: str) -> str:
-        result: List[str] = []
-        index = 0
-        in_string = False
-        escaped = False
-        while index < len(text):
-            char = text[index]
-            next_char = text[index + 1] if index + 1 < len(text) else ""
-            if in_string:
-                result.append(char)
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                index += 1
-                continue
-            if char == '"':
-                in_string = True
-                result.append(char)
-                index += 1
-                continue
-            if char == "/" and next_char == "/":
-                index += 2
-                while index < len(text) and text[index] not in "\r\n":
-                    index += 1
-                continue
-            if char == "/" and next_char == "*":
-                index += 2
-                while index + 1 < len(text) and not (text[index] == "*" and text[index + 1] == "/"):
-                    index += 1
-                index += 2
-                continue
-            result.append(char)
-            index += 1
-        return "".join(result)
 
 
 config = Config()

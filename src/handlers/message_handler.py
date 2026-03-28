@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -97,7 +98,7 @@ class MessageHandler:
         self.command_handler.set_status_provider(status_provider)
 
     def _create_ai_client(self) -> AIClient:
-        logger.info("[reply] initialize reply model: model=%s", self.app_config.ai_service.model)
+        logger.info("初始化回复模型：模型=%s", self.app_config.ai_service.model)
         return AIClient(log_label="reply", app_config=self.app_config)
 
     def _create_vision_client(self) -> VisionClient:
@@ -205,31 +206,34 @@ class MessageHandler:
             return "\n".join(lines) if lines else str(content)
         return str(content)
 
+    def _serialize_prompt_message_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
     def _format_system_prompt_log_with_history(
         self,
         event: MessageEvent,
         messages: List[Dict[str, Any]],
         related_history_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        system_message = next((message for message in messages if message.get("role") == "system"), None)
-        system_content = self._format_prompt_message_content(system_message.get("content", "")) if system_message else ""
         lines = [
-            "[SYSTEM PROMPT]",
+            "[FULL PROMPT]",
             f"用户: {event.user_id}",
             f"会话: {self._get_conversation_key(event)}",
-            "",
-            system_content if system_content else "[空]",
         ]
-        history_messages = related_history_messages or []
-        if history_messages:
-            lines.extend(["", "--- 关联历史 ---"])
-            for index in range(0, len(history_messages), 2):
-                first = history_messages[index]
-                second = history_messages[index + 1] if index + 1 < len(history_messages) else None
-                if first.get("role") == "user":
-                    lines.append(f"{int(index / 2) + 1}. 用户: {self._format_prompt_message_content(first.get('content', ''))}")
-                    if second and second.get("role") == "assistant":
-                        lines.append(f"   助手: {self._format_prompt_message_content(second.get('content', ''))}")
+        for index, message in enumerate(messages or [], 1):
+            role = str(message.get("role") or "unknown")
+            lines.extend(
+                [
+                    "",
+                    f"--- Message {index} ({role}) ---",
+                    self._serialize_prompt_message_content(message.get("content", "")),
+                ]
+            )
         return "\n".join(lines).rstrip()
     def _get_conversation_key(self, event: MessageEvent) -> str:
         return self.session_manager.get_key(event)
@@ -306,7 +310,7 @@ class MessageHandler:
         self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
         if self.runtime_metrics:
             self.runtime_metrics.record_group_repeat_echo()
-        logger.info("[group_repeat] triggered: group=%s text=%s unique_users=%s", group_id, display_text, len(unique_users))
+        logger.info("触发群聊复读：群=%s，内容=%s，触发用户数=%s", group_id, display_text, len(unique_users))
         return display_text
 
     async def _plan_group_message(self, event: MessageEvent) -> MessageHandlingPlan:
@@ -514,12 +518,14 @@ class MessageHandler:
         system_prompt: str,
         user_message: str,
         base64_images: List[str],
+        context_messages: List[Dict[str, Any]],
         related_history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         return self.reply_pipeline.build_response_messages(
             system_prompt=system_prompt,
             user_message=user_message,
             base64_images=base64_images,
+            context_messages=context_messages,
             related_history_messages=related_history_messages,
         )
 

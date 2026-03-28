@@ -135,7 +135,7 @@ class EmojiReplyService:
         try:
             response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
         except Exception as exc:
-            logger.warning("[emoji_reply] failed to decide intent: %s", exc)
+            logger.warning("表情包回复意图判断失败：%s", exc)
             return EmojiReplyDecision(should_send=False, reason=f"decision_error:{exc}")
 
         data = self._extract_json_object(getattr(response, "content", ""))

@@ -1,156 +1,215 @@
-# OpenAI 兼容 API 配置指南
+# OpenAI 兼容接口配置指南
 
-本文档说明如何配置 QQ 机器人以连接任意 OpenAI 兼容的 AI 服务。
+本文档说明当前项目如何通过 `config.toml` 配置 OpenAI 兼容服务。
 
-## 核心概念
+## 当前主配置入口
 
-本框架采用**通用 OpenAI 兼容架构**，通过标准化配置即可连接任意遵循 OpenAI API 规范的服务。
+当前项目以仓库根目录的 `config.toml` 作为主配置文件，不再以 `.env` 作为默认启动配置入口。
 
-核心配置只有三项：
-1. `OPENAI_API_BASE` - API 端点地址
-2. `OPENAI_API_KEY` - API 密钥
-3. `OPENAI_MODEL` - 模型名称
+主模型配置位于：
 
-## 快速配置
+- `ai_service.api_base`
+- `ai_service.api_key`
+- `ai_service.model`
 
-### 1. 复制环境配置文件
+## 最小主模型配置
 
-```bash
-cp .env.example .env
+```toml
+[ai_service]
+api_base = "https://api.openai.com/v1"
+api_key = "sk-xxxx"
+model = "gpt-4o"
+response_path = "choices.0.message.content"
+
+[ai_service.extra_params]
+
+[ai_service.extra_headers]
 ```
 
-### 2. 根据你的服务商修改以下三项
+## 常见服务商示例
 
-```env
-# ============================================
-# 只需修改这三项即可切换任意服务
-# ============================================
-OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-OPENAI_MODEL=gpt-3.5-turbo
-```
+### OpenAI
 
-## 常见服务商配置示例
-
-### OpenAI 官方
-```env
-OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-OPENAI_MODEL=gpt-4o
+```toml
+[ai_service]
+api_base = "https://api.openai.com/v1"
+api_key = "sk-xxxx"
+model = "gpt-4o"
 ```
 
 ### DeepSeek
-```env
-OPENAI_API_BASE=https://api.deepseek.com/v1
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-OPENAI_MODEL=deepseek-chat
+
+```toml
+[ai_service]
+api_base = "https://api.deepseek.com/v1"
+api_key = "sk-xxxx"
+model = "deepseek-chat"
 ```
 
 ### OpenRouter
-```env
-OPENAI_API_BASE=https://openrouter.ai/api/v1
-OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-OPENAI_MODEL=stepfun/step-3.5-flash:free
+
+```toml
+[ai_service]
+api_base = "https://openrouter.ai/api/v1"
+api_key = "sk-or-v1-xxxx"
+model = "stepfun/step-3.5-flash:free"
 ```
 
 ### 本地 Ollama
-```env
-OPENAI_API_BASE=http://localhost:11434/v1
-OPENAI_API_KEY=not-needed
-OPENAI_MODEL=llama2
+
+```toml
+[ai_service]
+api_base = "http://127.0.0.1:11434/v1"
+api_key = "not-needed"
+model = "llama2"
 ```
 
-### Azure OpenAI
-```env
-OPENAI_API_BASE=https://your-resource.openai.azure.com/openai/deployments/your-deployment
-OPENAI_API_KEY=your-azure-api-key
-OPENAI_MODEL=gpt-35-turbo
-
-# Azure 需要额外请求头
-OPENAI_EXTRA_HEADERS={"api-version": "2023-05-15"}
-```
-
-## 高级配置
+## 额外参数与请求头
 
 ### 自定义请求参数
 
-添加额外的请求参数（如 temperature、max_tokens）：
-
-```env
-OPENAI_EXTRA_PARAMS={"temperature": 0.7, "max_tokens": 2000, "top_p": 0.9}
+```toml
+[ai_service.extra_params]
+temperature = 0.7
+max_tokens = 2000
+top_p = 0.9
 ```
 
 ### 自定义请求头
 
-添加自定义 HTTP 请求头：
-
-```env
-OPENAI_EXTRA_HEADERS={"X-Custom-Header": "value"}
+```toml
+[ai_service.extra_headers]
+"X-Custom-Header" = "value"
 ```
 
 ### 自定义响应提取路径
 
-如果服务返回格式与标准 OpenAI 格式不同，可配置响应提取路径：
-
-```env
-# 标准路径（默认）
-OPENAI_RESPONSE_PATH=choices.0.message.content
-
-# 如果服务返回格式为 {output: {choices: [...]}}
-# OPENAI_RESPONSE_PATH=output.choices.0.message.content
+```toml
+[ai_service]
+response_path = "choices.0.message.content"
 ```
 
-## 验证配置
+如果服务返回结构不同，也可以改成例如：
 
-### 1. 测试 API 连接
-
-```bash
-python test_api.py
+```toml
+[ai_service]
+response_path = "output.choices.0.message.content"
 ```
 
-脚本会自动读取 `.env` 中的配置并测试连接。
+## 视觉模型配置
 
-### 2. 启动机器人
+视觉功能配置位于 `vision_service`。
 
-```bash
-python main.py
+只有同时满足以下条件时，视觉功能才会真正可用：
+
+1. `vision_service.enabled = true`
+2. `vision_service.api_base` 非空
+3. `vision_service.api_key` 非空
+4. `vision_service.model` 非空
+
+示例：
+
+```toml
+[vision_service]
+enabled = true
+api_base = "https://your-vision-endpoint/v1"
+api_key = "sk-xxxx"
+model = "your-vision-model"
+response_path = "choices.0.message.content"
+
+[vision_service.extra_params]
+
+[vision_service.extra_headers]
 ```
 
-## 故障排除
+## 群聊判断模型配置
 
-### API 连接失败
+群聊判断配置位于 `group_reply_decision`。
 
-1. **检查 API Base URL**
-   - 确保 URL 以 `/v1` 结尾（大多数服务）
-   - 确保 URL 没有多余的斜杠
+如果 `group_reply_decision.api_base/api_key/model` 没有完整填写，代码会自动回退到 `ai_service`。
 
-2. **检查 API Key**
-   - 确认 Key 没有包含多余的空格
-   - 确认 Key 在服务商处有效
+适合以下场景：
 
-3. **检查网络连接**
-   - 测试能否 ping 通服务商域名
-   - 检查防火墙设置
+- 用主模型兼任群聊判断
+- 单独给群聊判断指定更轻量模型
 
-### 模型不存在错误
+## 记忆提取模型配置
 
-确认 `OPENAI_MODEL` 填写正确：
-- 不同服务商的模型名称不同
-- 检查服务商的模型列表文档
+记忆提取配置位于 `memory`：
 
-### 响应格式错误
+- `memory.extraction_api_base`
+- `memory.extraction_api_key`
+- `memory.extraction_model`
+- `memory.extraction_extra_params`
+- `memory.extraction_extra_headers`
+- `memory.extraction_response_path`
 
-如果服务返回格式与标准 OpenAI 不同：
-1. 设置 `OPENAI_RESPONSE_PATH` 指定正确的提取路径
-2. 检查服务商文档了解响应格式
+如果这些提取专用字段为空，代码会自动回退到 `ai_service`。
 
-## 贡献
+也就是说：
 
-如果你成功配置了新的服务商，欢迎分享配置示例！
+- 不单独配置时，记忆提取默认复用主模型
+- 单独配置后，可使用独立提取模型
 
-## 参考
+## 记忆重排配置
 
-- [OpenAI API 文档](https://platform.openai.com/docs)
-- [DeepSeek API 文档](https://platform.deepseek.com/)
-- [OpenRouter 文档](https://openrouter.ai/docs)
-- [Ollama OpenAI 兼容](https://ollama.com/blog/openai-compatibility)
+记忆重排配置位于 `memory_rerank`。
+
+只有当以下字段都完整时，才视为已配置：
+
+- `memory_rerank.api_base`
+- `memory_rerank.api_key`
+- `memory_rerank.model`
+
+未完整配置时，记忆重排视为未启用。
+
+## 配置验证建议
+
+启动前至少确认以下字段：
+
+- `napcat.ws_url`
+- `napcat.http_url`
+- `ai_service.api_base`
+- `ai_service.api_key`
+- `ai_service.model`
+
+如启用视觉，还要确认：
+
+- `vision_service.enabled`
+- `vision_service.api_base`
+- `vision_service.api_key`
+- `vision_service.model`
+
+如启用记忆提取，还要确认：
+
+- `memory.enabled`
+- `memory.auto_extract`
+- `memory.extract_every_n_turns`
+
+## 故障排查
+
+### 主模型请求失败
+
+检查：
+
+- `ai_service.api_base` 是否正确
+- `ai_service.api_key` 是否有效
+- `ai_service.model` 是否存在
+- `response_path` 是否与服务返回格式一致
+
+### 视觉功能不可用
+
+检查：
+
+- `vision_service.enabled` 是否为 `true`
+- 三个关键字段是否都已填写
+
+### 记忆提取没有单独走提取模型
+
+检查：
+
+- `memory.extraction_api_base`
+- `memory.extraction_api_key`
+- `memory.extraction_model`
+
+如果为空，就会自动回退到 `ai_service`。
