@@ -1,4 +1,4 @@
-# Claude QQ Bot
+# QQ Bot
 
 这是一个基于 NapCat 和 OpenAI 兼容接口的 QQ 机器人项目。
 
