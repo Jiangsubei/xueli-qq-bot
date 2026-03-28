@@ -10,6 +10,7 @@ from src.handlers.conversation_session_manager import ConversationSessionManager
 
 
 StatusProvider = Callable[[], Dict[str, Any]]
+ResetCallback = Callable[[MessageEvent], None]
 
 
 class CommandHandler:
@@ -22,11 +23,13 @@ class CommandHandler:
         status_provider: Optional[StatusProvider] = None,
         runtime_metrics: Optional[RuntimeMetrics] = None,
         app_config: Optional[AppConfig] = None,
+        reset_callback: Optional[ResetCallback] = None,
     ) -> None:
         self.session_manager = session_manager
         self.status_provider = status_provider
         self.runtime_metrics = runtime_metrics
         self.app_config = app_config or config.app
+        self.reset_callback = reset_callback
         self.registry = CommandRegistry()
         self._register_builtin_commands()
 
@@ -73,7 +76,6 @@ class CommandHandler:
             f"回复分片数：{status.get('reply_parts_sent', 0)}",
             f"命令命中：{status.get('command_hits', 0)}",
             f"群规划 reply/wait/ignore：{status.get('planner_reply', 0)} / {status.get('planner_wait', 0)} / {status.get('planner_ignore', 0)}",
-            f"群规划 burst merge：{status.get('planner_burst_merge', 0)}",
             f"视觉请求/图片处理/失败：{status.get('vision_requests', 0)} / {status.get('vision_images_processed', 0)} / {status.get('vision_failures', 0)}",
             f"视觉结果复用：{status.get('vision_reused_from_plan', 0)}",
             f"Memory 读取/共享读取：{status.get('memory_reads', 0)} / {status.get('memory_shared_reads', 0)}",
@@ -120,6 +122,8 @@ class CommandHandler:
         )
 
     def _execute_reset(self, ctx: CommandContext) -> str:
+        if callable(self.reset_callback):
+            self.reset_callback(ctx.event)
         self.session_manager.clear_for_event(ctx.event)
         return "对话历史已清空。"
 
@@ -141,7 +145,6 @@ class CommandHandler:
             "planner_reply": 0,
             "planner_wait": 0,
             "planner_ignore": 0,
-            "planner_burst_merge": 0,
             "vision_requests": 0,
             "vision_images_processed": 0,
             "vision_failures": 0,

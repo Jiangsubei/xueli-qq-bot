@@ -85,7 +85,7 @@ class WebUISnapshotPublisher:
                 "planner_reply": status.get("planner_reply", 0),
                 "planner_wait": status.get("planner_wait", 0),
                 "planner_ignore": status.get("planner_ignore", 0),
-                "planner_burst_merge": status.get("planner_burst_merge", 0),
+                "group_repeat_echo": status.get("group_repeat_echo", 0),
             },
             "vision": {
                 "vision_requests": status.get("vision_requests", 0),

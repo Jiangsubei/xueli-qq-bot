@@ -66,7 +66,7 @@ from src.core.config import config, get_vision_service_status
 app = config.app
 model = app.ai_service.model
 vision_status = get_vision_service_status(app)
-burst_window = app.group_reply.burst_window_seconds
+plan_context = app.group_reply.plan_context_message_count
 read_scope = app.memory.read_scope
 ```
 
@@ -152,9 +152,9 @@ python main.py
 - `ConversationSessionManager`
   负责会话 key、上下文缓存和过期清理。
 - `GroupPlanCoordinator`
-  负责群聊 burst 聚合、窗口内图片预分析和 planner 调度。
-- `group_reply.burst_merge_enabled`
-  控制是否启用群消息合并窗口；关闭时群消息仍会进入 planner，但按单条独立判断。
+  Handle per-message group planning, recent context history, image pre-analysis, and planner dispatch.
+- `group_reply.plan_context_message_count`
+  Controls how many recent group records are included for each single-message planning request; assistant replies are included too.
 - `ReplyPipeline`
   负责 prompt 组装、视觉结果复用、AI 调用、对话登记、记忆后置动作。
 
@@ -258,7 +258,7 @@ Memory prompt 注入顺序固定为：
 - 生命周期: `ready`、`connected`、`uptime_seconds`、`last_error_at`
 - 消息: `messages_received`、`messages_replied`、`reply_parts_sent`、`message_errors`
 - 命令: `command_hits`、`command_hits_by_name`
-- 群规划: `planner_reply`、`planner_wait`、`planner_ignore`、`planner_burst_merge`
+- Group planning: `planner_reply`, `planner_wait`, `planner_ignore`
 - 图片理解: `vision_requests`、`vision_images_processed`、`vision_failures`、`vision_reused_from_plan`
 - Memory: `memory_reads`、`memory_shared_reads`、`memory_scene_rule_hits`、`memory_access_denied`、`memory_writes`、`memory_migrations`、`memory_compactions`、`background_tasks`
 - 运行态: `active_message_tasks`、`active_conversations`

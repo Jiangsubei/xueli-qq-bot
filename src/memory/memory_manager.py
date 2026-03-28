@@ -301,24 +301,92 @@ class MemoryManager:
         user_id: str,
         user_message: str,
         assistant_message: str,
+        *,
+        dialogue_key: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        message_id: Optional[str] = None,
     ):
         self.background_coordinator.register_dialogue_turn(
             user_id=user_id,
             user_message=user_message,
             assistant_message=assistant_message,
+            dialogue_key=dialogue_key,
+            message_type=message_type,
+            group_id=group_id,
+            message_id=message_id,
         )
         self._sync_background_task_metric()
 
-    async def maybe_extract_memories(self, user_id: str) -> List[MemoryItem]:
-        return await self.background_coordinator.maybe_extract_memories(user_id)
+    async def maybe_extract_memories(
+        self,
+        user_id: str,
+        dialogue_key: Optional[str] = None,
+        *,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[MemoryItem]:
+        return await self.background_coordinator.maybe_extract_memories(
+            user_id,
+            dialogue_key=dialogue_key,
+            message_type=message_type,
+            group_id=group_id,
+            session_id=session_id,
+        )
 
-    def schedule_memory_extraction(self, user_id: str):
-        task = self.background_coordinator.schedule_memory_extraction(user_id)
+    def schedule_memory_extraction(
+        self,
+        user_id: str,
+        dialogue_key: Optional[str] = None,
+        *,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ):
+        task = self.background_coordinator.schedule_memory_extraction(
+            user_id,
+            dialogue_key=dialogue_key,
+            message_type=message_type,
+            group_id=group_id,
+            session_id=session_id,
+        )
         self._sync_background_task_metric()
         return task
 
-    def force_extraction(self, user_id: str):
-        task = self.background_coordinator.force_extraction(user_id)
+    def force_extraction(
+        self,
+        user_id: str,
+        dialogue_key: Optional[str] = None,
+        *,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ):
+        task = self.background_coordinator.force_extraction(
+            user_id,
+            dialogue_key=dialogue_key,
+            message_type=message_type,
+            group_id=group_id,
+            session_id=session_id,
+        )
+        self._sync_background_task_metric()
+        return task
+
+    def flush_conversation_session(
+        self,
+        *,
+        user_id: str,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        dialogue_key: Optional[str] = None,
+    ):
+        task = self.background_coordinator.flush_conversation_session(
+            user_id=user_id,
+            message_type=message_type,
+            group_id=group_id,
+            dialogue_key=dialogue_key,
+        )
         self._sync_background_task_metric()
         return task
 

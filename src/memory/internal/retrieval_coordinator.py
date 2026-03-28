@@ -232,7 +232,7 @@ class MemoryRetrievalCoordinator:
             self._inc_memory_scene_rule_hits(scene_hits)
         self._inc_memory_read(shared=bool(sections["shared"]))
 
-        history_messages = await self._load_history_messages(user_id=str(user_id), query=query)
+        history_messages = await self._load_history_messages(dynamic_memories=sections["dynamic"])
         prompt_text = self._build_prompt_text(sections)
         return {
             "sections": sections,
@@ -481,6 +481,7 @@ class MemoryRetrievalCoordinator:
         return {
             "content": content,
             "memory_owner": owner_user_id,
+            "owner_user_id": owner_user_id,
             "source": source,
             "metadata": metadata,
         }
@@ -516,32 +517,71 @@ class MemoryRetrievalCoordinator:
             parts.append("")
         return "\n".join(parts).strip()
 
-    async def _load_history_messages(self, user_id: str, query: str) -> List[Dict[str, str]]:
-        if not self.conversation_store or not query:
+    async def _load_history_messages(self, *, dynamic_memories: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        if not self.conversation_store:
             return []
+
+        anchor_entry = next(
+            (
+                entry
+                for entry in dynamic_memories
+                if self._extract_memory_anchor(entry.get("metadata"))
+            ),
+            None,
+        )
+        if anchor_entry is None:
+            return []
+
+        metadata = dict(anchor_entry.get("metadata") or {})
+        anchor = self._extract_memory_anchor(metadata)
+        if anchor is None:
+            return []
+
+        owner_user_id = str(anchor_entry.get("owner_user_id") or anchor_entry.get("memory_owner") or metadata.get("owner_user_id") or "").strip()
+        if not owner_user_id:
+            return []
+
         try:
-            records = await self.conversation_store.search_conversations(
-                user_id=user_id,
-                keyword=query,
-                limit=1,
-            )
+            record = await self.conversation_store.load_session(owner_user_id, anchor["session_id"])
         except Exception as exc:
-            logger.warning("Failed to load related conversation turns: %s", exc)
+            logger.warning("Failed to load anchored session context: %s", exc)
+            return []
+        if record is None:
             return []
 
-        if not records:
-            return []
-
-        turns = records[0].turns[-8:]
+        turn_map = {int(turn.turn_id): turn for turn in record.turns}
+        start = max(1, anchor["turn_start"] - 3)
+        end = anchor["turn_end"] + 3
         history_messages: List[Dict[str, str]] = []
-        for turn in turns:
-            user_text = str(turn.get("user", "")).strip()
-            assistant_text = str(turn.get("assistant", "")).strip()
+        for turn_id in range(start, end + 1):
+            turn = turn_map.get(turn_id)
+            if turn is None:
+                continue
+            user_text = str(turn.user or "").strip()
+            assistant_text = str(turn.assistant or "").strip()
             if user_text:
                 history_messages.append({"role": "user", "content": user_text})
             if assistant_text:
                 history_messages.append({"role": "assistant", "content": assistant_text})
         return history_messages
+
+    def _extract_memory_anchor(self, metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        prepared = dict(metadata or {})
+        session_id = str(prepared.get("source_session_id") or "").strip()
+        if not session_id:
+            return None
+        try:
+            turn_start = int(prepared.get("source_turn_start", 0) or 0)
+            turn_end = int(prepared.get("source_turn_end", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if turn_start <= 0 or turn_end <= 0 or turn_start > turn_end:
+            return None
+        return {
+            "session_id": session_id,
+            "turn_start": turn_start,
+            "turn_end": turn_end,
+        }
 
     def _score_text(self, query: str, content: str) -> float:
         normalized_query = re.sub(r"\s+", "", str(query or "").lower())

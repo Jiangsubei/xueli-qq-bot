@@ -360,6 +360,8 @@ class DummyMemoryManager:
         self.search_called = False
         self.registered_turns = []
         self.extraction_scheduled_for = []
+        self.extraction_schedule_kwargs = []
+        self.flush_calls = []
 
     async def get_important_memories(self, **kwargs):
         return [DummyMemory(content="likes cats", owner_user_id="42")]
@@ -371,8 +373,13 @@ class DummyMemoryManager:
     def register_dialogue_turn(self, **kwargs):
         self.registered_turns.append(kwargs)
 
-    def schedule_memory_extraction(self, user_id):
+    def schedule_memory_extraction(self, user_id, **kwargs):
         self.extraction_scheduled_for.append(user_id)
+        self.extraction_schedule_kwargs.append(dict(kwargs))
+        return asyncio.create_task(asyncio.sleep(0))
+
+    def flush_conversation_session(self, **kwargs):
+        self.flush_calls.append(dict(kwargs))
         return asyncio.create_task(asyncio.sleep(0))
 
 
@@ -443,15 +450,18 @@ class FakeExtractor:
         self.turns = []
         self.extract_calls = []
 
-    def add_dialogue_turn(self, user_id, user_message, assistant_message):
-        self.turns.append((user_id, user_message, assistant_message))
+    def add_dialogue_turn(self, user_id, user_message, assistant_message, **kwargs):
+        self.turns.append((user_id, user_message, assistant_message, dict(kwargs)))
 
-    def should_extract(self, user_id):
+    def should_extract(self, session_id):
         return self.should_extract_value
 
-    async def extract_memories(self, user_id):
-        self.extract_calls.append(user_id)
+    async def extract_memories(self, user_id, *, session_id):
+        self.extract_calls.append((user_id, session_id))
         return list(self.returned_memories)
+
+    def clear_buffer(self, *, session_id=None):
+        return None
 
 
 def read_json(path):

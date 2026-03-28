@@ -279,6 +279,19 @@ class MemoryAccessPolicy:
                 "group_id": source_group_id,
             }
 
+        if source_message_type == "group" and source_group_id and owner_user_id:
+            return {
+                "kind": MemoryApplicabilityScope.GROUP_MEMBER.value,
+                "group_id": source_group_id,
+                "user_id": owner_user_id,
+            }
+
+        if source_message_type == "private" and owner_user_id:
+            return {
+                "kind": MemoryApplicabilityScope.PRIVATE_CHAT.value,
+                "user_id": owner_user_id,
+            }
+
         if category in self._SHARED_CATEGORIES:
             return {"kind": MemoryApplicabilityScope.SHARED.value}
 

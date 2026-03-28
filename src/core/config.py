@@ -80,10 +80,12 @@ class GroupReplyConfig:
     interest_reply_enabled: bool = True
     plan_request_interval: float = 3.0
     plan_request_max_parallel: int = 1
-    burst_merge_enabled: bool = True
-    burst_window_seconds: float = 0.0
-    burst_min_messages: int = 1
-    burst_max_messages: int = 8
+    plan_context_message_count: int = 5
+    at_user_when_proactive_reply: bool = False
+    repeat_echo_enabled: bool = False
+    repeat_echo_window_seconds: float = 20.0
+    repeat_echo_min_count: int = 2
+    repeat_echo_cooldown_seconds: float = 90.0
 
 
 @dataclass(frozen=True)
@@ -203,10 +205,12 @@ class Config:
         "GROUP_REPLY_INTEREST_REPLY_ENABLED": ("group_reply", "interest_reply_enabled"),
         "GROUP_REPLY_PLAN_REQUEST_INTERVAL": ("group_reply", "plan_request_interval"),
         "GROUP_REPLY_PLAN_MAX_PARALLEL": ("group_reply", "plan_request_max_parallel"),
-        "GROUP_REPLY_BURST_MERGE_ENABLED": ("group_reply", "burst_merge_enabled"),
-        "GROUP_REPLY_BURST_WINDOW_SECONDS": ("group_reply", "burst_window_seconds"),
-        "GROUP_REPLY_BURST_MIN_MESSAGES": ("group_reply", "burst_min_messages"),
-        "GROUP_REPLY_BURST_MAX_MESSAGES": ("group_reply", "burst_max_messages"),
+        "GROUP_REPLY_PLAN_CONTEXT_MESSAGE_COUNT": ("group_reply", "plan_context_message_count"),
+        "GROUP_REPLY_AT_USER_WHEN_PROACTIVE_REPLY": ("group_reply", "at_user_when_proactive_reply"),
+        "GROUP_REPLY_REPEAT_ECHO_ENABLED": ("group_reply", "repeat_echo_enabled"),
+        "GROUP_REPLY_REPEAT_ECHO_WINDOW_SECONDS": ("group_reply", "repeat_echo_window_seconds"),
+        "GROUP_REPLY_REPEAT_ECHO_MIN_COUNT": ("group_reply", "repeat_echo_min_count"),
+        "GROUP_REPLY_REPEAT_ECHO_COOLDOWN_SECONDS": ("group_reply", "repeat_echo_cooldown_seconds"),
         "GROUP_REPLY_DECISION_API_BASE": ("group_reply_decision", "api_base"),
         "GROUP_REPLY_DECISION_API_KEY": ("group_reply_decision", "api_key"),
         "GROUP_REPLY_DECISION_MODEL": ("group_reply_decision", "model"),
@@ -500,19 +504,13 @@ class Config:
             interest_reply_enabled=self._bool_value(section, "group_reply", "interest_reply_enabled", default=True),
             plan_request_interval=self._bounded_float(section, "group_reply", "plan_request_interval", default=3.0, minimum=0.0),
             plan_request_max_parallel=self._bounded_int(section, "group_reply", "plan_request_max_parallel", default=1, minimum=1),
-            burst_merge_enabled=self._bool_value(section, "group_reply", "burst_merge_enabled", default=True),
-            burst_window_seconds=self._bounded_float(section, "group_reply", "burst_window_seconds", default=0.0, minimum=0.0),
-            burst_min_messages=self._bounded_int(section, "group_reply", "burst_min_messages", default=1, minimum=1),
-            burst_max_messages=self._bounded_int(section, "group_reply", "burst_max_messages", default=8, minimum=1),
+            plan_context_message_count=self._bounded_int(section, "group_reply", "plan_context_message_count", default=5, minimum=0),
+            at_user_when_proactive_reply=self._bool_value(section, "group_reply", "at_user_when_proactive_reply", default=False),
+            repeat_echo_enabled=self._bool_value(section, "group_reply", "repeat_echo_enabled", default=False),
+            repeat_echo_window_seconds=self._bounded_float(section, "group_reply", "repeat_echo_window_seconds", default=20.0, minimum=1.0),
+            repeat_echo_min_count=self._bounded_int(section, "group_reply", "repeat_echo_min_count", default=2, minimum=2),
+            repeat_echo_cooldown_seconds=self._bounded_float(section, "group_reply", "repeat_echo_cooldown_seconds", default=90.0, minimum=0.0),
         )
-        if config.burst_max_messages < config.burst_min_messages:
-            self._add_error("group_reply.burst_max_messages must be >= group_reply.burst_min_messages")
-            config = GroupReplyConfig(
-                only_reply_when_at=config.only_reply_when_at, interest_reply_enabled=config.interest_reply_enabled,
-                plan_request_interval=config.plan_request_interval, plan_request_max_parallel=config.plan_request_max_parallel,
-                burst_merge_enabled=config.burst_merge_enabled, burst_window_seconds=config.burst_window_seconds,
-                burst_min_messages=config.burst_min_messages, burst_max_messages=config.burst_min_messages,
-            )
         return config
 
     def _build_group_reply_decision_config(self) -> GroupReplyDecisionConfig:
@@ -615,7 +613,11 @@ class Config:
             self._add_error(f"{section_name}.{key} must be a string or null")
             return None
         stripped = value.strip()
-        return stripped or None
+        if not stripped:
+            return None
+        if stripped.lower() in {"none", "null"}:
+            return None
+        return stripped
 
     def _mapping_value(self, section: Dict[str, Any], section_name: str, key: str, default: Dict[str, Any] | None = None) -> Dict[str, Any]:
         value = section.get(key)

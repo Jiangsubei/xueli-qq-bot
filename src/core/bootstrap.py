@@ -87,15 +87,14 @@ class BotBootstrapper:
         )
         logger.info("[assistant] name: %s", self.config.get_assistant_name())
         logger.info(
-            "[planner] only_at=%s interest=%s interval=%s max_parallel=%s burst_enabled=%s burst_window=%s burst_min=%s burst_max=%s model=%s",
+            "[planner] only_at=%s interest=%s interval=%s max_parallel=%s context_count=%s proactive_at=%s repeat_echo=%s model=%s",
             group_reply.only_reply_when_at,
             group_reply.interest_reply_enabled,
             group_reply.plan_request_interval,
             group_reply.plan_request_max_parallel,
-            group_reply.burst_merge_enabled,
-            group_reply.burst_window_seconds,
-            group_reply.burst_min_messages,
-            group_reply.burst_max_messages,
+            group_reply.plan_context_message_count,
+            group_reply.at_user_when_proactive_reply,
+            group_reply.repeat_echo_enabled,
             decision_config.get("model"),
         )
         logger.info("[planner] configured=%s", is_group_reply_decision_configured(app_config))

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections import deque
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
 
 from src.core.config import GroupReplyConfig, config
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
@@ -17,17 +16,8 @@ logger = logging.getLogger(__name__)
 ImageAnalyzer = Callable[[MessageEvent, str], Awaitable[Dict[str, Any]]]
 
 
-@dataclass
-class PendingGroupPlanRequest:
-    event: MessageEvent
-    user_message: str
-    recent_messages: List[Dict[str, str]]
-    future: asyncio.Future
-    received_at: float
-
-
 class GroupPlanCoordinator:
-    """Coordinate burst buffering, vision enrichment, and planner calls for group messages."""
+    """Coordinate group history, vision enrichment, and planner calls for group messages."""
 
     def __init__(
         self,
@@ -45,21 +35,15 @@ class GroupPlanCoordinator:
         self.image_analyzer = image_analyzer
 
         self.group_plan_locks: Dict[str, asyncio.Lock] = {}
-        self.group_plan_buffer_locks: Dict[str, asyncio.Lock] = {}
-        self.group_plan_buffers: Dict[str, List[PendingGroupPlanRequest]] = {}
-        self.group_plan_flush_tasks: Dict[str, asyncio.Task] = {}
         max_parallel = max(1, int(self.group_reply_config.plan_request_max_parallel or 1))
         self.group_plan_max_parallel = max_parallel
         self.group_plan_semaphore = asyncio.Semaphore(max_parallel)
 
+        self.group_message_history: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._history_limit_floor = 50
+
     async def close(self) -> None:
-        tasks = list(self.group_plan_flush_tasks.values())
-        self.group_plan_flush_tasks.clear()
-        self.group_plan_buffers.clear()
-        if tasks:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        self.group_message_history.clear()
 
     def build_planner_message_info(
         self,
@@ -140,15 +124,15 @@ class GroupPlanCoordinator:
             return ""
 
         lines = [
-            "=== 当前群聊短时间窗口内的连续消息（按时间顺序）===",
-            "如果你决定回复，请结合整段对话自然接话，不要只盯着最后一条消息。",
+            "=== 当前群聊最近上下文（按时间顺序）===",
+            "如果你决定回复，请结合上下文自然接话。最近记录里可能包含助手自己之前的发言。",
         ]
         for index, item in enumerate(window_messages, 1):
-            user_id = item.get("user_id", "unknown")
+            speaker = self._format_window_speaker(item)
             text = str(item.get("text") or item.get("raw_text") or "").strip() or "[空]"
             image_note = f" [图片 {item.get('image_count', 1)} 张]" if item.get("has_image") else ""
-            latest_note = " [最新]" if item.get("is_latest") else ""
-            lines.append(f"{index}. 用户 {user_id}: {text}{image_note}{latest_note}")
+            latest_note = " [当前消息]" if item.get("is_latest") else ""
+            lines.append(f"{index}. {speaker}: {text}{image_note}{latest_note}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
@@ -161,147 +145,122 @@ class GroupPlanCoordinator:
         return "\n".join(lines)
 
     async def plan_group_message(self, event: MessageEvent, user_message: str) -> MessageHandlingPlan:
-        key = self.session_manager.get_key(event)
-        conversation = self.session_manager.get_optional(key)
-        recent_messages = conversation.get_messages(max_length=6) if conversation else []
         group_id = str(event.group_id or "unknown_group")
-        burst_window = self._get_group_burst_window_seconds()
-        burst_merge_enabled = self._is_burst_merge_enabled()
+        history_items = self._get_recent_group_history(group_id)
+        current_message = await self._build_current_message(event=event, user_message=user_message)
+        window_messages = self._compose_window_messages(history_items, current_message)
 
-        if not burst_merge_enabled or burst_window <= 0:
-            window_messages = await self._build_group_window_messages(
-                [
-                    PendingGroupPlanRequest(
-                        event=event,
-                        user_message=user_message,
-                        recent_messages=recent_messages,
-                        future=asyncio.get_running_loop().create_future(),
-                        received_at=time.monotonic(),
-                    )
-                ]
-            )
+        try:
             plan = await self._plan_with_window_messages(
                 event=event,
                 user_message=user_message,
-                recent_messages=recent_messages,
+                recent_messages=[],
                 window_messages=window_messages,
             )
-            plan = self._clone_plan(
-                plan,
-                reply_context=self._merge_reply_context(
-                    self._build_group_window_reply_context(window_messages),
-                    self._build_planner_batch_context(
-                        group_id=group_id,
-                        mode="disabled" if not burst_merge_enabled else "window_off",
-                        batch_size=1,
-                        is_latest=True,
-                    ),
-                ),
-            )
-            self._record_plan_metric(plan.action)
-            return plan
+        finally:
+            self._record_group_user_message(group_id, current_message)
 
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        pending_request = PendingGroupPlanRequest(
-            event=event,
-            user_message=user_message,
-            recent_messages=recent_messages,
-            future=future,
-            received_at=time.monotonic(),
+        reply_context = self._merge_reply_context(
+            self._build_group_window_reply_context(window_messages),
+            self._build_planner_batch_context(
+                group_id=group_id,
+                mode="single",
+                batch_size=1,
+                is_latest=True,
+            ),
         )
+        reply_mode = "proactive" if plan.should_reply else ""
+        if reply_mode:
+            reply_context["reply_mode"] = reply_mode
+        plan = self._clone_plan(plan, reply_context=reply_context)
+        self._record_plan_metric(plan.action)
+        return plan
 
-        buffer_lock = self.group_plan_buffer_locks.setdefault(group_id, asyncio.Lock())
-        async with buffer_lock:
-            batch = self.group_plan_buffers.setdefault(group_id, [])
-            batch.append(pending_request)
-            batch_size = len(batch)
-            max_messages = self._get_group_burst_max_messages()
-            min_messages = self._get_group_burst_min_messages()
-            flush_delay = self._get_group_plan_flush_delay(batch, burst_window)
-
-            logger.info(
-                "[planner_buffer] queued group=%s size=%s min=%s max=%s flush_in=%.2fs message_id=%s user=%s",
-                group_id,
-                batch_size,
-                min_messages,
-                max_messages,
-                flush_delay,
-                event.message_id,
-                event.user_id,
-            )
-
-            if batch_size >= max_messages:
-                self._schedule_group_plan_flush(group_id, 0)
-            else:
-                self._schedule_group_plan_flush(group_id, flush_delay)
-
-        return await future
-
-    def _is_burst_merge_enabled(self) -> bool:
-        value = self._get_legacy_group_reply_value(
-            "GROUP_REPLY_BURST_MERGE_ENABLED",
-            self.group_reply_config.burst_merge_enabled,
-        )
-        return bool(value)
-
-    def _get_group_burst_window_seconds(self) -> float:
-        value = self._get_legacy_group_reply_value(
-            "GROUP_REPLY_BURST_WINDOW_SECONDS",
-            self.group_reply_config.burst_window_seconds,
-        )
-        return max(0.0, float(value or 0))
-
-    def _get_group_burst_min_messages(self) -> int:
-        value = self._get_legacy_group_reply_value(
-            "GROUP_REPLY_BURST_MIN_MESSAGES",
-            self.group_reply_config.burst_min_messages,
-        )
-        return max(1, int(value or 1))
-
-    def _get_group_burst_max_messages(self) -> int:
-        value = self._get_legacy_group_reply_value(
-            "GROUP_REPLY_BURST_MAX_MESSAGES",
-            self.group_reply_config.burst_max_messages,
-        )
-        return max(1, int(value or 8))
+    async def record_assistant_reply(self, group_id: Optional[int], message: str) -> None:
+        text = str(message or "").strip()
+        if group_id is None or not text:
+            return
+        group_key = str(group_id)
+        item = {
+            "message_id": 0,
+            "user_id": "",
+            "speaker_role": "assistant",
+            "speaker_name": config.get_assistant_name(),
+            "text": text,
+            "text_content": text,
+            "raw_text": text,
+            "has_image": False,
+            "raw_has_image": False,
+            "image_context_enabled": False,
+            "image_count": 0,
+            "raw_image_count": 0,
+            "text_present": bool(text),
+            "is_image_only": False,
+            "message_shape": "text_only",
+            "image_file_ids": [],
+            "per_image_descriptions": [],
+            "merged_description": "",
+            "vision_available": False,
+            "vision_failure_count": 0,
+            "vision_success_count": 0,
+            "vision_source": "",
+            "vision_error": "",
+        }
+        self._append_group_history(group_key, item)
 
     def _get_plan_request_interval(self) -> float:
-        value = self._get_legacy_group_reply_value(
-            "GROUP_REPLY_PLAN_REQUEST_INTERVAL",
-            self.group_reply_config.plan_request_interval,
+        return max(0.0, float(self.group_reply_config.plan_request_interval or 0))
+
+    def _get_plan_context_message_count(self) -> int:
+        return max(0, int(self.group_reply_config.plan_context_message_count or 0))
+
+    def _max_history_buffer_size(self) -> int:
+        return max(self._history_limit_floor, self._get_plan_context_message_count() + 10)
+
+    def _history_deque(self, group_id: str) -> Deque[Dict[str, Any]]:
+        history = self.group_message_history.get(group_id)
+        maxlen = self._max_history_buffer_size()
+        if history is None or history.maxlen != maxlen:
+            preserved = list(history or [])
+            history = deque(preserved[-maxlen:], maxlen=maxlen)
+            self.group_message_history[group_id] = history
+        return history
+
+    def _append_group_history(self, group_id: str, item: Dict[str, Any]) -> None:
+        self._history_deque(group_id).append(dict(item))
+
+    def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
+        count = self._get_plan_context_message_count()
+        if count <= 0:
+            return []
+        history = list(self._history_deque(group_id))
+        return [dict(item) for item in history[-count:]]
+
+    async def _build_current_message(self, *, event: MessageEvent, user_message: str) -> Dict[str, Any]:
+        image_analysis = await self._analyze_images_for_event(event, user_message)
+        planner_message = self.build_planner_message_info(
+            event,
+            user_message,
+            image_analysis=image_analysis,
+            include_image_context=self.image_analyzer is not None,
         )
-        return max(0.0, float(value or 0))
+        return {
+            "message_id": int(event.message_id or 0),
+            "user_id": str(event.user_id),
+            "speaker_role": "user",
+            "speaker_name": str(event.user_id),
+            **planner_message,
+        }
 
-    def _get_legacy_group_reply_value(self, attr_name: str, default: Any) -> Any:
-        legacy_value = getattr(config, attr_name, None)
-        return default if legacy_value is None else legacy_value
-
-    def _sort_group_plan_batch(self, batch: List[PendingGroupPlanRequest]) -> List[PendingGroupPlanRequest]:
-        return sorted(
-            batch,
-            key=lambda item: (float(item.received_at or 0), int(getattr(item.event, "message_id", 0) or 0)),
-        )
-
-    def _get_group_plan_flush_delay(
-        self,
-        batch: List[PendingGroupPlanRequest],
-        burst_window: float,
-    ) -> float:
-        if burst_window <= 0 or not batch:
-            return 0.0
-        latest_message_time = max(float(item.received_at or 0) for item in batch)
-        elapsed = max(0.0, time.monotonic() - latest_message_time)
-        return max(0.0, burst_window - elapsed)
-
-    async def _analyze_images_for_request(self, item: PendingGroupPlanRequest) -> Dict[str, Any]:
-        if not item.event.has_image() or self.image_analyzer is None:
+    async def _analyze_images_for_event(self, event: MessageEvent, user_message: str) -> Dict[str, Any]:
+        if not event.has_image() or self.image_analyzer is None:
             return {}
         try:
-            return await self.image_analyzer(item.event, item.user_message)
+            return await self.image_analyzer(event, user_message)
         except Exception as exc:
             logger.warning(
                 "[planner] image analysis failed before planning: message_id=%s error=%s",
-                item.event.message_id,
+                event.message_id,
                 exc,
                 exc_info=True,
             )
@@ -309,37 +268,31 @@ class GroupPlanCoordinator:
                 "per_image_descriptions": [],
                 "merged_description": "",
                 "vision_success_count": 0,
-                "vision_failure_count": len(item.event.get_image_segments()),
+                "vision_failure_count": len(event.get_image_segments()),
                 "vision_source": "vision_error",
                 "vision_error": str(exc),
                 "vision_available": False,
             }
 
-    async def _build_group_window_messages(self, batch: List[PendingGroupPlanRequest]) -> List[Dict[str, Any]]:
+    def _compose_window_messages(
+        self,
+        history_items: List[Dict[str, Any]],
+        current_message: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         window_messages: List[Dict[str, Any]] = []
-        sorted_batch = self._sort_group_plan_batch(batch)
-        selected_batch = sorted_batch[-self._get_group_burst_max_messages() :]
-        image_analyses = await asyncio.gather(
-            *(self._analyze_images_for_request(item) for item in selected_batch),
-            return_exceptions=False,
-        )
-        latest_index = len(selected_batch) - 1
-        for index, item in enumerate(selected_batch):
-            planner_message = self.build_planner_message_info(
-                item.event,
-                item.user_message,
-                image_analysis=image_analyses[index],
-                include_image_context=self.image_analyzer is not None,
-            )
-            window_messages.append(
-                {
-                    "message_id": item.event.message_id,
-                    "user_id": str(item.event.user_id),
-                    **planner_message,
-                    "is_latest": index == latest_index,
-                }
-            )
+        for item in history_items:
+            copied = dict(item)
+            copied["is_latest"] = False
+            window_messages.append(copied)
+        latest = dict(current_message)
+        latest["is_latest"] = True
+        window_messages.append(latest)
         return window_messages
+
+    def _record_group_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
+        persisted = dict(current_message)
+        persisted.pop("is_latest", None)
+        self._append_group_history(group_id, persisted)
 
     def _build_group_window_reply_context(self, window_messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {
@@ -435,14 +388,17 @@ class GroupPlanCoordinator:
         )
 
     def _has_plannable_text(self, window_messages: List[Dict[str, Any]]) -> bool:
-        for item in window_messages:
-            text_content = str(item.get("text_content") or "").strip()
-            if text_content:
-                return True
-            planner_text = str(item.get("text") or "").strip()
-            if planner_text and planner_text != "[空]":
-                return True
-        return False
+        latest_message = next(
+            (item for item in reversed(window_messages) if item.get("is_latest")),
+            window_messages[-1] if window_messages else None,
+        )
+        if not latest_message:
+            return False
+        text_content = str(latest_message.get("text_content") or "").strip()
+        if text_content:
+            return True
+        planner_text = str(latest_message.get("text") or "").strip()
+        return bool(planner_text and planner_text != "[空]")
 
     async def _plan_with_window_messages(
         self,
@@ -465,7 +421,7 @@ class GroupPlanCoordinator:
                 return fallback_plan
             return self._build_rule_plan(
                 MessagePlanAction.IGNORE,
-                "未启用视觉模型且窗口内没有可用文本，跳过本轮群聊规划",
+                "未启用视觉模型且当前消息没有可用文本，跳过本轮群聊规划",
                 source="no_text_content",
             )
         fallback_plan = self._build_vision_fallback_plan(latest_message)
@@ -476,12 +432,6 @@ class GroupPlanCoordinator:
             planner_user_message = str(
                 latest_message.get("text_content") or latest_message.get("text") or ""
             ).strip()
-        if not planner_user_message or planner_user_message == "[空]":
-            for item in reversed(window_messages):
-                candidate = str(item.get("text_content") or item.get("text") or "").strip()
-                if candidate and candidate != "[空]":
-                    planner_user_message = candidate
-                    break
         planner_user_message = planner_user_message or user_message
         return await self._execute_group_plan(
             event=event,
@@ -513,184 +463,13 @@ class GroupPlanCoordinator:
                 await asyncio.sleep(cooldown)
             return plan
 
-    def _schedule_group_plan_flush(self, group_id: str, delay: float) -> None:
-        task = self.group_plan_flush_tasks.get(group_id)
-        if task and not task.done():
-            task.cancel()
-        self.group_plan_flush_tasks[group_id] = asyncio.create_task(
-            self._flush_group_plan_after_delay(group_id, max(0.0, delay))
-        )
-
-    async def _flush_group_plan_after_delay(self, group_id: str, delay: float) -> None:
-        try:
-            if delay > 0:
-                await asyncio.sleep(delay)
-            await self._flush_group_plan(group_id)
-        except asyncio.CancelledError:
-            return
-
-    async def _flush_group_plan(self, group_id: str) -> None:
-        buffer_lock = self.group_plan_buffer_locks.setdefault(group_id, asyncio.Lock())
-        async with buffer_lock:
-            batch = self.group_plan_buffers.get(group_id, [])
-            if not batch:
-                return
-            self.group_plan_buffers[group_id] = []
-            self.group_plan_flush_tasks.pop(group_id, None)
-
-        ordered_batch = self._sort_group_plan_batch(batch)
-        batch_size = len(ordered_batch)
-        min_messages = self._get_group_burst_min_messages()
-        if batch_size < min_messages:
-            logger.info(
-                "[planner_buffer] flush group=%s size=%s mode=individual threshold=%s",
-                group_id,
-                batch_size,
-                min_messages,
-            )
-            await self._flush_group_plan_individually(group_id, ordered_batch)
-            return
-
-        latest_request = ordered_batch[-1]
-        window_messages = await self._build_group_window_messages(ordered_batch)
-
-        logger.info(
-            "[planner_buffer] flush group=%s size=%s mode=burst latest_message_id=%s latest_user=%s",
-            group_id,
-            batch_size,
-            latest_request.event.message_id,
-            latest_request.event.user_id,
-        )
-
-        try:
-            plan = await self._plan_with_window_messages(
-                event=latest_request.event,
-                user_message=latest_request.user_message,
-                recent_messages=latest_request.recent_messages,
-                window_messages=window_messages,
-            )
-        except Exception as exc:
-            logger.exception("[planner] batch planning failed: group=%s error=%s", group_id, exc)
-            plan = self._build_rule_plan(
-                MessagePlanAction.IGNORE,
-                "群聊规划异常，回退为忽略",
-                source="fallback",
-            )
-
-        latest_reply_context = self._merge_reply_context(
-            self._build_group_window_reply_context(window_messages),
-            self._build_planner_batch_context(
-                group_id=group_id,
-                mode="burst",
-                batch_size=batch_size,
-                is_latest=True,
-            ),
-        )
-        if plan.should_reply:
-            plan = self._clone_plan(plan, reply_context=latest_reply_context)
-        else:
-            plan = self._clone_plan(
-                plan,
-                reply_context=self._merge_reply_context(
-                    plan.reply_context,
-                    self._build_planner_batch_context(
-                        group_id=group_id,
-                        mode="burst",
-                        batch_size=batch_size,
-                        is_latest=True,
-                    ),
-                ),
-            )
-
-        for item in ordered_batch:
-            if item.future.done():
-                continue
-            if plan.should_reply and item is latest_request:
-                self._record_plan_metric(plan.action)
-                item.future.set_result(plan)
-                continue
-            if plan.should_reply:
-                self._record_plan_metric(MessagePlanAction.WAIT.value, source="burst_merge")
-                item.future.set_result(
-                    self._clone_plan(
-                        self._build_rule_plan(
-                            MessagePlanAction.WAIT,
-                            "当前消息已并入同一热聊窗口，由较新的群消息统一触发回复",
-                            source="burst_merge",
-                        ),
-                        reply_context=self._merge_reply_context(
-                            None,
-                            self._build_planner_batch_context(
-                                group_id=group_id,
-                                mode="burst",
-                                batch_size=batch_size,
-                                is_latest=False,
-                                merged_into_latest=True,
-                            ),
-                        ),
-                    )
-                )
-                continue
-            self._record_plan_metric(plan.action)
-            item.future.set_result(
-                self._clone_plan(
-                    plan,
-                    reply_context=self._merge_reply_context(
-                        plan.reply_context,
-                        self._build_planner_batch_context(
-                            group_id=group_id,
-                            mode="burst",
-                            batch_size=batch_size,
-                            is_latest=item is latest_request,
-                        ),
-                    ),
-                )
-            )
-
-    async def _flush_group_plan_individually(
-        self,
-        group_id: str,
-        batch: List[PendingGroupPlanRequest],
-    ) -> None:
-        batch_size = len(batch)
-        for item in batch:
-            if item.future.done():
-                continue
-
-            try:
-                window_messages = await self._build_group_window_messages([item])
-                plan = await self._plan_with_window_messages(
-                    event=item.event,
-                    user_message=item.user_message,
-                    recent_messages=item.recent_messages,
-                    window_messages=window_messages,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "[planner] individual planning failed: group=%s message_id=%s error=%s",
-                    group_id,
-                    item.event.message_id,
-                    exc,
-                )
-                plan = self._build_rule_plan(
-                    MessagePlanAction.IGNORE,
-                    "群聊规划异常，回退为忽略",
-                    source="fallback",
-                )
-                window_messages = []
-
-            reply_context = self._merge_reply_context(
-                self._build_group_window_reply_context(window_messages) if window_messages else plan.reply_context,
-                self._build_planner_batch_context(
-                    group_id=group_id,
-                    mode="individual",
-                    batch_size=batch_size,
-                    is_latest=True,
-                ),
-            )
-            plan = self._clone_plan(plan, reply_context=reply_context)
-            self._record_plan_metric(plan.action)
-            item.future.set_result(plan)
+    def _format_window_speaker(self, item: Dict[str, Any]) -> str:
+        role = str(item.get("speaker_role") or "user").strip().lower()
+        if role == "assistant":
+            name = str(item.get("speaker_name") or config.get_assistant_name()).strip()
+            return f"助手 {name or config.get_assistant_name()}"
+        user_id = str(item.get("user_id") or item.get("speaker_name") or "unknown").strip() or "unknown"
+        return f"用户 {user_id}"
 
     def _record_plan_metric(self, action: str, source: str = "") -> None:
         if self.runtime_metrics:

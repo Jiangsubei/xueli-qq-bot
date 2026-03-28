@@ -40,6 +40,7 @@ SNAPSHOT_FIELDS = (
     "uptime",
     "active_conversations",
     "active_tasks",
+    "group_repeat_echo",
     "emoji_total",
     "emoji_pending",
     "memory_reads",
@@ -82,12 +83,11 @@ FIELD_HELP = {
         "dialogue_style": "写助手平时怎么说话。",
         "rate_limit_interval": "两次回复之间至少间隔多久。",
         "log_full_prompt": "打开后，会在日志里记下完整提示内容。",
-        "plan_request_interval": "群里再次判断要不要接话前要等多久。",
-        "plan_request_max_parallel": "同时最多可以处理几个群聊判断。",
-        "burst_merge_enabled": "打开后，会把短时间内的多条消息合起来看。",
-        "burst_window_seconds": "多久内的消息会被当成同一批。",
-        "burst_min_messages": "至少有几条消息才会进行合并。",
-        "burst_max_messages": "一批最多合并几条消息。",
+        "plan_request_interval": "Cooldown between proactive planning requests in the same group.",
+        "plan_request_max_parallel": "Maximum number of group planning requests running at the same time.",
+        "plan_context_message_count": "How many recent group records to include for planning. This history also contains assistant replies.",
+        "at_user_when_proactive_reply": "Whether proactive group replies should @ the triggering user. Explicit @ replies still @ back, repeat echo never does.",
+        "repeat_echo_enabled": "\u6253\u5f00\u540e\uff0c\u7fa4\u91cc\u77ed\u65f6\u95f4\u5185\u91cd\u590d\u4e24\u6b21\u4ee5\u4e0a\u7684\u77ed\u6d88\u606f\u4f1a\u88ab\u52a9\u624b\u590d\u8bfb\u4e00\u6b21\u3002",
         "behavior": "用来约束助手什么能做，什么不能做。",
     },
     "emoji": {
@@ -109,7 +109,7 @@ FIELD_HELP = {
         "bm25_top_k": "数字越大，助手一次会翻更多候选记忆。",
         "rerank_top_k": "从初筛结果里拿几条再进一步精排。",
         "extract_every_n_turns": "每聊几轮后尝试整理一次新记忆。",
-        "conversation_save_interval": "聊天过程多久落盘一次。",
+        "conversation_save_interval": "How many turns to accumulate before refreshing the current session file on disk.",
         "ordinary_decay_enabled": "打开后，不太重要的记忆会随时间慢慢变淡。",
         "ordinary_half_life_days": "普通记忆大约多久会衰减一半。",
         "ordinary_forget_threshold": "降到这个程度后，就会被当成可以遗忘。",
@@ -170,6 +170,15 @@ def _format_optional_count(value: Any) -> str:
     if value in (None, ""):
         return "--"
     return str(_safe_int(value))
+
+
+def _normalize_nullable_string(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.lower() in {"none", "null"}:
+        return None
+    return text
 
 
 def _format_uptime(value: Any, online: bool) -> str:
@@ -388,6 +397,7 @@ def _build_runtime_payload(app_config, snapshot_state: Dict[str, Any]) -> Dict[s
         "uptime": _format_uptime(payload.get("uptime_seconds"), available),
         "active_conversations": _format_count(activity.get("active_conversations"), available),
         "active_tasks": _format_count(activity.get("active_message_tasks"), available),
+        "group_repeat_echo": _format_optional_count((payload.get("planner") or {}).get("group_repeat_echo")),
         "emoji_total": _format_optional_count(emoji_stats.get("emoji_total")),
         "emoji_pending": _format_optional_count(emoji_stats.get("emoji_pending_classification")),
         "memory_reads": _format_optional_count(memory.get("memory_reads")),
@@ -824,10 +834,9 @@ def build_dashboard_context() -> Dict[str, Any]:
             "log_full_prompt": bool(app_config.bot_behavior.log_full_prompt),
             "plan_request_interval": app_config.group_reply.plan_request_interval,
             "plan_request_max_parallel": app_config.group_reply.plan_request_max_parallel,
-            "burst_merge_enabled": bool(app_config.group_reply.burst_merge_enabled),
-            "burst_window_seconds": app_config.group_reply.burst_window_seconds,
-            "burst_min_messages": app_config.group_reply.burst_min_messages,
-            "burst_max_messages": app_config.group_reply.burst_max_messages,
+            "plan_context_message_count": app_config.group_reply.plan_context_message_count,
+            "at_user_when_proactive_reply": bool(app_config.group_reply.at_user_when_proactive_reply),
+            "repeat_echo_enabled": bool(app_config.group_reply.repeat_echo_enabled),
             "behavior": app_config.behavior.content,
         },
         "emoji_form": {
@@ -1042,46 +1051,46 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     decision = dict(raw.get("group_reply_decision") or {})
     decision_payload = dict(payload.get("group_reply_decision") or {})
-    decision["api_base"] = str(decision_payload.get("api_base") or decision.get("api_base") or "").strip() or None
-    decision["model"] = str(decision_payload.get("model") or decision.get("model") or "").strip() or None
+    decision["api_base"] = _normalize_nullable_string(decision_payload.get("api_base") or decision.get("api_base"))
+    decision["model"] = _normalize_nullable_string(decision_payload.get("model") or decision.get("model"))
     decision["api_key"] = _preserve_secret(decision.get("api_key", ""), decision_payload.get("api_key")) or None
     decision["extra_params"] = _rows_to_mapping(decision_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
     decision["extra_headers"] = _rows_to_mapping(decision_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
-    decision["response_path"] = str(decision_payload.get("response_path") or "").strip() or None
+    decision["response_path"] = _normalize_nullable_string(decision_payload.get("response_path"))
     raw["group_reply_decision"] = decision
 
     vision = dict(raw.get("vision_service") or {})
     vision_payload = dict(payload.get("vision_service") or {})
-    vision_api_base = str(vision_payload.get("api_base") or vision.get("api_base") or "").strip() or None
-    vision_model = str(vision_payload.get("model") or vision.get("model") or "").strip() or None
+    vision_api_base = _normalize_nullable_string(vision_payload.get("api_base") or vision.get("api_base"))
+    vision_model = _normalize_nullable_string(vision_payload.get("model") or vision.get("model"))
     vision_api_key = _preserve_secret(vision.get("api_key", ""), vision_payload.get("api_key")) or None
     vision["api_base"] = vision_api_base
     vision["model"] = vision_model
     vision["api_key"] = vision_api_key
     vision["extra_params"] = _rows_to_mapping(vision_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
     vision["extra_headers"] = _rows_to_mapping(vision_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
-    vision["response_path"] = str(vision_payload.get("response_path") or "").strip() or None
+    vision["response_path"] = _normalize_nullable_string(vision_payload.get("response_path"))
     vision["enabled"] = bool(vision_api_base and vision_model and vision_api_key)
     raw["vision_service"] = vision
 
     memory_rerank = dict(raw.get("memory_rerank") or {})
     rerank_payload = dict(payload.get("memory_rerank") or {})
-    memory_rerank["api_base"] = str(rerank_payload.get("api_base") or memory_rerank.get("api_base") or "").strip() or None
-    memory_rerank["model"] = str(rerank_payload.get("model") or memory_rerank.get("model") or "").strip() or None
+    memory_rerank["api_base"] = _normalize_nullable_string(rerank_payload.get("api_base") or memory_rerank.get("api_base"))
+    memory_rerank["model"] = _normalize_nullable_string(rerank_payload.get("model") or memory_rerank.get("model"))
     memory_rerank["api_key"] = _preserve_secret(memory_rerank.get("api_key", ""), rerank_payload.get("api_key")) or None
     memory_rerank["extra_params"] = _rows_to_mapping(rerank_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
     memory_rerank["extra_headers"] = _rows_to_mapping(rerank_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
-    memory_rerank["response_path"] = str(rerank_payload.get("response_path") or "").strip() or None
+    memory_rerank["response_path"] = _normalize_nullable_string(rerank_payload.get("response_path"))
     raw["memory_rerank"] = memory_rerank
 
     memory = dict(raw.get("memory") or {})
     extraction_payload = dict(payload.get("memory_extraction") or {})
-    memory["extraction_api_base"] = str(extraction_payload.get("api_base") or memory.get("extraction_api_base") or "").strip() or None
-    memory["extraction_model"] = str(extraction_payload.get("model") or memory.get("extraction_model") or "").strip() or None
+    memory["extraction_api_base"] = _normalize_nullable_string(extraction_payload.get("api_base") or memory.get("extraction_api_base"))
+    memory["extraction_model"] = _normalize_nullable_string(extraction_payload.get("model") or memory.get("extraction_model"))
     memory["extraction_api_key"] = _preserve_secret(memory.get("extraction_api_key", ""), extraction_payload.get("api_key")) or None
     memory["extraction_extra_params"] = _rows_to_mapping(extraction_payload.get("extra_params_rows"), smart_values=True, empty_as_none=True)
     memory["extraction_extra_headers"] = _rows_to_mapping(extraction_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
-    memory["extraction_response_path"] = str(extraction_payload.get("response_path") or "").strip() or None
+    memory["extraction_response_path"] = _normalize_nullable_string(extraction_payload.get("response_path"))
     raw["memory"] = memory
 
     _write_validated_config(raw)
@@ -1109,10 +1118,13 @@ def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     group_reply.update(_parse_group_strategy(payload.get("group_strategy")))
     group_reply["plan_request_interval"] = _coerce_float(payload.get("plan_request_interval"), default=float(group_reply.get("plan_request_interval", 3.0) or 3.0))
     group_reply["plan_request_max_parallel"] = _coerce_int(payload.get("plan_request_max_parallel"), default=_safe_int(group_reply.get("plan_request_max_parallel"), 1))
-    group_reply["burst_merge_enabled"] = _coerce_bool(payload.get("burst_merge_enabled"), default=bool(group_reply.get("burst_merge_enabled", True)))
-    group_reply["burst_window_seconds"] = _coerce_float(payload.get("burst_window_seconds"), default=float(group_reply.get("burst_window_seconds", 0.0) or 0.0))
-    group_reply["burst_min_messages"] = _coerce_int(payload.get("burst_min_messages"), default=_safe_int(group_reply.get("burst_min_messages"), 1))
-    group_reply["burst_max_messages"] = _coerce_int(payload.get("burst_max_messages"), default=_safe_int(group_reply.get("burst_max_messages"), 8))
+    group_reply["plan_context_message_count"] = _coerce_int(payload.get("plan_context_message_count"), default=_safe_int(group_reply.get("plan_context_message_count"), 5))
+    group_reply["at_user_when_proactive_reply"] = _coerce_bool(payload.get("at_user_when_proactive_reply"), default=bool(group_reply.get("at_user_when_proactive_reply", False)))
+    group_reply.pop("burst_merge_enabled", None)
+    group_reply.pop("burst_window_seconds", None)
+    group_reply.pop("burst_min_messages", None)
+    group_reply.pop("burst_max_messages", None)
+    group_reply["repeat_echo_enabled"] = _coerce_bool(payload.get("repeat_echo_enabled"), default=bool(group_reply.get("repeat_echo_enabled", False)))
     raw["group_reply"] = group_reply
 
     personality = dict(raw.get("personality") or {})

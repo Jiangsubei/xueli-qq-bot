@@ -24,7 +24,7 @@ class RuntimeMetrics:
             "planner_reply": 0,
             "planner_wait": 0,
             "planner_ignore": 0,
-            "planner_burst_merge": 0,
+            "group_repeat_echo": 0,
             "vision_requests": 0,
             "vision_images_processed": 0,
             "vision_failures": 0,
@@ -86,7 +86,6 @@ class RuntimeMetrics:
 
     def record_planner_action(self, action: str, *, source: str = "") -> None:
         normalized_action = str(action or "").strip().lower()
-        normalized_source = str(source or "").strip().lower()
         with self._lock:
             if normalized_action == "reply":
                 self._state["planner_reply"] += 1
@@ -94,8 +93,10 @@ class RuntimeMetrics:
                 self._state["planner_wait"] += 1
             elif normalized_action == "ignore":
                 self._state["planner_ignore"] += 1
-            if normalized_source == "burst_merge":
-                self._state["planner_burst_merge"] += 1
+
+    def record_group_repeat_echo(self, count: int = 1) -> None:
+        with self._lock:
+            self._state["group_repeat_echo"] += max(0, int(count))
 
     def record_vision_request(
         self,

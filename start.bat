@@ -1,42 +1,55 @@
 @echo off
+setlocal
+pushd "%~dp0"
 chcp 65001 >nul
+
 echo.
 echo ========================================
-echo     QQ AI 机器人启动器
+echo        QQ AI Launcher
 echo ========================================
 echo.
 
-:: 检查 Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [错误] 未找到 Python，请先安装 Python 3.8+
+    echo [ERROR] Python was not found. Please install Python 3.8+ first.
     pause
     exit /b 1
 )
 
-:: 检查虚拟环境
 if not exist "venv" (
-    echo [信息] 创建虚拟环境...
+    echo [INFO] Creating virtual environment...
     python -m venv venv
+    if errorlevel 1 (
+        echo [ERROR] Failed to create virtual environment.
+        pause
+        exit /b 1
+    )
 )
 
-:: 激活虚拟环境
-echo [信息] 激活虚拟环境...
+echo [INFO] Activating virtual environment...
 call venv\Scripts\activate.bat
+if errorlevel 1 (
+    echo [ERROR] Failed to activate virtual environment.
+    pause
+    exit /b 1
+)
 
-:: 检查依赖
-echo [信息] 检查依赖...
+echo [INFO] Installing dependencies...
 pip install -q -r requirements.txt
+if errorlevel 1 (
+    echo [ERROR] Failed to install dependencies.
+    pause
+    exit /b 1
+)
 
-:: 检查配置文件
 if not exist ".env" (
     echo.
-    echo [警告] 未找到 .env 配置文件！
-    echo [信息] 正在从示例创建...
-    copy .env.example .env
+    echo [WARN] .env was not found.
+    echo [INFO] Creating .env from .env.example...
+    copy /Y .env.example .env >nul
     echo.
     echo ========================================
-    echo 请编辑 .env 文件，填入你的配置后重新运行
+    echo Edit .env and run start.bat again.
     echo ========================================
     echo.
     notepad .env
@@ -44,19 +57,21 @@ if not exist ".env" (
     exit /b 1
 )
 
-:: 启动机器人
 echo.
 echo ========================================
-echo 正在启动机器人...
-echo 按 Ctrl+C 停止
+echo Starting bot and WebUI...
+echo Press Ctrl+C to stop.
 echo ========================================
 echo.
 
 python main.py
+set "APP_EXIT=%ERRORLEVEL%"
 
-:: 退出虚拟环境
-call venv\Scripts\deactivate.bat
+if exist "venv\Scripts\deactivate.bat" (
+    call venv\Scripts\deactivate.bat
+)
 
 echo.
-echo 机器人已停止
+echo Service stopped.
 pause
+exit /b %APP_EXIT%

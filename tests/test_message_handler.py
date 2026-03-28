@@ -1,4 +1,4 @@
-﻿import shutil
+import shutil
 import unittest
 import uuid
 from pathlib import Path
@@ -101,13 +101,13 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.text.strip())
 
     async def test_get_ai_response_returns_ai_source_for_normal_reply(self):
-        handler = self.create_handler(ai_client=DummyAIClient(responses=[AIResponse(content="收到")]), app_config=AppConfig())
-        event = build_event("你好")
+        handler = self.create_handler(ai_client=DummyAIClient(responses=[AIResponse(content="??")]), app_config=AppConfig())
+        event = build_event("??")
 
         result = await handler.get_ai_response(event)
 
         self.assertEqual("ai", result.source)
-        self.assertEqual("收到", result.text)
+        self.assertEqual("??", result.text)
 
     async def test_analyze_event_images_detects_and_persists_stickers(self):
         storage_dir = self.make_storage_dir()
@@ -115,13 +115,13 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
         vision_client = AvailableDummyVisionClient(
             results=[
                 DummyVisionResult(
-                    per_image_descriptions=["一张生气小猫表情包"],
-                    merged_description="一张生气小猫表情包",
+                    per_image_descriptions=["?????????"],
+                    merged_description="?????????",
                     success_count=1,
                     failure_count=0,
                     sticker_flags=[True],
                     sticker_confidences=[0.97],
-                    sticker_reasons=["典型 reaction image"],
+                    sticker_reasons=["?? reaction image"],
                 )
             ]
         )
@@ -147,9 +147,9 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
             app_config=app_config,
         )
         await handler.initialize()
-        event = build_event("看图", image_count=1, message_id=9)
+        event = build_event("??", image_count=1, message_id=9)
 
-        result = await handler.analyze_event_images(event, "看图")
+        result = await handler.analyze_event_images(event, "??")
 
         self.assertEqual(1, result["sticker_count"])
         self.assertEqual([True], result["sticker_flags"])
@@ -161,7 +161,7 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plan_emoji_follow_up_skips_non_ai_reply_sources(self):
         handler = self.create_handler()
-        event = build_event("你好", message_type="group")
+        event = build_event("??", message_type="group")
         plan = MessageHandlingPlan(action="reply", reason="test")
 
         selection = await handler.plan_emoji_follow_up(
@@ -186,7 +186,7 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         handler = self.create_handler(app_config=app_config)
 
-        normal_event = build_event("大家好", message_type="group")
+        normal_event = build_event("???", message_type="group")
         normal_plan = await handler.plan_message(normal_event)
         self.assertEqual("ignore", normal_plan.action)
         self.assertEqual("rule", normal_plan.source)
@@ -199,7 +199,70 @@ class MessageHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("rule", at_plan.source)
         self.assertTrue(handler.should_process(at_event))
 
+    async def test_group_repeat_echo_replies_once_without_model_planner(self):
+        app_config = AppConfig(
+            group_reply=GroupReplyConfig(
+                only_reply_when_at=False,
+                interest_reply_enabled=True,
+                repeat_echo_enabled=True,
+                repeat_echo_window_seconds=20.0,
+                repeat_echo_min_count=2,
+                repeat_echo_cooldown_seconds=90.0,
+            ),
+            group_reply_decision=GroupReplyDecisionConfig(api_base=None, api_key=None, model=None),
+        )
+        handler = self.create_handler(app_config=app_config)
+
+        first_event = build_event("??", message_type="group", user_id=1001)
+        first_plan = await handler.plan_message(first_event)
+        self.assertEqual("ignore", first_plan.action)
+
+        second_event = build_event("??", message_type="group", user_id=1002)
+        second_plan = await handler.plan_message(second_event)
+        self.assertEqual("reply", second_plan.action)
+        self.assertEqual("repeat_echo", second_plan.source)
+
+        reply = await handler.get_ai_response(second_event, plan=second_plan)
+        self.assertEqual("??", reply.text)
+        self.assertEqual("repeat_echo", reply.source)
+
+    def test_resolve_group_at_user_for_explicit_at(self):
+        handler = self.create_handler(app_config=AppConfig(group_reply=GroupReplyConfig(at_user_when_proactive_reply=False)))
+        event = build_event("??", message_type="group", user_id=2024)
+        plan = MessageHandlingPlan(action="reply", reason="at", reply_context={"reply_mode": "at"})
+
+        self.assertEqual(2024, handler.resolve_group_at_user(event, plan))
+
+    def test_resolve_group_at_user_for_proactive_reply_depends_on_config(self):
+        event = build_event("??", message_type="group", user_id=2025)
+        proactive_plan = MessageHandlingPlan(action="reply", reason="planner", reply_context={"reply_mode": "proactive"})
+
+        handler_without_at = self.create_handler(app_config=AppConfig(group_reply=GroupReplyConfig(at_user_when_proactive_reply=False)))
+        handler_with_at = self.create_handler(app_config=AppConfig(group_reply=GroupReplyConfig(at_user_when_proactive_reply=True)))
+
+        self.assertIsNone(handler_without_at.resolve_group_at_user(event, proactive_plan))
+        self.assertEqual(2025, handler_with_at.resolve_group_at_user(event, proactive_plan))
+
+    def test_resolve_group_at_user_for_repeat_echo_never_mentions_user(self):
+        handler = self.create_handler(app_config=AppConfig(group_reply=GroupReplyConfig(at_user_when_proactive_reply=True)))
+        event = build_event("??", message_type="group", user_id=3030)
+        plan = MessageHandlingPlan(action="reply", reason="repeat", reply_context={"reply_mode": "repeat_echo"})
+
+        self.assertIsNone(handler.resolve_group_at_user(event, plan))
+
+    async def test_reset_command_flushes_current_memory_session(self):
+        memory_manager = DummyMemoryManager()
+        handler = self.create_handler(memory_manager=memory_manager)
+        event = build_event("/reset", message_type="group", user_id=4040)
+
+        result = handler.command_handler.handle("/reset", event)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [{"user_id": "4040", "message_type": "group", "group_id": "456"}],
+            memory_manager.flush_calls,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

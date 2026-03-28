@@ -173,8 +173,9 @@ class QQBot:
             if not reply_result or not reply_result.text:
                 return
 
-            sent = await self._send_response(event, reply_result.text)
+            sent = await self._send_response(event, reply_result.text, plan=plan)
             if sent:
+                await self.message_handler.record_group_reply_sent(event, reply_result.text)
                 await self._send_emoji_follow_up_if_needed(event, reply_result, plan)
         except Exception as exc:
             logger.error("[message] failed to handle message: %s", exc, exc_info=True)
@@ -183,7 +184,7 @@ class QQBot:
             if plan is not None and plan.should_reply:
                 await self._send_response(event, "处理消息时出错，请稍后再试。")
 
-    async def _send_response(self, event: MessageEvent, message: str) -> bool:
+    async def _send_response(self, event: MessageEvent, message: str, plan: Any = None) -> bool:
         try:
             parts = self.message_handler.split_long_message(message)
             if event.message_type == MessageType.PRIVATE.value:
@@ -191,8 +192,9 @@ class QQBot:
                     await self._send_private_msg(event.user_id, part)
                     await asyncio.sleep(0.5)
             else:
+                at_user = self.message_handler.resolve_group_at_user(event, plan)
                 for part in parts:
-                    await self._send_group_msg(event.group_id, part, event.user_id)
+                    await self._send_group_msg(event.group_id, part, at_user)
                     await asyncio.sleep(0.5)
 
             self.runtime_metrics.inc_messages_replied(len(parts))

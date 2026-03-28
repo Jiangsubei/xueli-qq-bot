@@ -1,10 +1,10 @@
-﻿import asyncio
+import asyncio
 import shutil
 import unittest
 import uuid
 from pathlib import Path
 
-from tests.test_support import FakeExtractor, install_dependency_stubs
+from tests.test_support import FakeExtractor, install_dependency_stubs, read_json
 
 install_dependency_stubs()
 
@@ -35,7 +35,7 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
             auto_extract_memory=kwargs.get("auto_extract_memory", True),
             auto_build_index=True,
         )
-        return MemoryManager(config=config)
+        return MemoryManager(config=config, llm_callback=kwargs.get("llm_callback"))
 
     async def test_initialize_add_memory_rebuild_and_search(self):
         temp_dir = self.make_temp_dir()
@@ -95,7 +95,88 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
 
         saved_files = list((temp_dir / "conversations" / "u1").glob("*.json"))
         self.assertTrue(saved_files)
-        self.assertEqual(["u1"], fake_extractor.extract_calls)
+        self.assertEqual(1, len(fake_extractor.extract_calls))
+        self.assertEqual("u1", fake_extractor.extract_calls[0][0])
+        self.assertTrue(fake_extractor.extract_calls[0][1].startswith("session_u1_private_u1_"))
+        await manager.close()
+
+    async def test_same_session_updates_single_session_file(self):
+        temp_dir = self.make_temp_dir()
+        manager = self.build_manager(temp_dir, conversation_save_interval=5, auto_extract_memory=False)
+        await manager.initialize()
+
+        manager.register_dialogue_turn("u1", "??", "???")
+        manager.register_dialogue_turn("u1", "???", "??")
+        await manager.flush_background_tasks()
+
+        saved_files = list((temp_dir / "conversations" / "u1").glob("*.json"))
+        self.assertEqual(1, len(saved_files))
+        payload = read_json(saved_files[0])
+        self.assertEqual(2, len(payload["turns"]))
+        self.assertEqual("private:u1", payload["dialogue_key"])
+        self.assertEqual("", payload["closed_at"])
+        await manager.close()
+
+    async def test_flush_conversation_session_closes_current_session_before_next_turn(self):
+        temp_dir = self.make_temp_dir()
+        manager = self.build_manager(temp_dir, conversation_save_interval=5, auto_extract_memory=False)
+        await manager.initialize()
+
+        manager.register_dialogue_turn("u1", "???", "??")
+        manager.flush_conversation_session(user_id="u1", message_type="private")
+        await manager.flush_background_tasks()
+
+        manager.register_dialogue_turn("u1", "???", "??")
+        await manager.flush_background_tasks()
+
+        saved_files = sorted((temp_dir / "conversations" / "u1").glob("*.json"))
+        self.assertEqual(2, len(saved_files))
+        payloads = [read_json(file_path) for file_path in saved_files]
+        self.assertEqual([1, 1], sorted(len(payload["turns"]) for payload in payloads))
+        self.assertEqual(1, sum(1 for payload in payloads if payload["closed_at"]))
+        self.assertEqual(1, sum(1 for payload in payloads if not payload["closed_at"]))
+        await manager.close()
+
+    async def test_anchor_context_loads_hit_range_with_neighbor_turns(self):
+        temp_dir = self.make_temp_dir()
+        manager = self.build_manager(temp_dir, conversation_save_interval=10, auto_extract_memory=False)
+        await manager.initialize()
+
+        manager.register_dialogue_turn("u1", "???", "???")
+        manager.register_dialogue_turn("u1", "??? ?????", "???")
+        manager.register_dialogue_turn("u1", "???", "???")
+        manager.register_dialogue_turn("u1", "???", "???")
+        await manager.flush_background_tasks()
+
+        session_file = next((temp_dir / "conversations" / "u1").glob("*.json"))
+        session_payload = read_json(session_file)
+        session_id = session_payload["session_id"]
+
+        await manager.add_memory(
+            content="?????",
+            user_id="u1",
+            source="test",
+            metadata={
+                "owner_user_id": "u1",
+                "source_session_id": session_id,
+                "source_dialogue_key": "private:u1",
+                "source_turn_start": 2,
+                "source_turn_end": 2,
+                "source_message_ids": [session_payload["turns"][1]["source_message_id"]],
+                "source_message_type": "private",
+                "source_group_id": "",
+                "group_id": "",
+            },
+        )
+        await manager.rebuild_index("u1")
+
+        result = await manager.search_memories_with_context(user_id="u1", query="?????", top_k=3)
+
+        self.assertTrue(result["history_messages"])
+        self.assertEqual(8, len(result["history_messages"]))
+        self.assertEqual("???", result["history_messages"][0]["content"])
+        self.assertEqual("??? ?????", result["history_messages"][2]["content"])
+        self.assertEqual("???", result["history_messages"][-1]["content"])
         await manager.close()
 
     async def test_close_cancels_background_tasks(self):

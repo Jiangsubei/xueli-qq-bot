@@ -76,6 +76,28 @@ class ReplyPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(prepared.messages[-1]["content"], str)
         self.assertIn("一只猫坐在窗边看外面", prepared.history_user_message)
 
+    async def test_system_prompt_contains_private_session_and_user_id(self):
+        handler = self.create_handler()
+        event = build_event("hello", user_id=321, message_id=11)
+
+        prepared = await handler.reply_pipeline.prepare_request(event=event, user_message="hello")
+
+        system_prompt = prepared.messages[0]["content"]
+        self.assertIn("\u4f1a\u8bdd: private", system_prompt)
+        self.assertIn("\u7528\u6237ID: 321", system_prompt)
+        self.assertNotIn("\u7fa4ID:", system_prompt)
+
+    async def test_system_prompt_contains_group_session_user_and_group_id(self):
+        handler = self.create_handler()
+        event = build_event("group hello", message_type=MessageType.GROUP.value, user_id=654, message_id=12)
+
+        prepared = await handler.reply_pipeline.prepare_request(event=event, user_message="group hello")
+
+        system_prompt = prepared.messages[0]["content"]
+        self.assertIn("\u4f1a\u8bdd: group", system_prompt)
+        self.assertIn("\u7528\u6237ID: 654", system_prompt)
+        self.assertIn("\u7fa4ID: 456", system_prompt)
+
     async def test_private_pure_image_vision_failure_returns_fallback_without_model_call(self):
         ai_client = DummyAIClient()
         vision_client = AvailableDummyVisionClient(
@@ -97,7 +119,7 @@ class ReplyPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([], ai_client.chat_calls)
         self.assertEqual("fallback", response.source)
-        self.assertIn("没看清", response.text)
+        self.assertIn("\u770b\u4e0d\u6e05", response.text)
 
     async def test_private_text_and_image_without_vision_uses_text_only(self):
         ai_client = DummyAIClient(responses=[AIResponse(content="收到")])

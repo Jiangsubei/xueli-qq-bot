@@ -1,8 +1,5 @@
-"""
-记忆提取与更新。
+from __future__ import annotations
 
-异步调用大模型，从对话中提取长期事实，并区分普通记忆与重要记忆。
-"""
 import asyncio
 import logging
 import re
@@ -17,61 +14,39 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExtractionConfig:
-    """记忆提取配置。"""
+    """Memory extraction settings."""
 
     extract_every_n_turns: int = 3
     max_dialogue_length: int = 10
     min_memory_quality: float = 0.7
-    system_prompt: str = """你是一个对话记忆提取助手。请分析对话，并提取值得长期保存的用户事实。
-核心规则：
-- 只提取用户明确表达过的信息，不要提取助手回复内容。
-- 只保留关于用户自身的稳定事实、偏好、背景、关系和计划。
-- 宁可少提取，也不要把普通聊天内容误判成重要记忆。
-
-重要记忆只允许以下情况：
-- 用户明确要求你长期记住的事。
-- 如果用户是在要求你“记住”“记得”“别忘了”某件事，或明确表达“以后都按这个来”“之后一直这样”，通常应直接判为重要记忆。
-- 明确的硬约束、禁忌、过敏、雷区、称呼要求。
-- 稳定且高优先级的身份背景、关键关系、长期承诺。
-
-以下内容不要判成重要记忆：
-- 普通兴趣爱好。
-- 一般口味偏好。
-- 临时计划、阶段性想法。
-- 没有明确长期价值的聊天细节。
-
-普通记忆需要给出重要程度：
-- 1 分：很弱的参考信息，容易被遗忘。
-- 2 分：较弱偏好或偶发事实。
-- 3 分：一般稳定信息。
-- 4 分：较强偏好或较有价值的背景。
-- 5 分：接近重要记忆，但还不到硬约束级别。
-
-输出要求：
-- 每行一条。
-- 严格使用以下格式之一：
-  [IMPORTANT] 用户[用户ID]: 记忆内容
-  [NORMAL:1-5] 用户[用户ID]: 记忆内容
-- 如果没有可提取内容，只输出“无”。
-
-示例：
-[IMPORTANT] 用户123456: 对花生严重过敏
-[IMPORTANT] 用户123456: 要求你长期记住不要叫他全名
-[NORMAL:4] 用户123456: 很喜欢黑咖啡且长期如此
-[NORMAL:2] 用户123456: 最近在补番"""
+    system_prompt: str = (
+        "你是一个对话记忆提取助手。请只根据用户消息提取值得长期保存的稳定事实。\n"
+        "规则：\n"
+        "- 只提取用户自己说过的信息，不要把助手回复当成记忆。\n"
+        "- 优先提取稳定偏好、背景、边界、长期计划、称呼要求。\n"
+        "- 重要记忆只用于明确要求长期记住、硬性约束、长期身份关系等高优先级信息。\n"
+        "- 群聊内容默认不要提取为重要记忆，除非用户明确要求长期记住。\n"
+        "- 输入中的历史记录只包含用户消息，每条前面都有稳定 turn 标签，例如 T12。\n"
+        "- 你必须为每条记忆标注来源 turn，格式为 Tn 或 Tn-Tm。\n"
+        "输出要求：\n"
+        "- 每行一条。\n"
+        "- 普通记忆格式：[NORMAL:1-5][Tn] 用户123: 记忆内容\n"
+        "- 重要记忆格式：[IMPORTANT][Tn-Tm] 用户123: 记忆内容\n"
+        "- 如果没有可提取内容，只输出“无”。"
+    )
 
 
 @dataclass
 class ExtractedMemory:
-    """提取后的记忆项。"""
-
     content: str
+    source_turn_start: int
+    source_turn_end: int
     is_important: bool = False
     importance: int = 3
 
 
 class MemoryExtractor:
-    """从对话中提取并保存长期记忆。"""
+    """Extract and persist memories from session-scoped dialogue buffers."""
 
     def __init__(
         self,
@@ -79,250 +54,278 @@ class MemoryExtractor:
         llm_callback: Callable[[str, List[Dict[str, str]]], Any],
         config: Optional[ExtractionConfig] = None,
         important_memory_store: Any = None,
-    ):
+    ) -> None:
         self.memory_store = memory_store
         self.llm_callback = llm_callback
         self.config = config or ExtractionConfig()
         self.important_memory_store = important_memory_store
 
-        self._dialogue_buffer: Dict[str, List[Dict[str, str]]] = {}
-        self._turn_counter: Dict[str, int] = {}
+        self._session_turns: Dict[str, List[Dict[str, Any]]] = {}
+        self._session_owner: Dict[str, str] = {}
+        self._session_dialogue_key: Dict[str, str] = {}
 
-    def add_dialogue_turn(self, user_id: str, user_message: str, assistant_message: str):
-        """向提取缓冲区添加一轮对话。"""
-        if user_id not in self._dialogue_buffer:
-            self._dialogue_buffer[user_id] = []
-            self._turn_counter[user_id] = 0
-            logger.debug("初始化记忆提取缓冲区: user=%s", user_id)
+    def add_dialogue_turn(
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_message: str,
+        *,
+        session_id: str,
+        turn_id: int,
+        dialogue_key: str,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> None:
+        session_key = str(session_id or "").strip()
+        if not session_key:
+            return
 
-        self._dialogue_buffer[user_id].append(
+        turns = self._session_turns.setdefault(session_key, [])
+        self._session_owner[session_key] = str(user_id)
+        self._session_dialogue_key[session_key] = str(dialogue_key or "")
+        turns.append(
             {
-                "turn": self._turn_counter[user_id] + 1,
-                "user": user_message,
-                "assistant": assistant_message,
+                "turn_id": int(turn_id),
+                "user": str(user_message or ""),
+                "assistant": str(assistant_message or ""),
                 "timestamp": datetime.now().isoformat(),
+                "source_message_type": str(message_type or "private"),
+                "source_group_id": str(group_id or ""),
+                "source_message_id": str(message_id or ""),
+                "owner_user_id": str(user_id),
+                "dialogue_key": str(dialogue_key or ""),
+                "session_id": session_key,
             }
         )
 
-        max_len = self.config.max_dialogue_length * 2
-        if len(self._dialogue_buffer[user_id]) > max_len:
-            self._dialogue_buffer[user_id] = self._dialogue_buffer[user_id][-max_len:]
+    def should_extract(self, session_id: str) -> bool:
+        turns = self._session_turns.get(str(session_id or "").strip(), [])
+        turn_count = len(turns)
+        return turn_count > 0 and turn_count % self.config.extract_every_n_turns == 0
 
-        self._turn_counter[user_id] += 1
-        logger.debug("记录对话轮次: user=%s, 当前轮数=%s", user_id, self._turn_counter[user_id])
-
-    def should_extract(self, user_id: str) -> bool:
-        """判断当前是否应该执行提取。"""
-        count = self._turn_counter.get(user_id, 0)
-        should = count > 0 and count % self.config.extract_every_n_turns == 0
-        logger.debug(
-            "检查提取条件: user=%s, 轮数=%s, 阈值=%s, 触发=%s",
-            user_id,
-            count,
-            self.config.extract_every_n_turns,
-            should,
-        )
-        return should
-
-    async def extract_memories(self, user_id: str) -> List[MemoryItem]:
-        """执行提取并持久化结果。"""
-        buffer = self._dialogue_buffer.get(user_id, [])
-        if not buffer:
+    async def extract_memories(self, user_id: str, *, session_id: str) -> List[MemoryItem]:
+        session_key = str(session_id or "").strip()
+        turns = list(self._session_turns.get(session_key, []))
+        if not turns:
             return []
 
-        dialogue_text = self._format_dialogue(
-            buffer[-self.config.max_dialogue_length :],
-            user_id,
-        )
+        visible_turns = turns[-self.config.max_dialogue_length :]
+        dialogue_text = self._format_dialogue(visible_turns, user_id)
+        if dialogue_text.strip() == "无":
+            return []
 
         try:
-            extracted = await self._call_llm_for_extraction(user_id, dialogue_text)
-            related_dialogue = self._build_related_dialogue_snapshot(user_id)
-
-            saved_memories: List[MemoryItem] = []
-            important_count = 0
-            ordinary_count = 0
-
-            for item in extracted:
-                content = item.content.strip()
-                if not content or content == "无":
-                    continue
-
-                memory_type = "important" if item.is_important else "ordinary"
-                ordinary_importance = 5 if item.is_important else max(1, min(item.importance, 5))
-
-                mem = await self.memory_store.add_memory(
-                    content=content,
-                    user_id=user_id,
-                    source=f"extraction_{user_id}",
-                    tags=["auto_extracted", memory_type],
-                    metadata={
-                        "memory_type": memory_type,
-                        "importance": ordinary_importance,
-                        "decay_exempt": item.is_important,
-                        "related_dialogue": related_dialogue,
-                    },
-                )
-                if mem:
-                    saved_memories.append(mem)
-                    if item.is_important:
-                        important_count += 1
-                    else:
-                        ordinary_count += 1
-
-                if item.is_important:
-                    await self._sync_important_memory(
-                        user_id=user_id,
-                        content=content,
-                        source="extraction",
-                        priority=3,
-                    )
-                elif mem and self._should_promote_to_important(mem):
-                    await self._sync_important_memory(
-                        user_id=user_id,
-                        content=mem.content,
-                        source="promoted_from_ordinary",
-                        priority=4,
-                    )
-
-            logger.info(
-                "记忆提取完成: user=%s, 新增=%s, 重要=%s, 普通=%s",
-                user_id,
-                len(saved_memories),
-                important_count,
-                ordinary_count,
-            )
-            return saved_memories
+            extracted = await self._call_llm_for_extraction(user_id=user_id, dialogue_text=dialogue_text)
         except Exception as exc:
             if self._is_rate_limit_error(exc):
-                logger.warning("记忆提取跳过: user=%s, 原因=上游限流: %s", user_id, exc)
+                logger.warning("memory extraction skipped by rate limit: user=%s session=%s", user_id, session_key)
                 return []
-            logger.error("记忆提取失败: user=%s, 错误=%s", user_id, exc, exc_info=True)
+            logger.error("memory extraction failed: user=%s session=%s error=%s", user_id, session_key, exc, exc_info=True)
             return []
 
-    def _should_promote_to_important(self, mem: MemoryItem) -> bool:
-        """Promote ordinary memories once a max-importance fact is mentioned again."""
-        metadata = mem.metadata or {}
-        memory_type = str(metadata.get("memory_type", "")).lower()
+        allowed_turn_ids = {int(turn["turn_id"]) for turn in visible_turns}
+        related_dialogue = self._build_related_dialogue_snapshot(visible_turns)
+        saved_memories: List[MemoryItem] = []
+        important_count = 0
+        ordinary_count = 0
 
-        try:
-            importance = float(metadata.get("importance", 0))
-        except (TypeError, ValueError):
-            importance = 0.0
+        for item in extracted:
+            if not self._is_valid_anchor(item, allowed_turn_ids):
+                logger.debug(
+                    "discarding extracted memory with invalid anchor: session=%s anchor=%s-%s content=%s",
+                    session_key,
+                    item.source_turn_start,
+                    item.source_turn_end,
+                    item.content[:80],
+                )
+                continue
 
-        try:
-            mention_count = int(float(metadata.get("mention_count", 1)))
-        except (TypeError, ValueError):
-            mention_count = 1
+            anchor_turns = [
+                turn
+                for turn in visible_turns
+                if item.source_turn_start <= int(turn["turn_id"]) <= item.source_turn_end
+            ]
+            if not anchor_turns:
+                continue
 
-        return memory_type == "ordinary" and importance >= 5 and mention_count >= 2
+            metadata = self._build_memory_metadata(
+                owner_user_id=str(user_id),
+                session_id=session_key,
+                dialogue_key=self._session_dialogue_key.get(session_key, ""),
+                anchor_turns=anchor_turns,
+                related_dialogue=related_dialogue,
+            )
+            memory_type = "important" if item.is_important else "ordinary"
+            importance = 5 if item.is_important else max(1, min(int(item.importance), 5))
 
-    async def _sync_important_memory(
+            mem = await self.memory_store.add_memory(
+                content=item.content,
+                user_id=user_id,
+                source=f"extraction_{session_key}",
+                tags=["auto_extracted", memory_type],
+                metadata={
+                    "memory_type": memory_type,
+                    "importance": importance,
+                    "decay_exempt": item.is_important,
+                    **metadata,
+                },
+            )
+            if mem:
+                saved_memories.append(mem)
+                if item.is_important:
+                    important_count += 1
+                else:
+                    ordinary_count += 1
+
+            if item.is_important:
+                await self._sync_important_memory(
+                    user_id=user_id,
+                    content=item.content,
+                    source="extraction",
+                    priority=3,
+                    metadata=metadata,
+                )
+            elif mem and self._should_promote_to_important(mem):
+                await self._sync_important_memory(
+                    user_id=user_id,
+                    content=mem.content,
+                    source="promoted_from_ordinary",
+                    priority=4,
+                    metadata=metadata,
+                )
+
+        logger.info(
+            "memory extraction complete: user=%s session=%s saved=%s important=%s ordinary=%s",
+            user_id,
+            session_key,
+            len(saved_memories),
+            important_count,
+            ordinary_count,
+        )
+        return saved_memories
+
+    async def trigger_extraction(
         self,
         user_id: str,
-        content: str,
-        source: str,
-        priority: int,
-    ) -> None:
-        """Best-effort sync to important memory store."""
-        if not self.important_memory_store:
+        force: bool = False,
+        *,
+        session_id: Optional[str] = None,
+    ) -> List[MemoryItem]:
+        session_key = str(session_id or "").strip()
+        if not session_key:
+            return []
+        if not force and not self.should_extract(session_key):
+            return []
+        return await self.extract_memories(user_id, session_id=session_key)
+
+    def clear_buffer(self, *, session_id: Optional[str] = None) -> None:
+        if session_id is None:
+            self._session_turns.clear()
+            self._session_owner.clear()
+            self._session_dialogue_key.clear()
             return
 
-        try:
-            await self.important_memory_store.add_memory(
-                user_id=user_id,
-                content=content,
-                source=source,
-                priority=priority,
-            )
-            logger.debug("重要记忆已同步: user=%s, 内容=%s", user_id, content[:40])
-        except Exception as exc:
-            logger.warning("重要记忆同步失败: user=%s, 错误=%s", user_id, exc)
+        session_key = str(session_id or "").strip()
+        self._session_turns.pop(session_key, None)
+        self._session_owner.pop(session_key, None)
+        self._session_dialogue_key.pop(session_key, None)
 
-    def _format_dialogue(self, dialogue: List[Dict[str, str]], user_id: str) -> str:
-        """将对话历史格式化为仅包含用户发言的分析文本。"""
+    def _is_valid_anchor(self, item: ExtractedMemory, allowed_turn_ids: set[int]) -> bool:
+        if item.source_turn_start <= 0 or item.source_turn_end <= 0:
+            return False
+        if item.source_turn_start > item.source_turn_end:
+            return False
+        return set(range(item.source_turn_start, item.source_turn_end + 1)).issubset(allowed_turn_ids)
+
+    def _build_memory_metadata(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        dialogue_key: str,
+        anchor_turns: List[Dict[str, Any]],
+        related_dialogue: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        first_turn = anchor_turns[0]
+        last_turn = anchor_turns[-1]
+        message_ids = [
+            str(turn.get("source_message_id") or "")
+            for turn in anchor_turns
+            if str(turn.get("source_message_id") or "").strip()
+        ]
+        return {
+            "owner_user_id": owner_user_id,
+            "dialogue_key": dialogue_key,
+            "source_session_id": session_id,
+            "source_dialogue_key": dialogue_key,
+            "source_turn_start": int(first_turn["turn_id"]),
+            "source_turn_end": int(last_turn["turn_id"]),
+            "source_message_ids": message_ids,
+            "source_message_id": message_ids[-1] if message_ids else "",
+            "source_message_type": str(last_turn.get("source_message_type", "") or ""),
+            "source_group_id": str(last_turn.get("source_group_id", "") or ""),
+            "group_id": str(last_turn.get("source_group_id", "") or ""),
+            "related_dialogue": related_dialogue,
+        }
+
+    def _build_related_dialogue_snapshot(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "turn_id": int(turn.get("turn_id", 0) or 0),
+                "user": str(turn.get("user", "") or ""),
+                "assistant": str(turn.get("assistant", "") or ""),
+                "timestamp": str(turn.get("timestamp", "") or ""),
+                "source_message_type": str(turn.get("source_message_type", "") or ""),
+                "source_group_id": str(turn.get("source_group_id", "") or ""),
+                "source_message_id": str(turn.get("source_message_id", "") or ""),
+                "owner_user_id": str(turn.get("owner_user_id", "") or ""),
+            }
+            for turn in turns
+        ]
+
+    def _format_dialogue(self, dialogue: List[Dict[str, Any]], user_id: str) -> str:
         lines = [
-            f"=== 用户 {user_id} 的发言记录 ===",
-            "以下内容仅包含用户发送的消息。",
+            f"=== 用户 {user_id} 的消息记录 ===",
+            "以下内容只包含用户消息。每条前缀里的 Tn 是稳定 turn 标签，输出时必须引用它。",
             "",
         ]
         has_user_content = False
 
-        for i, turn in enumerate(dialogue, 1):
-            user_content = (turn.get("user") or "").strip()
+        for turn in dialogue:
+            user_content = str(turn.get("user", "") or "").strip()
             if not user_content:
                 continue
-
             has_user_content = True
-            turn_number = turn.get("turn", i)
-            lines.append(f"第{turn_number}轮用户: {user_content}")
+            lines.append(f"T{int(turn.get('turn_id', 0) or 0)}: {user_content}")
 
         if not has_user_content:
-            lines.append("无")
-
+            return "无"
         return "\n".join(lines)
 
-    def _build_related_dialogue_snapshot(self, user_id: str) -> List[Dict[str, str]]:
-        """为提取出的记忆保留最近若干轮关联对话。"""
-        buffer = self._dialogue_buffer.get(user_id, [])
-        snapshot = []
-
-        for turn in buffer[-self.config.max_dialogue_length :]:
-            snapshot.append(
-                {
-                    "turn": turn.get("turn"),
-                    "user": turn.get("user", ""),
-                    "assistant": turn.get("assistant", ""),
-                    "timestamp": turn.get("timestamp", ""),
-                }
-            )
-
-        return snapshot
-
-    async def _call_llm_for_extraction(
-        self,
-        user_id: str,
-        dialogue_text: str,
-    ) -> List[ExtractedMemory]:
-        """调用大模型执行记忆提取。"""
+    async def _call_llm_for_extraction(self, *, user_id: str, dialogue_text: str) -> List[ExtractedMemory]:
         messages = [
             {
                 "role": "user",
                 "content": (
-                    "请分析以下对话，提取值得长期保存的记忆事实。\n"
-                    "注意：下方内容已经过滤为仅包含用户发送的消息。\n"
-                    "重要记忆的判定要非常严格，只有硬约束、长期明确要求、关键身份关系才算重要。\n"
-                    "如果用户是在要求你记住某件事，比如让你记住、记得、别忘了，或明确要求以后一直按某个规则执行，通常应直接标为 IMPORTANT。\n"
-                    "普通记忆请给出 1-5 的重要程度。\n"
-                    "输出格式必须严格为：\n"
-                    f"[IMPORTANT] 用户{user_id}: 记忆内容\n"
-                    f"[NORMAL:1-5] 用户{user_id}: 记忆内容\n"
+                    "请分析下面这些用户消息，提取值得长期保存的记忆。\n"
+                    "注意：这些历史记录只包含用户消息，不包含助手回复。\n"
+                    "你必须给每条记忆标注来源 turn 标签，格式只能是 Tn 或 Tn-Tm。\n"
                     "如果没有可提取内容，只输出“无”。\n\n"
                     f"{dialogue_text}"
                 ),
             }
         ]
 
-        system_prompt = self.config.system_prompt.replace("123456", user_id)
-
-        logger.info("调用记忆提取模型: user=%s, 对话长度=%s", user_id, len(dialogue_text))
+        system_prompt = self.config.system_prompt.replace("用户123", f"用户{user_id}")
         response = None
-        max_attempts = 2
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, 3):
             try:
                 response = await self.llm_callback(system_prompt, messages)
                 break
             except Exception as exc:
-                if self._is_rate_limit_error(exc) and attempt < max_attempts:
-                    delay_seconds = attempt
-                    logger.warning(
-                        "记忆提取请求遇到限流: user=%s, attempt=%s/%s, %ss 后重试",
-                        user_id,
-                        attempt,
-                        max_attempts,
-                        delay_seconds,
-                    )
-                    await asyncio.sleep(delay_seconds)
+                if self._is_rate_limit_error(exc) and attempt < 2:
+                    await asyncio.sleep(attempt)
                     continue
                 raise
 
@@ -330,82 +333,106 @@ class MemoryExtractor:
         if isinstance(response, str):
             content = response
         elif hasattr(response, "content"):
-            content = response.content
+            content = str(response.content or "")
         elif isinstance(response, dict):
-            content = response.get("content", "") or response.get("text", "")
+            content = str(response.get("content", "") or response.get("text", "") or "")
 
-        preview = content[:300].replace("\n", " | ")
-        logger.debug("记忆提取响应: user=%s, 预览=%s", user_id, preview)
+        return self._parse_extraction_response(content)
 
+    def _parse_extraction_response(self, content: str) -> List[ExtractedMemory]:
         memories: List[ExtractedMemory] = []
-        parts = content.split("|") if "|" in content else content.split("\n")
-
-        for part in parts:
-            line = part.strip()
+        for raw_line in (content.split("|") if "|" in content else content.splitlines()):
+            line = str(raw_line or "").strip()
             if not line or line.startswith("#"):
                 continue
-
+            if line == "无":
+                continue
             line = re.sub(r"^[\-\*\u2022\s]+", "", line)
+
+            important_match = re.match(r"^\[(?:IMPORTANT|重要)\]\[(T\d+(?:-T?\d+)?)\]\s*(.+)$", line, re.IGNORECASE)
+            normal_match = re.match(r"^\[(?:NORMAL|普通):([1-5])\]\[(T\d+(?:-T?\d+)?)\]\s*(.+)$", line, re.IGNORECASE)
 
             is_important = False
             importance = 3
-
-            important_match = re.match(r"^\[(?:IMPORTANT|重要)\]\s*", line, re.IGNORECASE)
-            ordinary_match = re.match(r"^\[(?:NORMAL|普通):(\d)\]\s*", line, re.IGNORECASE)
+            anchor = ""
+            content_text = ""
 
             if important_match:
                 is_important = True
                 importance = 5
-                line = re.sub(r"^\[(?:IMPORTANT|重要)\]\s*", "", line, flags=re.IGNORECASE)
-            elif ordinary_match:
-                importance = int(ordinary_match.group(1))
-                line = re.sub(r"^\[(?:NORMAL|普通):(\d)\]\s*", "", line, flags=re.IGNORECASE)
+                anchor = important_match.group(1)
+                content_text = important_match.group(2)
+            elif normal_match:
+                importance = int(normal_match.group(1))
+                anchor = normal_match.group(2)
+                content_text = normal_match.group(3)
+            else:
+                continue
 
-            line = re.sub(r"^用户\w+:\s*", "", line)
+            anchor_range = self._parse_anchor(anchor)
+            if anchor_range is None:
+                continue
 
-            if (
-                line
-                and line != "无"
-                and len(line) > 5
-                and not line.startswith("以下是")
-                and not line.startswith("根据")
-                and not line.startswith("提取")
-                and not line.startswith("分析")
-            ):
-                memories.append(
-                    ExtractedMemory(
-                        content=line,
-                        is_important=is_important,
-                        importance=importance,
-                    )
+            content_text = re.sub(r"^用户\w+:\s*", "", content_text).strip()
+            if not content_text or len(content_text) <= 2:
+                continue
+
+            memories.append(
+                ExtractedMemory(
+                    content=content_text,
+                    source_turn_start=anchor_range[0],
+                    source_turn_end=anchor_range[1],
+                    is_important=is_important,
+                    importance=importance,
                 )
-                logger.debug(
-                    "识别记忆: 类型=%s, 重要度=%s, 内容=%s",
-                    "重要" if is_important else "普通",
-                    importance,
-                    line[:40],
-                )
-
+            )
         return memories
 
+    def _parse_anchor(self, anchor: str) -> Optional[tuple[int, int]]:
+        match = re.fullmatch(r"T(\d+)(?:-T?(\d+))?", str(anchor or "").strip(), re.IGNORECASE)
+        if not match:
+            return None
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start <= 0 or end <= 0 or start > end:
+            return None
+        return start, end
+
+    def _should_promote_to_important(self, mem: MemoryItem) -> bool:
+        metadata = dict(mem.metadata or {})
+        memory_type = str(metadata.get("memory_type", "")).lower()
+        try:
+            importance = float(metadata.get("importance", 0))
+        except (TypeError, ValueError):
+            importance = 0.0
+        try:
+            mention_count = int(float(metadata.get("mention_count", 1)))
+        except (TypeError, ValueError):
+            mention_count = 1
+        return memory_type == "ordinary" and importance >= 5 and mention_count >= 2
+
+    async def _sync_important_memory(
+        self,
+        *,
+        user_id: str,
+        content: str,
+        source: str,
+        priority: int,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.important_memory_store:
+            return
+        try:
+            await self.important_memory_store.add_memory(
+                user_id=user_id,
+                content=content,
+                source=source,
+                priority=priority,
+                metadata=dict(metadata or {}),
+            )
+        except Exception as exc:
+            logger.warning("failed to sync important memory: user=%s error=%s", user_id, exc)
+
     def _is_rate_limit_error(self, exc: Exception) -> bool:
-        """Best-effort detection for upstream rate limit failures."""
         message = str(exc).lower()
         return "429" in message or "rate limit" in message or "rate-limited" in message
-
-    async def trigger_extraction(self, user_id: str, force: bool = False) -> List[MemoryItem]:
-        """供外部主动触发记忆提取。"""
-        if not force and not self.should_extract(user_id):
-            return []
-        return await self.extract_memories(user_id)
-
-    def clear_buffer(self, user_id: Optional[str] = None):
-        """清空对话缓冲区。"""
-        if user_id:
-            self._dialogue_buffer.pop(user_id, None)
-            self._turn_counter.pop(user_id, None)
-            logger.debug("已清空提取缓冲区: user=%s", user_id)
-        else:
-            self._dialogue_buffer.clear()
-            self._turn_counter.clear()
-            logger.debug("已清空全部提取缓冲区")

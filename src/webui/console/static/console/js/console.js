@@ -1,4 +1,4 @@
-﻿const STORAGE_KEYS = {
+const STORAGE_KEYS = {
     theme: "console-theme",
     colors: "console-rgb",
     page: "console-page",
@@ -45,6 +45,7 @@ const SECTION_PAGE_MAP = {
 const dirtyState = {
     baselines: {},
     dirtySections: new Set(),
+    pendingRestartSections: new Set(),
     modalMode: "restart"
 };
 const RESTART_MODAL_COPY = {
@@ -194,10 +195,13 @@ function snapshotSection(section) {
     return JSON.stringify(collectSectionPayload(section));
 }
 
-function markSectionClean(section) {
+function markSectionClean(section, { pendingRestart = false } = {}) {
     if (!section) return;
     dirtyState.baselines[section] = snapshotSection(section);
     dirtyState.dirtySections.delete(section);
+    if (pendingRestart) {
+        dirtyState.pendingRestartSections.add(section);
+    }
     updateDirtyNotice();
 }
 
@@ -233,9 +237,17 @@ function updateDirtyNotice() {
     const notice = document.getElementById("dirtyRestartNotice");
     const saveButton = document.getElementById("dirtySaveButton");
     const activeSection = getActiveSection();
-    const shouldShow = Boolean(activeSection && dirtyState.dirtySections.has(activeSection));
-    if (notice) notice.classList.toggle("hidden", !shouldShow);
-    if (saveButton) saveButton.classList.toggle("hidden", !shouldShow);
+    const isDirty = Boolean(activeSection && dirtyState.dirtySections.has(activeSection));
+    const needsRestart = Boolean(activeSection && dirtyState.pendingRestartSections.has(activeSection));
+    if (notice) {
+        const label = notice.querySelector("span:last-child");
+        const shouldShowNotice = isDirty || needsRestart;
+        notice.classList.toggle("hidden", !shouldShowNotice);
+        if (label) {
+            label.textContent = isDirty ? "有改动，记得保存并重启" : "已保存，重启后生效";
+        }
+    }
+    if (saveButton) saveButton.classList.toggle("hidden", !isDirty);
 }
 
 async function executeRestart() {
@@ -255,7 +267,9 @@ async function executeRestart() {
                 "X-CSRFToken": getCsrfToken()
             }
         });
+        dirtyState.pendingRestartSections.clear();
         showFeedback(payload.message || "\u52a9\u624b\u670d\u52a1\u5df2\u91cd\u542f", "success");
+        updateDirtyNotice();
         await pollRuntime();
     } catch (error) {
         showFeedback(error.message || "\u91cd\u542f\u5931\u8d25\uff0c\u8bf7\u67e5\u770b\u65e5\u5fd7", "error");
@@ -485,10 +499,9 @@ function collectSectionPayload(section) {
             log_full_prompt: checkboxValue(formData, "log_full_prompt"),
             plan_request_interval: numberOrZero(formData.get("plan_request_interval")),
             plan_request_max_parallel: numberOrZero(formData.get("plan_request_max_parallel")),
-            burst_merge_enabled: checkboxValue(formData, "burst_merge_enabled"),
-            burst_window_seconds: numberOrZero(formData.get("burst_window_seconds")),
-            burst_min_messages: numberOrZero(formData.get("burst_min_messages")),
-            burst_max_messages: numberOrZero(formData.get("burst_max_messages")),
+            plan_context_message_count: numberOrZero(formData.get("plan_context_message_count")),
+            at_user_when_proactive_reply: checkboxValue(formData, "at_user_when_proactive_reply"),
+            repeat_echo_enabled: checkboxValue(formData, "repeat_echo_enabled"),
             behavior: String(formData.get("behavior") || "")
         };
     }
@@ -555,7 +568,7 @@ async function saveSection(section, buttonOverride = null) {
             },
             body: JSON.stringify(collectSectionPayload(section))
         });
-        markSectionClean(section);
+        markSectionClean(section, { pendingRestart: true });
         showFeedback(payload.message || "\u5df2\u7ecf\u8bb0\u597d\u4e86\uff0c\u91cd\u542f\u52a9\u624b\u540e\u751f\u6548", "success");
     } catch (error) {
         showFeedback(error.message || "\u6ca1\u4fdd\u5b58\u6210\u529f\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21", "error");

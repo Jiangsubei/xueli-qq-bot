@@ -4,7 +4,8 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from collections import defaultdict, deque
+from typing import Any, Deque, Dict, List, Optional
 
 from src.core.config import AppConfig, config, get_vision_service_status, is_group_reply_decision_configured, is_vision_service_configured
 from src.core.models import (
@@ -76,12 +77,15 @@ class MessageHandler:
             status_provider=status_provider,
             runtime_metrics=self.runtime_metrics,
             app_config=self.app_config,
+            reset_callback=self._handle_reset_command,
         )
         self.reply_pipeline = ReplyPipeline(self)
 
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
         self.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
+        self._group_repeat_history: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
+        self._group_repeat_cooldowns: Dict[tuple[int, str], float] = {}
 
         self._sync_active_conversations_metric()
 
@@ -242,11 +246,68 @@ class MessageHandler:
     def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
         return self.group_plan_coordinator.format_group_window_context(reply_context)
 
-    def _build_rule_plan(self, action: MessagePlanAction, reason: str, source: str = "rule") -> MessageHandlingPlan:
-        return MessageHandlingPlan(action=action.value, reason=reason, source=source)
+    def _build_rule_plan(
+        self,
+        action: MessagePlanAction,
+        reason: str,
+        source: str = "rule",
+        reply_context: Optional[Dict[str, Any]] = None,
+    ) -> MessageHandlingPlan:
+        return MessageHandlingPlan(action=action.value, reason=reason, source=source, reply_context=reply_context)
 
     def _group_planner_available(self) -> bool:
         return is_group_reply_decision_configured(self.app_config)
+
+    def _normalize_repeat_echo_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").strip())
+
+    def _is_repeat_echo_candidate(self, event: MessageEvent, text: str) -> bool:
+        if event.message_type != MessageType.GROUP.value or event.group_id is None:
+            return False
+        if not self.app_config.group_reply.repeat_echo_enabled:
+            return False
+        if event.is_at(event.self_id) or event.has_image():
+            return False
+        normalized = self._normalize_repeat_echo_text(text)
+        if not normalized or normalized.startswith("/"):
+            return False
+        return 2 <= len(normalized) <= 20
+
+    def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
+        display_text = self._normalize_repeat_echo_text(self.extract_user_message(event))
+        if not self._is_repeat_echo_candidate(event, display_text):
+            return None
+
+        now = time.time()
+        group_id = int(event.group_id or 0)
+        key = display_text.casefold()
+        window_seconds = float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0)
+        min_count = max(2, int(self.app_config.group_reply.repeat_echo_min_count or 2))
+        cooldown_seconds = max(0.0, float(self.app_config.group_reply.repeat_echo_cooldown_seconds or 0.0))
+
+        history = self._group_repeat_history[group_id]
+        while history and now - float(history[0]["time"]) > window_seconds:
+            history.popleft()
+
+        same_entries = [item for item in history if item.get("key") == key]
+        unique_users = {int(item.get("user_id", 0)) for item in same_entries}
+        unique_users.add(int(event.user_id))
+
+        history.append({"time": now, "key": key, "user_id": int(event.user_id)})
+
+        cooldown_key = (group_id, key)
+        cooldown_until = float(self._group_repeat_cooldowns.get(cooldown_key, 0.0) or 0.0)
+        if cooldown_until > now:
+            return None
+
+        if len(unique_users) < min_count:
+            return None
+
+        self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
+        if self.runtime_metrics:
+            self.runtime_metrics.record_group_repeat_echo()
+        logger.info("[group_repeat] triggered: group=%s text=%s unique_users=%s", group_id, display_text, len(unique_users))
+        return display_text
 
     async def _plan_group_message(self, event: MessageEvent) -> MessageHandlingPlan:
         return await self.group_plan_coordinator.plan_group_message(
@@ -265,20 +326,41 @@ class MessageHandler:
         if event.message_type != MessageType.GROUP.value:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "当前仅处理私聊和群聊消息")
 
+        repeat_echo_text = self._check_repeat_echo_trigger(event)
+        if repeat_echo_text:
+            return self._build_rule_plan(
+                MessagePlanAction.REPLY,
+                "群里短时间内连续出现了相同消息，复读一次",
+                source="repeat_echo",
+                reply_context={"direct_reply_text": repeat_echo_text, "reply_mode": "repeat_echo"},
+            )
+
         planner_available = self._group_planner_available()
         only_at_mode = self.app_config.group_reply.only_reply_when_at or not planner_available
 
         if only_at_mode:
             if event.is_at(event.self_id):
                 if planner_available and self.app_config.group_reply.only_reply_when_at:
-                    return self._build_rule_plan(MessagePlanAction.REPLY, "群聊仅在被 @ 时回复，当前消息命中 @")
-                return self._build_rule_plan(MessagePlanAction.REPLY, "未配置群聊判断模型，当前仅在被 @ 时回复")
+                    return self._build_rule_plan(
+                        MessagePlanAction.REPLY,
+                        "群聊仅在被 @ 时回复，当前消息命中 @",
+                        reply_context={"reply_mode": "at"},
+                    )
+                return self._build_rule_plan(
+                    MessagePlanAction.REPLY,
+                    "未配置群聊判断模型，当前仅在被 @ 时回复",
+                    reply_context={"reply_mode": "at"},
+                )
             if planner_available and self.app_config.group_reply.only_reply_when_at:
                 return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
             return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
         if event.is_at(event.self_id):
-            return self._build_rule_plan(MessagePlanAction.REPLY, "群聊消息显式 @ 了助手，直接回复")
+            return self._build_rule_plan(
+                MessagePlanAction.REPLY,
+                "群聊消息显式 @ 了助手，直接回复",
+                reply_context={"reply_mode": "at"},
+            )
 
         return await self._plan_group_message(event)
 
@@ -353,6 +435,24 @@ class MessageHandler:
         self._sync_active_conversations_metric()
         return result
 
+    def resolve_group_at_user(self, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Optional[int]:
+        if event.message_type != MessageType.GROUP.value:
+            return None
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        reply_mode = str(reply_context.get("reply_mode") or "").strip().lower()
+        if reply_mode == "repeat_echo":
+            return None
+        if reply_mode == "at":
+            return int(event.user_id)
+        if reply_mode == "proactive" and self.app_config.group_reply.at_user_when_proactive_reply:
+            return int(event.user_id)
+        return None
+
+    async def record_group_reply_sent(self, event: MessageEvent, message: str) -> None:
+        if event.message_type != MessageType.GROUP.value:
+            return
+        await self.group_plan_coordinator.record_assistant_reply(event.group_id, message)
+
     def _get_help_text(self) -> str:
         return self.command_handler.get_help_text()
 
@@ -389,9 +489,11 @@ class MessageHandler:
         self,
         memory_context: str,
         is_first_turn: bool,
+        event: Optional[MessageEvent] = None,
         plan: Optional[MessageHandlingPlan] = None,
     ) -> str:
         return self.reply_pipeline.build_response_system_prompt(
+            event=event,
             memory_context=memory_context,
             is_first_turn=is_first_turn,
             plan=plan,
@@ -416,6 +518,11 @@ class MessageHandler:
         event: MessageEvent,
         plan: Optional[MessageHandlingPlan] = None,
     ) -> ReplyResult:
+        if plan and isinstance(plan.reply_context, dict):
+            direct_reply_text = str(plan.reply_context.get("direct_reply_text") or "").strip()
+            if direct_reply_text:
+                return ReplyResult(text=direct_reply_text, source=plan.source or "rule")
+
         user_message = self.extract_user_message(event)
         command_result = self.check_command(user_message, event)
         if command_result is not None:
@@ -499,3 +606,14 @@ class MessageHandler:
     def _record_background_activity(self) -> None:
         if self.emoji_manager:
             self.emoji_manager.record_activity()
+
+    def _handle_reset_command(self, event: MessageEvent) -> None:
+        if not self.memory_manager:
+            return
+        flush_current = getattr(self.memory_manager, "flush_conversation_session", None)
+        if callable(flush_current):
+            flush_current(
+                user_id=str(event.user_id),
+                message_type=event.message_type,
+                group_id=str(event.group_id or ""),
+            )

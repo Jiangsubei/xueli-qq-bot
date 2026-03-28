@@ -1,256 +1,102 @@
-﻿import asyncio
 import unittest
-from unittest.mock import patch
 
 from tests.test_support import RecordingPlanner, build_event
 
+from src.core.config import GroupReplyConfig
 from src.core.models import MessageType
-from src.handlers import group_plan_coordinator as group_plan_coordinator_module
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.group_plan_coordinator import GroupPlanCoordinator
 
 
 class GroupPlanCoordinatorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dense_group_messages_are_buffered_into_one_planner_call(self):
-        planner = RecordingPlanner()
-        coordinator = GroupPlanCoordinator(
+    def build_coordinator(self, planner, *, image_analyzer=None, **config_kwargs):
+        config = GroupReplyConfig(
+            plan_request_interval=0.0,
+            plan_request_max_parallel=1,
+            plan_context_message_count=config_kwargs.pop("plan_context_message_count", 5),
+            **config_kwargs,
+        )
+        return GroupPlanCoordinator(
             planner=planner,
             session_manager=ConversationSessionManager(),
+            image_analyzer=image_analyzer,
+            group_reply_config=config,
         )
 
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=True,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0.05,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            first_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("first", message_type=MessageType.GROUP.value, message_id=1, user_id=111),
-                    "first",
-                )
-            )
-            await asyncio.sleep(0.01)
-            second_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("second", message_type=MessageType.GROUP.value, message_id=2, user_id=222),
-                    "second",
-                )
-            )
+    async def test_two_messages_trigger_two_planner_calls(self):
+        planner = RecordingPlanner()
+        coordinator = self.build_coordinator(planner, plan_context_message_count=5)
 
-            first_plan, second_plan = await asyncio.gather(first_task, second_task)
+        first_plan = await coordinator.plan_group_message(
+            build_event("first", message_type=MessageType.GROUP.value, message_id=1, user_id=111),
+            "first",
+        )
+        second_plan = await coordinator.plan_group_message(
+            build_event("second", message_type=MessageType.GROUP.value, message_id=2, user_id=222),
+            "second",
+        )
 
-        self.assertEqual(1, len(planner.calls))
-        self.assertEqual("wait", first_plan.action)
+        self.assertEqual("reply", first_plan.action)
         self.assertEqual("reply", second_plan.action)
-        self.assertEqual(2, len(planner.calls[0]["window_messages"]))
-        self.assertEqual("first", planner.calls[0]["window_messages"][0]["text"])
-        self.assertEqual("second", planner.calls[0]["window_messages"][1]["text"])
+        self.assertEqual(2, len(planner.calls))
+        self.assertEqual(["first"], [item["text_content"] for item in planner.calls[0]["window_messages"]])
+        self.assertEqual(["first", "second"], [item["text_content"] for item in planner.calls[1]["window_messages"]])
 
         await coordinator.close()
 
-    async def test_planner_receives_image_descriptions_before_burst_flush(self):
+    async def test_context_count_zero_only_includes_current_message(self):
         planner = RecordingPlanner()
-        analyzer_calls = []
+        coordinator = self.build_coordinator(planner, plan_context_message_count=0)
 
-        async def analyzer(event, user_text):
-            analyzer_calls.append((event.message_id, user_text))
-            return {
-                "per_image_descriptions": ["第1张是一只猫", "第2张是聊天截图"],
-                "merged_description": "两张图分别是猫和聊天截图",
-                "vision_success_count": 2,
-                "vision_failure_count": 0,
-                "vision_source": "vision",
-                "vision_error": "",
-                "vision_available": True,
-            }
-
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=analyzer,
+        await coordinator.plan_group_message(
+            build_event("hello", message_type=MessageType.GROUP.value, message_id=10, user_id=111),
+            "hello",
+        )
+        await coordinator.plan_group_message(
+            build_event("world", message_type=MessageType.GROUP.value, message_id=11, user_id=222),
+            "world",
         )
 
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=True,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0.05,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            first_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("看这个", message_type=MessageType.GROUP.value, message_id=10, user_id=111, image_count=2),
-                    "看这个",
-                )
-            )
-            await asyncio.sleep(0.01)
-            second_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("后续补充", message_type=MessageType.GROUP.value, message_id=11, user_id=222),
-                    "后续补充",
-                )
-            )
-            await asyncio.gather(first_task, second_task)
-
-        self.assertEqual([(10, "看这个")], analyzer_calls)
-        window_messages = planner.calls[0]["window_messages"]
-        self.assertEqual("两张图分别是猫和聊天截图", window_messages[0]["merged_description"])
-        self.assertEqual(["第1张是一只猫", "第2张是聊天截图"], window_messages[0]["per_image_descriptions"])
-        self.assertIn("图片摘要", window_messages[0]["text"])
-
+        self.assertEqual(2, len(planner.calls))
+        self.assertEqual(1, len(planner.calls[1]["window_messages"]))
+        self.assertEqual("world", planner.calls[1]["window_messages"][0]["text_content"])
         await coordinator.close()
 
-    async def test_text_and_image_without_vision_uses_text_only_context(self):
+    async def test_assistant_history_is_visible_to_next_plan(self):
         planner = RecordingPlanner()
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=None,
+        coordinator = self.build_coordinator(planner, plan_context_message_count=5)
+
+        await coordinator.plan_group_message(
+            build_event("????", message_type=MessageType.GROUP.value, message_id=20, user_id=123),
+            "????",
+        )
+        await coordinator.record_assistant_reply(456, "???????")
+        await coordinator.plan_group_message(
+            build_event("??", message_type=MessageType.GROUP.value, message_id=21, user_id=456),
+            "??",
         )
 
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=False,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            plan = await coordinator.plan_group_message(
-                build_event("看这个", message_type=MessageType.GROUP.value, message_id=12, user_id=111, image_count=1),
-                "看这个",
-            )
-
-        self.assertEqual("reply", plan.action)
-        self.assertEqual(1, len(planner.calls))
-        self.assertEqual("看这个", planner.calls[0]["user_message"])
-        window_message = planner.calls[0]["window_messages"][0]
-        self.assertEqual("看这个", window_message["text"])
-        self.assertFalse(window_message["has_image"])
-        self.assertFalse(window_message["image_context_enabled"])
-        self.assertNotIn("[图片]", window_message["text"])
-
+        second_window = planner.calls[1]["window_messages"]
+        self.assertEqual("assistant", second_window[-2]["speaker_role"])
+        self.assertEqual("???????", second_window[-2]["text_content"])
+        self.assertEqual("??", second_window[-1]["text_content"])
         await coordinator.close()
 
-    async def test_pure_image_without_vision_is_ignored_without_planner(self):
+    async def test_pure_image_without_vision_is_ignored(self):
         planner = RecordingPlanner()
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=None,
-        )
+        coordinator = self.build_coordinator(planner, plan_context_message_count=5)
 
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=False,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            plan = await coordinator.plan_group_message(
-                build_event("", message_type=MessageType.GROUP.value, message_id=20, user_id=333, image_count=1),
-                "",
-            )
+        plan = await coordinator.plan_group_message(
+            build_event("", message_type=MessageType.GROUP.value, message_id=30, user_id=333, image_count=1),
+            "",
+        )
 
         self.assertEqual("ignore", plan.action)
         self.assertEqual("no_text_content", plan.source)
         self.assertEqual(0, len(planner.calls))
-
         await coordinator.close()
 
-    async def test_burst_window_with_only_images_without_vision_is_ignored(self):
-        planner = RecordingPlanner()
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=None,
-        )
-
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=True,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0.05,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            first_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("", message_type=MessageType.GROUP.value, message_id=30, user_id=101, image_count=1),
-                    "",
-                )
-            )
-            await asyncio.sleep(0.01)
-            second_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("", message_type=MessageType.GROUP.value, message_id=31, user_id=102, image_count=1),
-                    "",
-                )
-            )
-
-            first_plan, second_plan = await asyncio.gather(first_task, second_task)
-
-        self.assertEqual("ignore", first_plan.action)
-        self.assertEqual("ignore", second_plan.action)
-        self.assertEqual(0, len(planner.calls))
-
-        await coordinator.close()
-
-    async def test_latest_pure_image_without_vision_can_still_plan_from_earlier_text(self):
-        planner = RecordingPlanner()
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=None,
-        )
-
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=True,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0.05,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            first_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("前面有文字", message_type=MessageType.GROUP.value, message_id=40, user_id=201),
-                    "前面有文字",
-                )
-            )
-            await asyncio.sleep(0.01)
-            second_task = asyncio.create_task(
-                coordinator.plan_group_message(
-                    build_event("", message_type=MessageType.GROUP.value, message_id=41, user_id=202, image_count=1),
-                    "",
-                )
-            )
-
-            await asyncio.gather(first_task, second_task)
-
-        self.assertEqual(1, len(planner.calls))
-        self.assertEqual("前面有文字", planner.calls[0]["user_message"])
-
-        await coordinator.close()
-
-    async def test_pure_image_with_vision_failure_prefers_wait(self):
+    async def test_pure_image_with_failed_vision_returns_wait(self):
         planner = RecordingPlanner()
 
         async def analyzer(event, user_text):
@@ -264,31 +110,15 @@ class GroupPlanCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 "vision_available": False,
             }
 
-        coordinator = GroupPlanCoordinator(
-            planner=planner,
-            session_manager=ConversationSessionManager(),
-            image_analyzer=analyzer,
+        coordinator = self.build_coordinator(planner, image_analyzer=analyzer, plan_context_message_count=5)
+        plan = await coordinator.plan_group_message(
+            build_event("", message_type=MessageType.GROUP.value, message_id=31, user_id=444, image_count=1),
+            "",
         )
-
-        with patch.multiple(
-            group_plan_coordinator_module.config,
-            GROUP_REPLY_BURST_MERGE_ENABLED=False,
-            GROUP_REPLY_BURST_WINDOW_SECONDS=0,
-            GROUP_REPLY_BURST_MIN_MESSAGES=2,
-            GROUP_REPLY_BURST_MAX_MESSAGES=5,
-            GROUP_REPLY_PLAN_REQUEST_INTERVAL=0,
-            GROUP_REPLY_PLAN_MAX_PARALLEL=1,
-            create=True,
-        ):
-            plan = await coordinator.plan_group_message(
-                build_event("", message_type=MessageType.GROUP.value, message_id=50, user_id=333, image_count=1),
-                "",
-            )
 
         self.assertEqual("wait", plan.action)
         self.assertEqual("vision_fallback", plan.source)
         self.assertEqual(0, len(planner.calls))
-
         await coordinator.close()
 
 

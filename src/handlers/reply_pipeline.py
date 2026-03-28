@@ -68,6 +68,7 @@ class ReplyPipeline:
             plan=plan,
         )
         system_prompt = self.build_response_system_prompt(
+            event=event,
             memory_context=memory_context,
             is_first_turn=is_first_turn,
             plan=plan,
@@ -167,19 +168,41 @@ class ReplyPipeline:
         if not self.host.memory_manager or not prepared.original_user_message.strip():
             return
         try:
+            dialogue_key = self.host._get_conversation_key(event)
             self.host.memory_manager.register_dialogue_turn(
                 user_id=str(event.user_id),
                 user_message=prepared.original_user_message,
                 assistant_message=response.content,
+                dialogue_key=dialogue_key,
+                message_type=event.message_type,
+                group_id=str(event.group_id or ""),
+                message_id=str(event.message_id or ""),
             )
-            self._schedule_memory_extraction(str(event.user_id))
+            self._schedule_memory_extraction(
+                str(event.user_id),
+                dialogue_key=dialogue_key,
+                message_type=event.message_type,
+                group_id=str(event.group_id or ""),
+            )
         except Exception as exc:
             logger.warning("[reply] failed to register memory side effects: %s", exc, exc_info=True)
 
-    def _schedule_memory_extraction(self, user_id: str) -> None:
+    def _schedule_memory_extraction(
+        self,
+        user_id: str,
+        *,
+        dialogue_key: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+    ) -> None:
         scheduler = getattr(self.host.memory_manager, "schedule_memory_extraction", None)
         if callable(scheduler):
-            scheduler(user_id)
+            scheduler(
+                user_id,
+                dialogue_key=dialogue_key,
+                message_type=message_type,
+                group_id=group_id,
+            )
 
     def build_memory_tools(self) -> List[Dict[str, Any]]:
         if not self.host.memory_manager:
@@ -298,12 +321,14 @@ class ReplyPipeline:
             return "", [], len(conversation.messages) == 0
 
         is_first_turn = len(conversation.messages) == 0
+        access_context = self._build_memory_access_context(event)
         if is_first_turn:
             try:
                 important = await self.host.memory_manager.get_important_memories(
                     user_id=str(event.user_id),
                     limit=5,
                     read_scope=self._get_memory_read_scope(),
+                    access_context=access_context,
                 )
             except Exception as exc:
                 logger.warning("[reply] failed to load important memories: %s", exc)
@@ -318,6 +343,7 @@ class ReplyPipeline:
                 top_k=5,
                 include_conversations=True,
                 read_scope=self._get_memory_read_scope(),
+                access_context=access_context,
             )
         except Exception as exc:
             logger.warning("[reply] failed to search memory context: %s", exc)
@@ -343,6 +369,7 @@ class ReplyPipeline:
                 user_id=str(event.user_id),
                 limit=5,
                 read_scope=self._get_memory_read_scope(),
+                access_context=self._build_memory_access_context(event),
             )
         except Exception as exc:
             logger.warning("[reply] legacy memory loading failed: %s", exc)
@@ -374,9 +401,44 @@ class ReplyPipeline:
             return str(getter())
         return getattr(self.host.app_config.memory, "read_scope", "user")
 
-    def build_response_system_prompt(self, memory_context: str, is_first_turn: bool, plan: Optional[MessageHandlingPlan] = None) -> str:
+    def _build_memory_access_context(self, event: MessageEvent):
+        builder = getattr(self.host.memory_manager, "build_access_context", None)
+        if not callable(builder):
+            return None
+        return builder(
+            user_id=str(event.user_id),
+            message_type=event.message_type or MessageType.PRIVATE.value,
+            group_id=str(event.group_id or ""),
+            read_scope=self._get_memory_read_scope(),
+        )
+
+    def _build_session_context_prompt(self, event: Optional[MessageEvent]) -> str:
+        if event is None:
+            return ""
+        session_type = str(event.message_type or "").strip().lower() or MessageType.PRIVATE.value
+        lines = [
+            "【会话】",
+            f"会话: {session_type}",
+            f"用户ID: {event.user_id}",
+        ]
+        if session_type == MessageType.GROUP.value and event.group_id is not None:
+            lines.append(f"群ID: {event.group_id}")
+        return "\n".join(lines)
+
+    def build_response_system_prompt(
+        self,
+        *,
+        event: Optional[MessageEvent] = None,
+        memory_context: str,
+        is_first_turn: bool,
+        plan: Optional[MessageHandlingPlan] = None,
+    ) -> str:
         del is_first_turn
-        parts = [self.host._build_assistant_identity_prompt(), self.host._build_system_prompt()]
+        parts = [
+            self.host._build_assistant_identity_prompt(),
+            self.host._build_system_prompt(),
+            self._build_session_context_prompt(event),
+        ]
         group_context = self.host._format_group_window_context(getattr(plan, "reply_context", None)) if plan else ""
         if group_context:
             parts.append(group_context)
@@ -491,7 +553,7 @@ class ReplyPipeline:
             return None
         if self._has_usable_vision_analysis(vision_analysis):
             return None
-        return "这张图片我刚刚没看清，可以再发一张更清楚的吗？"
+        return "抱歉我现在看不清图片呢。"
 
     def _has_usable_vision_analysis(self, vision_analysis: Dict[str, Any]) -> bool:
         if not vision_analysis:
