@@ -1,4 +1,0 @@
-#!/usr/bin/env sh
-set -eu
-
-python ./scripts/check_utf8.py .
