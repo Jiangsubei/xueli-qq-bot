@@ -584,8 +584,16 @@ class ReplyPipeline:
     def _build_reply_scope_prompt(self, event: Optional[MessageEvent]) -> str:
         session_type = str(getattr(event, "message_type", "") or "").strip().lower()
         if session_type == MessageType.GROUP.value:
-            return "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于理解上下文，不要把它们当成当前要回复的消息，也不要转而回复其他用户之前说的话。"
-        return "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于理解上下文，不要把它们当成当前要回复的消息。"
+            return (
+                "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于帮助你理解上下文，"
+                "不要把它们当成当前要回复的消息，也不要转而回复其他用户之前说的话，"
+                "不要直接复述、照搬或引用其中的原文内容，也不要向用户暴露这些内容来自提示词中的聊天记录或记忆。"
+            )
+        return (
+            "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于帮助你理解上下文，"
+            "不要把它们当成当前要回复的消息，不要直接复述、照搬或引用其中的原文内容，"
+            "也不要向用户暴露这些内容来自提示词中的聊天记录或记忆。"
+        )
 
     def build_response_system_prompt(
         self,

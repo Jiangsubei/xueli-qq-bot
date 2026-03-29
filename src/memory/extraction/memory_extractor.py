@@ -454,6 +454,9 @@ class MemoryExtractor:
                 continue
             if self._is_explicit_no_memory_response(line):
                 continue
+            line = re.sub(r"^(?:普通记忆|重要记忆)\s*[：:]\s*", "", line)
+            line = re.sub(r"^(?:[\-\*\u2022]\s*|\d+[\.\)、]\s*)+", "", line)
+            line = re.sub(r"^(?:普通记忆|重要记忆)\s*[：:]\s*", "", line)
             line = re.sub(r"^(?:[\-\*\u2022]\s*|\d+[\.\)、)]\s*)+", "", line)
 
             important_match = re.match(r"^\[(?:IMPORTANT|重要)\]\[(T\d+(?:-T?\d+)?)\]\s*(.+)$", line, re.IGNORECASE)
@@ -481,6 +484,12 @@ class MemoryExtractor:
                 continue
 
             content_text = re.sub(r"^用户\w+:\s*", "", content_text).strip()
+            content_text = re.sub(
+                r"^(?:用户|user)\s*[^\r\n：:]{1,40}[：:]\s*",
+                "",
+                content_text,
+                flags=re.IGNORECASE,
+            ).strip()
             if not content_text or len(content_text) <= 2:
                 continue
 
@@ -499,6 +508,19 @@ class MemoryExtractor:
         text = str(content or "").strip()
         if not text:
             return False
+        normalized_simple = re.sub(r"[\s`'\"“”‘’。．.!！？?、,:：;；\-\*]+", "", text).lower()
+        if normalized_simple in {
+            "无",
+            "无可提取内容",
+            "没有可提取内容",
+            "暂无可提取内容",
+            "none",
+            "nomemory",
+            "nomemories",
+            "noextractablememory",
+            "noextractablememories",
+        }:
+            return True
         normalized = re.sub(r"[\s`'\"“”‘’。．.!！？?、,:：;；\-\*]+", "", text).lower()
         return normalized in {
             "无",
