@@ -357,11 +357,11 @@ class MemoryRetrievalCoordinator:
         if not memories:
             return ""
 
-        lines = ["=== 閲嶈浜嬪疄锛堣鍔″繀璁颁綇锛?==="]
+        lines = ["=== 重要事实（请务必记住） ==="]
         for index, memory in enumerate(memories, 1):
             owner_user_id = getattr(memory, "owner_user_id", "")
             if owner_user_id and owner_user_id != str(user_id):
-                lines.append(f"{index}. [鏉ユ簮鐢ㄦ埛 {owner_user_id}] {memory.content}")
+                lines.append(f"{index}. [来源用户 {owner_user_id}] {memory.content}")
             else:
                 lines.append(f"{index}. {memory.content}")
         lines.append("")
@@ -660,7 +660,7 @@ class MemoryRetrievalCoordinator:
         source = str(getattr(memory, "source", "") or metadata.get("source", "")).strip()
         label_owner = owner_user_id and owner_user_id != requester_user_id
         if section == "shared" and label_owner:
-            content = f"[鏉ユ簮鐢ㄦ埛 {owner_user_id}] {content}"
+            content = f"[来源用户 {owner_user_id}] {content}"
         return {
             "content": content,
             "memory_owner": owner_user_id,
@@ -691,10 +691,10 @@ class MemoryRetrievalCoordinator:
     def _build_prompt_text(self, sections: Dict[str, List[Dict[str, Any]]]) -> str:
         parts = []
         section_specs = [
-            ("=== 褰撳墠鐢ㄦ埛閲嶈璁板繂 ===", sections.get("user_important", [])),
-            ("=== 褰撳墠鍦烘櫙绉板懠瑕佹眰 ===", sections.get("addressing", [])),
-            ("=== 褰撳墠鍦烘櫙鍏变韩瑙勫垯 / 鍏变韩閲嶈璁板繂 ===", sections.get("shared", [])),
-            ("=== 鍔ㄦ€佺浉鍏虫櫘閫氳蹇?===", sections.get("dynamic", [])),
+            ("=== 当前用户重要记忆 ===", sections.get("user_important", [])),
+            ("=== 当前场景称呼要求 ===", sections.get("addressing", [])),
+            ("=== 当前场景共享规则 / 共享重要记忆 ===", sections.get("shared", [])),
+            ("=== 动态相关普通记忆 ===", sections.get("dynamic", [])),
         ]
         for title, entries in section_specs:
             if not entries:
