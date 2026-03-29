@@ -75,7 +75,6 @@ rerank_candidate_max_chars = 160
 rerank_total_prompt_budget = 2400
 auto_extract = true
 extract_every_n_turns = 3
-conversation_save_interval = 10
 extraction_api_base = ""
 extraction_api_key = ""
 extraction_model = "qwen/qwen3.5-122b-a10b"

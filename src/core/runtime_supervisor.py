@@ -44,7 +44,7 @@ class BotRuntimeSupervisor:
 
     async def restart_bot(self) -> Dict[str, str]:
         async with self._lock:
-            logger.info("收到来自 WebUI 的重启请求")
+            logger.debug("收到来自 WebUI 的重启请求")
             self._state = "restarting"
             self._last_error = ""
             await self._stop_locked()
@@ -55,7 +55,7 @@ class BotRuntimeSupervisor:
                 self._last_error = str(exc)
                 logger.exception("助手重启失败：%s", exc)
                 raise
-            logger.info("助手重启完成")
+            logger.debug("助手重启完成")
             return result
 
     async def shutdown(self) -> None:

@@ -54,14 +54,14 @@ class MemoryIndexCoordinator:
             return
 
         user_files = list(users_path.glob("*.md"))
-        logger.info("开始重建索引：用户数=%s", len(user_files))
+        logger.debug("开始重建索引：用户数=%s", len(user_files))
         tasks = [self.rebuild_index(path.stem) for path in user_files]
         if not tasks:
             return
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         success_count = sum(1 for item in results if item is True)
-        logger.info("索引重建完成：成功=%s/%s", success_count, len(tasks))
+        logger.debug("索引重建完成：成功=%s/%s", success_count, len(tasks))
 
     def mark_dirty(self, user_id: str) -> None:
         self.index_dirty[user_id] = True

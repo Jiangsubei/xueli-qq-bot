@@ -5,7 +5,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from src.core.config import Config, get_vision_service_status, is_group_reply_decision_configured
+from src.core.config import (
+    Config,
+    get_vision_service_status,
+    is_ai_service_configured,
+    is_group_reply_decision_configured,
+    is_memory_extraction_configured,
+    is_memory_rerank_configured,
+)
 from src.core.connection import NapCatConnection
 from src.core.lifecycle import close_resource
 from src.core.runtime_metrics import RuntimeMetrics
@@ -77,27 +84,32 @@ class BotBootstrapper:
         group_reply = app_config.group_reply
         decision_config = self.config.get_group_reply_decision_client_config()
 
-        logger.info("AI 服务地址：%s", ai_service.api_base)
-        logger.info("默认模型：%s", ai_service.model)
         logger.info(
-            "视觉服务：状态=%s，模型=%s，地址=%s",
+            "运行配置：助手=%s，回复模型=%s，地址=%s",
+            self.config.get_assistant_name(),
+            ai_service.model,
+            ai_service.api_base,
+        )
+        logger.info(
+            "视觉服务：状态=%s，模型=%s",
             vision_status,
             vision_service.get("model"),
-            vision_service.get("api_base"),
         )
-        logger.info("助手名称：%s", self.config.get_assistant_name())
         logger.info(
-            "群聊规划：仅@回复=%s，兴趣回复=%s，触发间隔=%s，并行上限=%s，上下文条数=%s，主动回复时@用户=%s，复读回声=%s，决策模型=%s",
+            "群聊规划：已配置=%s，模型=%s，仅@回复=%s，兴趣回复=%s，上下文条数=%s，复读回声=%s",
+            is_group_reply_decision_configured(app_config),
+            decision_config.get("model"),
             group_reply.only_reply_when_at,
             group_reply.interest_reply_enabled,
-            group_reply.plan_request_interval,
-            group_reply.plan_request_max_parallel,
             group_reply.plan_context_message_count,
-            group_reply.at_user_when_proactive_reply,
             group_reply.repeat_echo_enabled,
-            decision_config.get("model"),
         )
-        logger.info("群聊规划决策已配置：%s", is_group_reply_decision_configured(app_config))
+        if is_memory_extraction_configured(app_config):
+            logger.info("记忆提取运行策略：优先使用专用提取模型，失败时回退主模型")
+        elif is_ai_service_configured(app_config):
+            logger.info("记忆提取运行策略：未配置专用提取模型，当前直接使用主模型")
+        else:
+            logger.warning("记忆提取运行策略：主模型与专用提取模型均不可用")
 
     async def _initialize_memory_manager(
         self,
@@ -111,17 +123,26 @@ class BotBootstrapper:
         if not memory_config.enabled:
             return None
 
-        from src.memory import MemoryManager, MemoryManagerConfig, RetrievalConfig, ExtractionConfig
+        from src.memory import ExtractionConfig, MemoryManager, MemoryManagerConfig, RetrievalConfig
 
+        main_ai_client_config = self.config.get_ai_service_client_config()
         memory_client_config = self.config.get_memory_extraction_client_config()
         memory_rerank_client_config = self.config.get_memory_rerank_client_config()
-        logger.info("记忆提取模型：%s", memory_client_config.get("model"))
-        logger.info("记忆重排模型：%s", memory_rerank_client_config.get("model"))
+        dedicated_extraction_configured = is_memory_extraction_configured(app_config)
+        main_ai_configured = is_ai_service_configured(app_config)
+
+        if dedicated_extraction_configured:
+            logger.info("记忆提取模型：专用模型=%s", memory_client_config.get("model"))
+        elif main_ai_configured:
+            logger.info("记忆提取模型：未配置专用模型，直接使用主模型=%s", main_ai_client_config.get("model"))
+        else:
+            logger.warning("记忆提取模型不可用：专用模型与主模型均未配置完成")
         logger.info(
-            "记忆配置：自动提取=%s，每 %s 轮提取一次，对话每 %s 轮落盘一次",
+            "记忆配置：自动提取=%s，每%s轮提取一次，读取范围=%s，重排模型=%s",
             memory_config.auto_extract,
             memory_config.extract_every_n_turns,
-            memory_config.conversation_save_interval,
+            memory_config.read_scope,
+            memory_rerank_client_config.get("model"),
         )
 
         manager_config = MemoryManagerConfig(
@@ -129,7 +150,7 @@ class BotBootstrapper:
             memory_read_scope=memory_config.read_scope,
             retrieval_config=RetrievalConfig(
                 bm25_top_k=memory_config.bm25_top_k,
-                rerank_enabled=bool(memory_rerank_client_config.get("api_base") and memory_rerank_client_config.get("api_key") and memory_rerank_client_config.get("model")),
+                rerank_enabled=is_memory_rerank_configured(app_config),
                 rerank_top_k=memory_config.rerank_top_k,
                 pre_rerank_top_k=memory_config.pre_rerank_top_k,
                 dynamic_memory_limit=memory_config.dynamic_memory_limit,
@@ -156,13 +177,17 @@ class BotBootstrapper:
             ordinary_decay_enabled=memory_config.ordinary_decay_enabled,
             ordinary_half_life_days=memory_config.ordinary_half_life_days,
             ordinary_forget_threshold=memory_config.ordinary_forget_threshold,
-            conversation_save_interval=memory_config.conversation_save_interval,
             auto_extract_memory=memory_config.auto_extract,
             auto_build_index=True,
         )
 
         memory_manager = MemoryManager(
-            llm_callback=self._build_memory_llm_callback(memory_client_config),
+            llm_callback=self._build_memory_llm_callback(
+                dedicated_client_config=memory_client_config,
+                main_client_config=main_ai_client_config,
+                use_dedicated_first=dedicated_extraction_configured,
+                main_available=main_ai_configured,
+            ),
             config=manager_config,
             runtime_metrics=runtime_metrics,
         )
@@ -172,12 +197,27 @@ class BotBootstrapper:
             await close_resource(memory_manager, label="memory_manager")
             raise
 
-        logger.info("记忆读取范围：%s", memory_config.read_scope)
         logger.info("记忆管理器初始化完成")
         return memory_manager
 
-    def _build_memory_llm_callback(self, client_config: Dict[str, Any]):
-        async def llm_callback(system_prompt: str, messages: list):
+    def _build_memory_llm_callback(
+        self,
+        *,
+        dedicated_client_config: Dict[str, Any],
+        main_client_config: Dict[str, Any],
+        use_dedicated_first: bool,
+        main_available: bool,
+    ):
+        if not use_dedicated_first and not main_available:
+            return None
+
+        async def _invoke_client(
+            *,
+            provider: str,
+            client_config: Dict[str, Any],
+            system_prompt: str,
+            messages: list,
+        ) -> Dict[str, str]:
             from src.services.ai_client import AIClient
 
             client = AIClient(log_label="memory_extract", app_config=self.config.app, **client_config)
@@ -191,9 +231,38 @@ class BotBootstrapper:
                     temperature=0.3,
                     model=client_config.get("model"),
                 )
-                return result.content if hasattr(result, "content") else str(result)
+                content = result.content if hasattr(result, "content") else str(result)
+                return {
+                    "content": str(content or ""),
+                    "provider": provider,
+                    "model": str(client_config.get("model") or ""),
+                }
             finally:
                 await client.close()
+
+        async def llm_callback(system_prompt: str, messages: list):
+            if use_dedicated_first:
+                try:
+                    return await _invoke_client(
+                        provider="memory_extraction",
+                        client_config=dedicated_client_config,
+                        system_prompt=system_prompt,
+                        messages=messages,
+                    )
+                except Exception as exc:
+                    if not main_available:
+                        raise
+                    logger.warning("专用记忆提取模型调用失败，回退主模型：%s", exc)
+
+            if not main_available:
+                raise RuntimeError("主模型未配置，无法执行记忆提取")
+
+            return await _invoke_client(
+                provider="ai_service",
+                client_config=main_client_config,
+                system_prompt=system_prompt,
+                messages=messages,
+            )
 
         return llm_callback
 

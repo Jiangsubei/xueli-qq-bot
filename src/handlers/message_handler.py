@@ -98,7 +98,7 @@ class MessageHandler:
         self.command_handler.set_status_provider(status_provider)
 
     def _create_ai_client(self) -> AIClient:
-        logger.info("初始化回复模型：模型=%s", self.app_config.ai_service.model)
+        logger.debug("初始化回复模型：模型=%s", self.app_config.ai_service.model)
         return AIClient(log_label="reply", app_config=self.app_config)
 
     def _create_vision_client(self) -> VisionClient:
@@ -141,7 +141,7 @@ class MessageHandler:
         return f"你的名字是“{assistant_name}”。当用户提到“{assistant_name}”时，说的就是你。"
 
     def _build_assistant_identity_prompt(self) -> str:
-        return "【助手身份】\n" + self._build_assistant_identity_text()
+        return self._build_assistant_identity_text()
 
     def vision_enabled(self) -> bool:
         if not self.vision_client:
@@ -149,7 +149,7 @@ class MessageHandler:
         available = getattr(self.vision_client, "is_available", None)
         if callable(available):
             return bool(available())
-        return bool(self.app_config.vision_service.enabled and is_vision_service_configured(self.app_config))
+        return bool(is_vision_service_configured(self.app_config))
 
     def vision_status(self) -> str:
         if self.vision_client:
@@ -161,11 +161,11 @@ class MessageHandler:
     def _build_system_prompt(self) -> str:
         parts = []
         if self.app_config.personality.content:
-            parts.append(f"【人格】\n{self.app_config.personality.content}")
+            parts.append(self.app_config.personality.content)
         if self.app_config.dialogue_style.content:
-            parts.append(f"【对话风格】\n{self.app_config.dialogue_style.content}")
+            parts.append(self.app_config.dialogue_style.content)
         if self.app_config.behavior.content:
-            parts.append(f"【行为】\n{self.app_config.behavior.content}")
+            parts.append(self.app_config.behavior.content)
         return "\n\n".join(parts) if parts else "你是一个友好、可靠、有帮助的 AI 助手。"
 
     def _build_memory_tools(self) -> List[Dict[str, Any]]:
@@ -182,8 +182,9 @@ class MessageHandler:
         messages: List[Dict[str, Any]],
         user_id: str,
         temperature: float = 0.7,
+        event: Optional[MessageEvent] = None,
     ) -> AIResponse:
-        return await self.reply_pipeline.chat_with_tools(messages=messages, user_id=user_id, temperature=temperature)
+        return await self.reply_pipeline.chat_with_tools(messages=messages, user_id=user_id, temperature=temperature, event=event)
 
     def _format_prompt_message_content(self, content: Any) -> str:
         if isinstance(content, str):
@@ -219,21 +220,24 @@ class MessageHandler:
         event: MessageEvent,
         messages: List[Dict[str, Any]],
         related_history_messages: Optional[List[Dict[str, Any]]] = None,
+        title: str = "[FULL PROMPT]",
     ) -> str:
+        del related_history_messages
+        system_prompt = ""
+        for message in messages or []:
+            if str(message.get("role") or "").strip().lower() != "system":
+                continue
+            system_prompt = self._format_prompt_message_content(message.get("content", ""))
+            break
+
         lines = [
-            "[FULL PROMPT]",
+            title,
             f"用户: {event.user_id}",
             f"会话: {self._get_conversation_key(event)}",
+            "",
+            "--- 完整提示词 ---",
+            system_prompt or "[空]",
         ]
-        for index, message in enumerate(messages or [], 1):
-            role = str(message.get("role") or "unknown")
-            lines.extend(
-                [
-                    "",
-                    f"--- Message {index} ({role}) ---",
-                    self._serialize_prompt_message_content(message.get("content", "")),
-                ]
-            )
         return "\n".join(lines).rstrip()
     def _get_conversation_key(self, event: MessageEvent) -> str:
         return self.session_manager.get_key(event)
@@ -310,7 +314,8 @@ class MessageHandler:
         self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
         if self.runtime_metrics:
             self.runtime_metrics.record_group_repeat_echo()
-        logger.info("触发群聊复读：群=%s，内容=%s，触发用户数=%s", group_id, display_text, len(unique_users))
+        if not bool(getattr(self.app_config.bot_behavior, "log_full_prompt", False)):
+            logger.info("触发群聊复读：群=%s，触发用户数=%s", group_id, len(unique_users))
         return display_text
 
     async def _plan_group_message(self, event: MessageEvent) -> MessageHandlingPlan:
@@ -406,7 +411,7 @@ class MessageHandler:
                 if base64_data:
                     base64_images.append(base64_data)
             except Exception as exc:
-                logger.error("处理图片失败: %s", exc, exc_info=True)
+                logger.error("处理图片失败：%s", exc, exc_info=True)
         return base64_images
 
     async def analyze_event_images(
@@ -501,16 +506,22 @@ class MessageHandler:
 
     def _build_response_system_prompt(
         self,
-        memory_context: str,
+        persistent_memory_context: str,
+        dynamic_memory_context: str,
         is_first_turn: bool,
         event: Optional[MessageEvent] = None,
         plan: Optional[MessageHandlingPlan] = None,
+        recent_history_text: str = "",
+        current_message: str = "",
     ) -> str:
         return self.reply_pipeline.build_response_system_prompt(
             event=event,
-            memory_context=memory_context,
+            persistent_memory_context=persistent_memory_context,
+            dynamic_memory_context=dynamic_memory_context,
             is_first_turn=is_first_turn,
             plan=plan,
+            recent_history_text=recent_history_text,
+            current_message=current_message,
         )
 
     def _build_response_messages(
@@ -518,14 +529,12 @@ class MessageHandler:
         system_prompt: str,
         user_message: str,
         base64_images: List[str],
-        context_messages: List[Dict[str, Any]],
         related_history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         return self.reply_pipeline.build_response_messages(
             system_prompt=system_prompt,
             user_message=user_message,
             base64_images=base64_images,
-            context_messages=context_messages,
             related_history_messages=related_history_messages,
         )
 

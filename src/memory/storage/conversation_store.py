@@ -114,7 +114,6 @@ class ConversationTurnRegistration:
     turn_count: int
     user_id: str
     dialogue_key: str
-    should_save_current: bool
     closed_session_id: str = ""
     closed_session_user_id: str = ""
 
@@ -125,13 +124,11 @@ class ConversationStore:
     def __init__(
         self,
         base_path: str = "memories/conversations",
-        save_interval: int = 10,
         session_timeout_seconds: int = 3600,
     ) -> None:
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
-        self._save_interval = max(1, int(save_interval))
         self._session_timeout_seconds = max(1, int(session_timeout_seconds))
         self._sessions: Dict[str, ConversationRecord] = {}
         self._active_session_by_dialogue: Dict[str, str] = {}
@@ -268,7 +265,6 @@ class ConversationStore:
             turn_count=session.turn_count,
             user_id=str(user_id),
             dialogue_key=resolved_dialogue_key,
-            should_save_current=session.dirty_turns >= self._save_interval,
             closed_session_id=closed_session_id,
             closed_session_user_id=closed_user_id,
         )
@@ -303,6 +299,12 @@ class ConversationStore:
     def get_session_owner(self, session_id: str) -> str:
         session = self._sessions.get(str(session_id))
         return str(session.user_id or "") if session else ""
+
+    def get_session_snapshot(self, session_id: str) -> Optional[ConversationRecord]:
+        session = self._sessions.get(str(session_id))
+        if session is None:
+            return None
+        return ConversationRecord.from_dict(copy.deepcopy(session.to_dict()))
 
     def close_session(
         self,
@@ -354,7 +356,7 @@ class ConversationStore:
             session = self._sessions.get(resolved_session_id)
             if session is None or not session.turns:
                 return None
-            if not force and session.dirty_turns < self._save_interval:
+            if not force:
                 return None
 
             owner_user_id = str(user_id or session.user_id or "")
@@ -365,18 +367,13 @@ class ConversationStore:
                 async with aiofiles.open(file_path, "w", encoding="utf-8") as handle:
                     await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
                 session.dirty_turns = 0
-                logger.info(
-                    "saved conversation session: user=%s session=%s turns=%s",
-                    owner_user_id,
-                    session.session_id,
-                    session.turn_count,
-                )
+                logger.debug("对话会话已写入：用户=%s，会话=%s，轮次=%s", owner_user_id, session.session_id, session.turn_count)
                 if session.closed_at:
                     self._sessions.pop(session.session_id, None)
                 return ConversationRecord.from_dict(copy.deepcopy(payload))
             except Exception as exc:
                 logger.error(
-                    "failed to save conversation session: user=%s session=%s error=%s",
+                    "保存对话会话失败：用户=%s，会话=%s，错误=%s",
                     owner_user_id,
                     session.session_id,
                     exc,

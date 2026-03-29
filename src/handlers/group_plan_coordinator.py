@@ -63,13 +63,22 @@ class GroupPlanCoordinator:
             message_shape = "text_with_image"
         elif effective_has_image:
             message_shape = "image_only"
+        elif has_image and text_present:
+            message_shape = "text_with_image"
+        elif has_image:
+            message_shape = "image_only"
         else:
             message_shape = "text_only"
 
         planner_text = clean_text
-        if effective_has_image:
+        display_text = clean_text
+        image_placeholder = ""
+        if has_image:
             image_placeholder = "[图片]" if image_count == 1 else f"[图片 x{image_count}]"
             planner_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
+
+        if has_image:
+            display_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
 
         image_analysis = dict(image_analysis or {})
         per_image_descriptions = [
@@ -96,6 +105,7 @@ class GroupPlanCoordinator:
 
         return {
             "text": planner_text,
+            "display_text": display_text,
             "text_content": clean_text,
             "raw_text": raw_text,
             "has_image": effective_has_image,
@@ -129,7 +139,7 @@ class GroupPlanCoordinator:
         ]
         for index, item in enumerate(window_messages, 1):
             speaker = self._format_window_speaker(item)
-            text = str(item.get("text") or item.get("raw_text") or "").strip() or "[空]"
+            text = self._window_display_text(item)
             image_note = f" [图片 {item.get('image_count', 1)} 张]" if item.get("has_image") else ""
             latest_note = " [当前消息]" if item.get("is_latest") else ""
             lines.append(f"{index}. {speaker}: {text}{image_note}{latest_note}")
@@ -161,7 +171,7 @@ class GroupPlanCoordinator:
             self._record_group_user_message(group_id, current_message)
 
         reply_context = self._merge_reply_context(
-            self._build_group_window_reply_context(window_messages),
+            self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
                 group_id=group_id,
                 mode="single",
@@ -191,7 +201,7 @@ class GroupPlanCoordinator:
 
         try:
             reply_context = self._merge_reply_context(
-                self._build_group_window_reply_context(window_messages),
+                self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
                 self._build_planner_batch_context(
                     group_id=group_id,
                     mode=planner_mode,
@@ -215,6 +225,7 @@ class GroupPlanCoordinator:
             "speaker_role": "assistant",
             "speaker_name": config.get_assistant_name(),
             "text": text,
+            "display_text": text,
             "text_content": text,
             "raw_text": text,
             "has_image": False,
@@ -272,11 +283,12 @@ class GroupPlanCoordinator:
             image_analysis=image_analysis,
             include_image_context=self.image_analyzer is not None,
         )
+        display_name = event.get_sender_display_name()
         return {
             "message_id": int(event.message_id or 0),
             "user_id": str(event.user_id),
             "speaker_role": "user",
-            "speaker_name": str(event.user_id),
+            "speaker_name": display_name,
             **planner_message,
         }
 
@@ -322,10 +334,11 @@ class GroupPlanCoordinator:
         persisted.pop("is_latest", None)
         self._append_group_history(group_id, persisted)
 
-    def _build_group_window_reply_context(self, window_messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_group_window_reply_context(self, window_messages: List[Dict[str, Any]], assistant_self_id: Any = "") -> Dict[str, Any]:
         return {
             "window_messages": window_messages,
             "buffered_message_count": len(window_messages),
+            "assistant_self_id": str(assistant_self_id or ""),
         }
 
     def _build_planner_batch_context(
@@ -440,21 +453,18 @@ class GroupPlanCoordinator:
             (item for item in reversed(window_messages) if item.get("is_latest")),
             window_messages[-1] if window_messages else None,
         )
+        no_text_plan = self._build_no_text_content_plan(latest_message)
+        if no_text_plan is not None:
+            return no_text_plan
+        fallback_plan = self._build_vision_fallback_plan(latest_message)
+        if fallback_plan is not None:
+            return fallback_plan
         if not self._has_plannable_text(window_messages):
-            no_text_plan = self._build_no_text_content_plan(latest_message)
-            if no_text_plan is not None:
-                return no_text_plan
-            fallback_plan = self._build_vision_fallback_plan(latest_message)
-            if fallback_plan is not None:
-                return fallback_plan
             return self._build_rule_plan(
                 MessagePlanAction.IGNORE,
                 "未启用视觉模型且当前消息没有可用文本，跳过本轮群聊规划",
                 source="no_text_content",
             )
-        fallback_plan = self._build_vision_fallback_plan(latest_message)
-        if fallback_plan is not None:
-            return fallback_plan
         planner_user_message = ""
         if latest_message:
             planner_user_message = str(
@@ -497,8 +507,20 @@ class GroupPlanCoordinator:
             name = str(item.get("speaker_name") or config.get_assistant_name()).strip()
             return f"助手 {name or config.get_assistant_name()}"
         user_id = str(item.get("user_id") or item.get("speaker_name") or "unknown").strip() or "unknown"
+        display_name = str(item.get("speaker_name") or "").strip()
+        if display_name and display_name != user_id:
+            return f"用户 {user_id}（{display_name}）"
         return f"用户 {user_id}"
 
     def _record_plan_metric(self, action: str, source: str = "") -> None:
         if self.runtime_metrics:
             self.runtime_metrics.record_planner_action(action, source=source)
+
+    def _window_display_text(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        if text and text != "[空]":
+            return text
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
+        return text or "[空]"

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
@@ -23,9 +23,10 @@ class AIHTTPSessionManager:
     async def ensure_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             }
+            if str(self.api_key or "").strip():
+                headers["Authorization"] = f"Bearer {self.api_key}"
             headers.update(self.extra_headers)
             self.session = aiohttp.ClientSession(
                 headers=headers,
@@ -41,3 +42,4 @@ class AIHTTPSessionManager:
     async def close(self) -> None:
         if self.session and not self.session.closed:
             await self.session.close()
+

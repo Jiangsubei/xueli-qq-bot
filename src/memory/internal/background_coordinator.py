@@ -78,9 +78,6 @@ class MemoryBackgroundCoordinator:
                 force=True,
             )
 
-        if registration.should_save_current:
-            self.schedule_conversation_save(user_id, session_id=registration.session_id)
-
     def schedule_conversation_save(
         self,
         user_id: str,
@@ -98,7 +95,7 @@ class MemoryBackgroundCoordinator:
                     force=force,
                 )
                 if result:
-                    logger.info("对话会话已保存：用户=%s，会话=%s", user_id, result.session_id)
+                    logger.debug("对话会话已保存：用户=%s，会话=%s", user_id, result.session_id)
             except Exception as exc:
                 logger.error("保存对话会话失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
@@ -138,10 +135,10 @@ class MemoryBackgroundCoordinator:
         session_id: Optional[str] = None,
     ) -> List[MemoryItem]:
         if not self.auto_extract_memory:
-            logger.info("自动记忆提取未启用：用户=%s", user_id)
+            logger.debug("自动记忆提取未启用：用户=%s", user_id)
             return []
         if not self.extractor:
-            logger.warning("记忆提取器不可用：用户=%s", user_id)
+            logger.debug("记忆提取器不可用：用户=%s", user_id)
             return []
 
         resolved_session_id = self._resolve_session_id(
@@ -168,7 +165,6 @@ class MemoryBackgroundCoordinator:
             )
             return []
 
-        await self.conversation_store.save_conversation(user_id=user_id, session_id=resolved_session_id, force=True)
         memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id)
         if memories:
             self.on_memory_changed(user_id)
@@ -193,7 +189,7 @@ class MemoryBackgroundCoordinator:
                     session_id=session_id,
                 )
                 if memories:
-                    logger.info("后台记忆提取完成：用户=%s，写入=%s 条", user_id, len(memories))
+                    logger.debug("后台记忆提取完成：用户=%s，写入=%s 条", user_id, len(memories))
             except Exception as exc:
                 logger.error("后台记忆提取任务失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
@@ -222,7 +218,6 @@ class MemoryBackgroundCoordinator:
             )
             if not resolved_session_id:
                 return []
-            await self.conversation_store.save_conversation(user_id=user_id, session_id=resolved_session_id, force=True)
             memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id, force=True)
             if memories:
                 self.on_memory_changed(user_id)
@@ -257,7 +252,7 @@ class MemoryBackgroundCoordinator:
                 )
             except Exception as exc:
                 logger.error(
-                    "conversation flush failed: user=%s session=%s error=%s",
+                    "会话收尾失败：用户=%s，会话=%s，错误=%s",
                     user_id,
                     session_id,
                     exc,
@@ -297,7 +292,7 @@ class MemoryBackgroundCoordinator:
                 )
             except Exception as exc:
                 logger.error(
-                    "conversation close flush failed: user=%s session=%s error=%s",
+                    "关闭会话收尾失败：用户=%s，会话=%s，错误=%s",
                     owner_user_id,
                     session_id,
                     exc,

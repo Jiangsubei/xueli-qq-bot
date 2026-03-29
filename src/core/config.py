@@ -127,7 +127,6 @@ class MemoryConfig:
     rerank_total_prompt_budget: int = 2400
     auto_extract: bool = True
     extract_every_n_turns: int = 3
-    conversation_save_interval: int = 10
     extraction_api_base: Optional[str] = None
     extraction_api_key: Optional[str] = None
     extraction_model: Optional[str] = None
@@ -161,27 +160,39 @@ class AppConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
 
+def _is_model_endpoint_configured(api_base: Any, model: Any) -> bool:
+    return all(str(value or "").strip() for value in (api_base, model))
+
+
+def is_ai_service_configured(app_config: AppConfig) -> bool:
+    ai_service = app_config.ai_service
+    return _is_model_endpoint_configured(ai_service.api_base, ai_service.model)
+
+
 def is_vision_service_configured(app_config: AppConfig) -> bool:
     vision = app_config.vision_service
-    return all(str(value or "").strip() for value in (vision.api_base, vision.api_key, vision.model))
+    return _is_model_endpoint_configured(vision.api_base, vision.model)
 
 
 def get_vision_service_status(app_config: AppConfig) -> str:
-    if not app_config.vision_service.enabled:
-        return "disabled"
     if not is_vision_service_configured(app_config):
-        return "unconfigured"
+        return "disabled" if not app_config.vision_service.enabled else "unconfigured"
     return "enabled"
 
 
 def is_group_reply_decision_configured(app_config: AppConfig) -> bool:
     decision = app_config.group_reply_decision
-    return all(str(value or "").strip() for value in (decision.api_base, decision.api_key, decision.model))
+    return _is_model_endpoint_configured(decision.api_base, decision.model)
 
 
 def is_memory_rerank_configured(app_config: AppConfig) -> bool:
     rerank = app_config.memory_rerank
-    return all(str(value or "").strip() for value in (rerank.api_base, rerank.api_key, rerank.model))
+    return _is_model_endpoint_configured(rerank.api_base, rerank.model)
+
+
+def is_memory_extraction_configured(app_config: AppConfig) -> bool:
+    memory = app_config.memory
+    return _is_model_endpoint_configured(memory.extraction_api_base, memory.extraction_model)
 
 
 class ConfigValidationError(ValueError):
@@ -256,7 +267,6 @@ class Config:
         "MEMORY_RERANK_RESPONSE_PATH": ("memory_rerank", "response_path"),
         "MEMORY_AUTO_EXTRACT": ("memory", "auto_extract"),
         "MEMORY_EXTRACT_EVERY_N_TURNS": ("memory", "extract_every_n_turns"),
-        "MEMORY_CONVERSATION_SAVE_INTERVAL": ("memory", "conversation_save_interval"),
         "MEMORY_EXTRACTION_API_BASE": ("memory", "extraction_api_base"),
         "MEMORY_EXTRACTION_API_KEY": ("memory", "extraction_api_key"),
         "MEMORY_EXTRACTION_MODEL": ("memory", "extraction_model"),
@@ -303,7 +313,7 @@ class Config:
             with open(self._path, "rb") as file:
                 payload = tomllib.load(file)
             self._raw_data = dict(payload) if isinstance(payload, dict) else {}
-            logger.info("配置加载完成：%s", self._path)
+            logger.debug("配置加载完成：%s", self._path)
         except Exception as exc:
             self._load_error = f"加载配置失败 {self._path}: {exc}"
             logger.warning(self._load_error)
@@ -352,11 +362,11 @@ class Config:
 
     def get_group_reply_decision_extra_params(self) -> Dict[str, Any]:
         value = self._app.group_reply_decision.extra_params
-        return self.get_extra_params() if value is None else dict(value)
+        return {} if value is None else dict(value)
 
     def get_group_reply_decision_extra_headers(self) -> Dict[str, str]:
         value = self._app.group_reply_decision.extra_headers
-        return self.get_extra_headers() if value is None else dict(value)
+        return {} if value is None else dict(value)
 
     def get_vision_extra_params(self) -> Dict[str, Any]:
         return {} if self._app.vision_service.extra_params is None else dict(self._app.vision_service.extra_params)
@@ -366,11 +376,11 @@ class Config:
 
     def get_memory_extraction_extra_params(self) -> Dict[str, Any]:
         value = self._app.memory.extraction_extra_params
-        return self.get_extra_params() if value is None else dict(value)
+        return {} if value is None else dict(value)
 
     def get_memory_extraction_extra_headers(self) -> Dict[str, str]:
         value = self._app.memory.extraction_extra_headers
-        return self.get_extra_headers() if value is None else dict(value)
+        return {} if value is None else dict(value)
 
     def get_memory_rerank_extra_params(self) -> Dict[str, Any]:
         return {} if self._app.memory_rerank.extra_params is None else dict(self._app.memory_rerank.extra_params)
@@ -389,28 +399,37 @@ class Config:
             "response_path": rerank.response_path or AIServiceConfig().response_path,
         }
 
-    def get_memory_extraction_client_config(self) -> Dict[str, Any]:
-        memory = self._app.memory
+    def get_ai_service_client_config(self) -> Dict[str, Any]:
         ai_service = self._app.ai_service
         return {
-            "api_base": memory.extraction_api_base or ai_service.api_base,
-            "api_key": memory.extraction_api_key or ai_service.api_key,
-            "model": memory.extraction_model or ai_service.model,
+            "api_base": ai_service.api_base,
+            "api_key": ai_service.api_key,
+            "model": ai_service.model,
+            "extra_params": self.get_extra_params(),
+            "extra_headers": self.get_extra_headers(),
+            "response_path": ai_service.response_path,
+        }
+
+    def get_memory_extraction_client_config(self) -> Dict[str, Any]:
+        memory = self._app.memory
+        return {
+            "api_base": memory.extraction_api_base or "",
+            "api_key": memory.extraction_api_key or "",
+            "model": memory.extraction_model or "",
             "extra_params": self.get_memory_extraction_extra_params(),
             "extra_headers": self.get_memory_extraction_extra_headers(),
-            "response_path": memory.extraction_response_path or ai_service.response_path,
+            "response_path": memory.extraction_response_path or AIServiceConfig().response_path,
         }
 
     def get_group_reply_decision_client_config(self) -> Dict[str, Any]:
         decision = self._app.group_reply_decision
-        ai_service = self._app.ai_service
         return {
-            "api_base": decision.api_base or ai_service.api_base,
-            "api_key": decision.api_key or ai_service.api_key,
-            "model": decision.model or ai_service.model,
+            "api_base": decision.api_base or "",
+            "api_key": decision.api_key or "",
+            "model": decision.model or "",
             "extra_params": self.get_group_reply_decision_extra_params(),
             "extra_headers": self.get_group_reply_decision_extra_headers(),
-            "response_path": decision.response_path or ai_service.response_path,
+            "response_path": decision.response_path or AIServiceConfig().response_path,
         }
 
     def get_vision_client_config(self) -> Dict[str, Any]:
@@ -584,7 +603,6 @@ class Config:
             ),
             auto_extract=self._bool_value(section, "memory", "auto_extract", default=True),
             extract_every_n_turns=self._bounded_int(section, "memory", "extract_every_n_turns", default=3, minimum=1),
-            conversation_save_interval=self._bounded_int(section, "memory", "conversation_save_interval", default=10, minimum=1),
             extraction_api_base=self._nullable_string(section, "memory", "extraction_api_base"),
             extraction_api_key=self._nullable_string(section, "memory", "extraction_api_key"),
             extraction_model=self._nullable_string(section, "memory", "extraction_model"),
@@ -621,7 +639,6 @@ class Config:
                 rerank_total_prompt_budget=config.rerank_total_prompt_budget,
                 auto_extract=config.auto_extract,
                 extract_every_n_turns=config.extract_every_n_turns,
-                conversation_save_interval=config.conversation_save_interval,
                 extraction_api_base=config.extraction_api_base,
                 extraction_api_key=config.extraction_api_key,
                 extraction_model=config.extraction_model,

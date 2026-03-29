@@ -235,7 +235,7 @@ class MemoryItem:
                 owner_user_id=parsed_meta.get("owner", ""),
             )
         except (ValueError, TypeError, json.JSONDecodeError) as e:
-            logger.warning("解析记忆失败: 内容=%s, 错误=%s", line[:80], e)
+            logger.warning("解析记忆条目失败：错误=%s", e)
             return None
 
 
@@ -517,12 +517,7 @@ class MarkdownMemoryStore:
             incoming_importance = self._safe_float(incoming_metadata.get("importance"), current_importance)
             boosted_importance = min(5.0, max(current_importance, incoming_importance) + 1.0)
             mem.metadata["importance"] = boosted_importance
-            logger.info(
-                "记忆重复提及，已增强: 内容=%s, 提及次数=%s, 新重要度=%.1f",
-                mem.content[:30],
-                mention_count,
-                boosted_importance,
-            )
+            logger.debug("记忆已增强：用户=%s，提及次数=%s，重要度=%.1f", mem.owner_user_id or "global", mention_count, boosted_importance)
 
     async def _read_memories_async(self, file_path: Path, owner_user_id: str = "") -> List[MemoryItem]:
         if not file_path.exists():
@@ -532,7 +527,7 @@ class MarkdownMemoryStore:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
         except OSError as e:
-            logger.error("读取记忆文件失败: %s, 错误=%s", file_path, e)
+            logger.error("读取记忆文件失败：文件=%s，错误=%s", file_path, e)
             return []
 
         memories: List[MemoryItem] = []
@@ -556,7 +551,7 @@ class MarkdownMemoryStore:
                     await f.write("\n\n".join(blocks))
                 return True
             except OSError as e:
-                logger.error("写入记忆文件失败: %s, 错误=%s", file_path, e)
+                logger.error("写入记忆文件失败：文件=%s，错误=%s", file_path, e)
                 return False
 
     async def _remove_file_if_exists(self, file_path: Path):
@@ -564,14 +559,14 @@ class MarkdownMemoryStore:
             try:
                 file_path.unlink()
             except OSError as e:
-                logger.warning("删除空归档文件失败: %s, 错误=%s", file_path, e)
+                logger.warning("删除空归档文件失败：文件=%s，错误=%s", file_path, e)
 
     async def _sync_archive_file(self, file_path: Path, archived: List[MemoryItem], label: str):
         """同步导出软归档记忆。"""
         if archived:
             success = await self._write_memories_async(file_path, archived)
             if success:
-                logger.info("已同步归档记忆: 目标=%s, 条数=%s", label, len(archived))
+                logger.debug("已同步归档记忆：目标=%s，条数=%s", label, len(archived))
         else:
             await self._remove_file_if_exists(file_path)
 
@@ -579,16 +574,12 @@ class MarkdownMemoryStore:
         memories = await self._read_memories_async(self._get_user_file(user_id), owner_user_id=user_id)
         active, archived = self._partition_memories_by_decay(memories)
         await self._sync_archive_file(self._get_archive_user_file(user_id), archived, f"user:{user_id}")
-        if archived:
-            logger.info("读取用户记忆时跳过已归档内容: user=%s, 条数=%s", user_id, len(archived))
         return active
 
     async def get_global_memories(self) -> List[MemoryItem]:
         memories = await self._read_memories_async(self.global_file)
         active, archived = self._partition_memories_by_decay(memories)
         await self._sync_archive_file(self.archive_global_file, archived, "global")
-        if archived:
-            logger.info("读取全局记忆时跳过已归档内容: 条数=%s", len(archived))
         return active
 
     async def get_archived_user_memories(self, user_id: str) -> List[MemoryItem]:
@@ -655,7 +646,7 @@ class MarkdownMemoryStore:
         success = await self._write_memories_async(target_file, memories)
 
         if success:
-            logger.info("新增记忆: user=%s, 内容=%s", user_id or "global", normalized_content[:50])
+            logger.debug("已新增记忆：用户=%s", user_id or "global")
             return mem
         return None
 

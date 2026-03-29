@@ -611,7 +611,6 @@ function collectSectionPayload(section) {
             dynamic_dedup_similarity_threshold: numberOrZero(formData.get("dynamic_dedup_similarity_threshold")),
             rerank_candidate_max_chars: numberOrZero(formData.get("rerank_candidate_max_chars")),
             rerank_total_prompt_budget: numberOrZero(formData.get("rerank_total_prompt_budget")),
-            conversation_save_interval: numberOrZero(formData.get("conversation_save_interval")),
             ordinary_decay_enabled: checkboxValue(formData, "ordinary_decay_enabled"),
             ordinary_half_life_days: numberOrZero(formData.get("ordinary_half_life_days")),
             ordinary_forget_threshold: numberOrZero(formData.get("ordinary_forget_threshold")),

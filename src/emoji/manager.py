@@ -115,7 +115,7 @@ class EmojiManager:
                 sticker_reason=analysis_result.get_sticker_reason(index),
             )
             sticker_count += 1
-            logger.info(
+            logger.debug(
                 "检测到表情包：ID=%s，置信度=%.2f，用户=%s，群=%s",
                 record.emoji_id,
                 record.sticker_confidence,

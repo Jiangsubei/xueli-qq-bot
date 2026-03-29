@@ -73,26 +73,26 @@ class ImageClient:
             logger.debug(f"下载图片: {fixed_url[:80]}")
             async with self.session.get(fixed_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status != 200:
-                    logger.error(f"图片下载失败: HTTP {response.status}")
+                    logger.error("图片下载失败：HTTP %s", response.status)
                     return None
 
                 # 检查内容类型是否为图片
                 content_type = response.headers.get('Content-Type', '')
                 if not content_type.startswith('image/'):
-                    logger.warning(f"返回内容不是图片: {content_type}")
+                    logger.warning("返回内容不是图片：%s", content_type)
 
                 image_bytes = await response.read()
                 logger.debug(f"图片下载完成: {len(image_bytes)} 字节")
                 return image_bytes
 
         except aiohttp.ClientError as e:
-            logger.error(f"图片下载请求失败: {e}")
+            logger.error("图片下载请求失败：%s", e)
             return None
         except asyncio.TimeoutError:
             logger.error("图片下载超时")
             return None
         except Exception as e:
-            logger.error(f"图片下载失败: {e}", exc_info=True)
+            logger.error("图片下载失败：%s", e, exc_info=True)
             return None
 
     async def download_image_from_base64(self, base64_data: str) -> Optional[bytes]:
@@ -115,7 +115,7 @@ class ImageClient:
             return image_bytes
 
         except (binascii.Error, ValueError) as e:
-            logger.error(f"Base64 解码失败: {e}")
+            logger.error("Base64 解码失败：%s", e)
             return None
 
     async def process_image_segment(self, segment_data: Dict[str, Any]) -> Optional[str]:
@@ -159,15 +159,15 @@ class ImageClient:
                             image_bytes = f.read()
                         return base64.b64encode(image_bytes).decode('utf-8')
                     except OSError as e:
-                        logger.error(f"读取本地图片失败: {e}")
+                        logger.error("读取本地图片失败：%s", e)
                 return None
 
             logger.warning("图片消息缺少 url 或 file 字段")
             return None
 
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError, binascii.Error) as e:
-            logger.error(f"处理图片消息失败: {e}", exc_info=True)
+            logger.error("处理图片消息失败：%s", e, exc_info=True)
             return None
         except Exception as e:
-            logger.error(f"处理图片消息失败: {e}", exc_info=True)
+            logger.error("处理图片消息失败：%s", e, exc_info=True)
             return None

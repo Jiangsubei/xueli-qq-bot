@@ -40,7 +40,6 @@ class MemoryManagerConfig:
     ordinary_decay_enabled: bool = True
     ordinary_half_life_days: float = 30.0
     ordinary_forget_threshold: float = 0.5
-    conversation_save_interval: int = 10
     auto_build_index: bool = True
     auto_extract_memory: bool = True
     user_important_budget_chars: int = 360
@@ -78,7 +77,6 @@ class MemoryManager:
         )
         self.conversation_store = ConversationStore(
             base_path=os.path.join(self.config.storage_base_path, "conversations"),
-            save_interval=self.config.conversation_save_interval,
         )
         self.access_policy = MemoryAccessPolicy()
 
@@ -125,7 +123,7 @@ class MemoryManager:
         )
 
     async def initialize(self):
-        logger.info("开始初始化记忆管理器")
+        logger.debug("开始初始化记忆管理器")
         migration_count = await self._migrate_existing_memories()
         if migration_count:
             self._inc_memory_migrations(migration_count)
@@ -133,7 +131,7 @@ class MemoryManager:
         if compaction_count:
             self._inc_memory_compactions(compaction_count)
         await self.index_coordinator.initialize()
-        logger.info("记忆管理器初始化完成")
+        logger.debug("记忆管理器初始化完成")
 
     async def rebuild_index(self, user_id: str):
         return await self.index_coordinator.rebuild_index(user_id)
@@ -522,7 +520,7 @@ class MemoryManager:
         self._sync_background_task_metric()
         if self.retriever:
             await self.retriever.close()
-        logger.info("记忆管理器已关闭")
+        logger.debug("记忆管理器已关闭")
 
     def get_stats(self) -> Dict[str, Any]:
         self._sync_background_task_metric()

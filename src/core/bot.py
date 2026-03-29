@@ -111,7 +111,7 @@ class QQBot:
             if not hasattr(event, "message_type"):
                 return
             msg_type = "private" if event.message_type == MessageType.PRIVATE.value else "group"
-            logger.info("收到%s消息：用户=%s", "私聊" if msg_type == "private" else "群聊", event.user_id)
+            logger.debug("收到%s消息：用户=%s", "私聊" if msg_type == "private" else "群聊", event.user_id)
 
         @self.dispatcher.on_message
         async def handle_message(event: MessageEvent):
@@ -153,19 +153,15 @@ class QQBot:
 
         try:
             plan = await self.message_handler.plan_message(event)
-            planner_log_context = self._build_planner_log_context(plan)
-            logger.info(
-                "消息处理计划：action=%s，source=%s，batch_mode=%s，batch_size=%s，is_latest=%s，merged_into_latest=%s，reason=%s，user=%s，group=%s",
-                plan.action,
-                plan.source,
-                planner_log_context["batch_mode"],
-                planner_log_context["batch_size"],
-                planner_log_context["is_latest"],
-                planner_log_context["merged_into_latest"],
-                plan.reason,
-                event.user_id,
-                event.group_id,
-            )
+            if self._should_log_message_summary():
+                logger.info(
+                    "消息计划：动作=%s，来源=%s，原因=%s，用户=%s，群=%s",
+                    plan.action,
+                    plan.source,
+                    plan.reason,
+                    event.user_id,
+                    event.group_id,
+                )
 
             if not plan.should_reply:
                 return
@@ -217,12 +213,13 @@ class QQBot:
 
             self.runtime_metrics.inc_messages_replied(len(parts))
             self._sync_status_cache()
-            logger.info(
-                "消息发送完成：target=%s，message_type=%s，parts=%s",
-                event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
-                event.message_type,
-                len(parts),
-            )
+            if self._should_log_message_summary():
+                logger.info(
+                    "回复已发送：目标=%s，类型=%s，分段=%s",
+                    event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
+                    event.message_type,
+                    len(parts),
+                )
             return True
         except Exception as exc:
             logger.error("发送回复失败：%s", exc, exc_info=True)
@@ -244,11 +241,12 @@ class QQBot:
         try:
             await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)])
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
-            logger.info(
-                "群聊表情跟进已发送：group=%s，emoji_id=%s",
-                event.group_id,
-                getattr(selection.emoji, "emoji_id", ""),
-            )
+            if self._should_log_message_summary():
+                logger.info(
+                    "群聊表情跟进已发送：group=%s，emoji_id=%s",
+                    event.group_id,
+                    getattr(selection.emoji, "emoji_id", ""),
+                )
         except Exception as exc:
             logger.error("发送表情跟进失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
@@ -312,6 +310,11 @@ class QQBot:
         bot_behavior = getattr(app_config, "bot_behavior", None)
         return bool(getattr(bot_behavior, "private_quote_reply_enabled", False))
 
+    def _should_log_message_summary(self) -> bool:
+        app_config = getattr(self.message_handler, "app_config", None)
+        bot_behavior = getattr(app_config, "bot_behavior", None)
+        return not bool(getattr(bot_behavior, "log_full_prompt", False))
+
     async def _on_websocket_message(self, data: Dict[str, Any]):
         try:
             await self.dispatcher.dispatch(data)
@@ -324,13 +327,13 @@ class QQBot:
         self.runtime_metrics.set_connected(True)
         self.runtime_metrics.set_ready(True)
         self._sync_status_cache()
-        logger.info("NapCat 已连接")
+        logger.debug("NapCat 已连接")
 
     async def _on_disconnect(self):
         self.runtime_metrics.set_connected(False)
         self.runtime_metrics.set_ready(False)
         self._sync_status_cache()
-        logger.warning("NapCat 连接已断开")
+        logger.debug("NapCat 连接已断开")
 
     async def _run_webui_snapshot_heartbeat(self) -> None:
         while not self._shutdown_event.is_set():

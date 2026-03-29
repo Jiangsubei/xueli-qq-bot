@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -46,7 +47,13 @@ class ReplyPipelineHost(Protocol):
     def _build_assistant_identity_prompt(self) -> str: ...
     def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str: ...
     def _build_system_prompt(self) -> str: ...
-    def _format_system_prompt_log_with_history(self, event: MessageEvent, messages: List[Dict[str, Any]], related_history_messages: Optional[List[Dict[str, Any]]] = None) -> str: ...
+    def _format_system_prompt_log_with_history(
+        self,
+        event: MessageEvent,
+        messages: List[Dict[str, Any]],
+        related_history_messages: Optional[List[Dict[str, Any]]] = None,
+        title: str = "[FULL PROMPT]",
+    ) -> str: ...
 
 
 class ReplyPipeline:
@@ -57,7 +64,12 @@ class ReplyPipeline:
         original_user_message = user_message
         base64_images = await self._download_images_if_needed(event)
         conversation = self.host._get_conversation(self.host._get_conversation_key(event))
-        memory_context, related_history_messages, is_first_turn = await self.load_memory_context(
+        recent_history_text = self._build_recent_history_text(
+            event=event,
+            conversation=conversation,
+            plan=plan,
+        )
+        persistent_memory_context, dynamic_memory_context, related_history_messages, is_first_turn = await self.load_memory_context(
             event=event,
             user_message=original_user_message,
             conversation=conversation,
@@ -68,15 +80,18 @@ class ReplyPipeline:
             base64_images=base64_images,
             plan=plan,
         )
-        system_prompt = self.build_response_system_prompt(
-            event=event,
-            memory_context=memory_context,
-            is_first_turn=is_first_turn,
-            plan=plan,
-        )
         model_user_message = self._build_model_user_message(
             original_user_message=original_user_message,
             vision_analysis=vision_analysis,
+        )
+        system_prompt = self.build_response_system_prompt(
+            event=event,
+            persistent_memory_context=persistent_memory_context,
+            dynamic_memory_context=dynamic_memory_context,
+            is_first_turn=is_first_turn,
+            plan=plan,
+            recent_history_text=recent_history_text,
+            current_message=model_user_message,
         )
         history_user_message = self._build_history_user_message(
             original_user_message=original_user_message,
@@ -94,11 +109,6 @@ class ReplyPipeline:
                 system_prompt=system_prompt,
                 user_message=model_user_message,
                 base64_images=base64_images,
-                context_messages=self._build_context_messages(
-                    event=event,
-                    conversation=conversation,
-                    plan=plan,
-                ),
                 related_history_messages=related_history_messages,
             )
         return PreparedReplyRequest(
@@ -119,7 +129,7 @@ class ReplyPipeline:
             source = "fallback" if prepared.fallback_response is not None else "ai"
             response = AIResponse(content=prepared.fallback_response) if prepared.fallback_response is not None else await self._request_model_reply(event, prepared)
             self._persist_reply_result(event, prepared, response)
-            logger.info(
+            logger.debug(
                 "回复生成完成：用户=%s，群=%s，长度=%s",
                 event.user_id,
                 event.group_id,
@@ -136,7 +146,7 @@ class ReplyPipeline:
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
         if not event.has_image() or not self._vision_enabled():
             return []
-        logger.info("开始处理图片输入")
+        logger.debug("开始处理图片输入")
         return await self.host.download_images(event)
 
     def _log_prompt_if_enabled(self, event: MessageEvent, prepared: PreparedReplyRequest) -> None:
@@ -148,17 +158,10 @@ class ReplyPipeline:
                 event.user_id,
                 self.host._get_conversation_key(event),
             )
-            return
-        logger.info(
-            self.host._format_system_prompt_log_with_history(
-                event,
-                prepared.messages,
-                related_history_messages=prepared.related_history_messages,
-            )
-        )
+        return
 
     async def _request_model_reply(self, event: MessageEvent, prepared: PreparedReplyRequest) -> AIResponse:
-        logger.info(
+        logger.debug(
             "开始请求 AI：用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
             event.user_id,
             event.group_id,
@@ -166,7 +169,12 @@ class ReplyPipeline:
             len(prepared.related_history_messages),
             self._should_use_multimodal_reply(prepared.base64_images),
         )
-        return await self.chat_with_tools(messages=prepared.messages, user_id=str(event.user_id), temperature=0.7)
+        return await self.chat_with_tools(
+            messages=prepared.messages,
+            user_id=str(event.user_id),
+            temperature=0.7,
+            event=event,
+        )
 
     def _persist_reply_result(self, event: MessageEvent, prepared: PreparedReplyRequest, response: AIResponse) -> None:
         prepared.conversation.add_message("user", prepared.history_user_message)
@@ -236,8 +244,8 @@ class ReplyPipeline:
             return system_prompt
         return (
             f"{system_prompt}\n\n"
-            "在回答前，如果你明确需要回忆长期记忆，可以调用 search_memories 工具。"
-            "只有在确实能帮助回答时才调用，不要滥用。"
+            "如果你需要记住重要的东西，或者被明确要求记住什么事情，可以调用 search_memories 工具。"
+            "只有在确实需要用时才能调用，不要滥用。"
         )
     async def execute_tool_call(self, tool_call: Dict[str, Any], user_id: str) -> Dict[str, Any]:
         function_payload = tool_call.get("function") or {}
@@ -289,7 +297,13 @@ class ReplyPipeline:
             "content": content,
         }
 
-    async def chat_with_tools(self, messages: List[Dict[str, Any]], user_id: str, temperature: float = 0.7) -> AIResponse:
+    async def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        user_id: str,
+        temperature: float = 0.7,
+        event: Optional[MessageEvent] = None,
+    ) -> AIResponse:
         tools = self.build_memory_tools()
         request_messages = list(messages)
         if tools:
@@ -297,6 +311,7 @@ class ReplyPipeline:
                 "role": "system",
                 "content": self.augment_system_prompt_for_tools(str(request_messages[0].get("content", "")), tools),
             }
+        self._log_actual_prompt_messages(event=event, messages=request_messages, title="[FULL PROMPT]")
         response = await self.host.ai_client.chat_completion(
             messages=request_messages,
             temperature=temperature,
@@ -316,7 +331,21 @@ class ReplyPipeline:
         )
         for tool_call in tool_calls:
             follow_up_messages.append(await self.execute_tool_call(tool_call, user_id))
+        self._log_actual_prompt_messages(event=event, messages=follow_up_messages, title="[FULL PROMPT][ROUND 2]")
         return await self.host.ai_client.chat_completion(messages=follow_up_messages, temperature=temperature)
+
+    def _log_actual_prompt_messages(
+        self,
+        *,
+        event: Optional[MessageEvent],
+        messages: List[Dict[str, Any]],
+        title: str,
+    ) -> None:
+        if not event or not self.host.app_config.bot_behavior.log_full_prompt:
+            return
+        formatter = getattr(self.host, "_format_system_prompt_log_with_history", None)
+        if callable(formatter):
+            logger.info(formatter(event, messages, title=title))
 
     async def load_memory_context(
         self,
@@ -324,27 +353,16 @@ class ReplyPipeline:
         event: MessageEvent,
         user_message: str,
         conversation: Conversation,
-    ) -> Tuple[str, List[Dict[str, Any]], bool]:
+    ) -> Tuple[str, str, List[Dict[str, Any]], bool]:
         if not self.host.memory_manager:
-            return "", [], len(conversation.messages) == 0
+            return "", "", [], len(conversation.messages) == 0
 
         is_first_turn = len(conversation.messages) == 0
         access_context = self._build_memory_access_context(event)
-        if is_first_turn:
-            try:
-                important = await self.host.memory_manager.get_important_memories(
-                    user_id=str(event.user_id),
-                    limit=5,
-                    read_scope=self._get_memory_read_scope(),
-                    access_context=access_context,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("加载重要记忆失败：%s", exc)
-                important = []
-            formatted = self._format_legacy_important_memories(important)
-            return formatted, [], True
+        persistent_memory_context = await self._load_persistent_memory_context(
+            user_id=str(event.user_id),
+            access_context=access_context,
+        )
 
         try:
             payload = await self.host.memory_manager.search_memories_with_context(
@@ -359,43 +377,47 @@ class ReplyPipeline:
             raise
         except Exception as exc:
             logger.warning("检索记忆上下文失败：%s", exc)
-            return await self._load_legacy_memory_context(event=event, user_message=user_message, conversation=conversation)
+            return persistent_memory_context, "", [], is_first_turn
 
         memories = payload.get("memories", []) if isinstance(payload, dict) else []
         history_messages = payload.get("history_messages", []) if isinstance(payload, dict) else []
-        memory_context = self._format_legacy_important_memories(memories)
-        return memory_context, list(history_messages or []), False
+        dynamic_memory_context = self._format_memory_context(
+            self._dedupe_memory_lines(
+                self._collect_memory_lines(memories),
+                existing_lines=self._collect_memory_lines_from_text(persistent_memory_context),
+            )
+        )
+        return persistent_memory_context, dynamic_memory_context, list(history_messages or []), is_first_turn
 
-    async def _load_legacy_memory_context(
+    async def _load_persistent_memory_context(
         self,
         *,
-        event: MessageEvent,
-        user_message: str,
-        conversation: Conversation,
-    ) -> Tuple[str, List[Dict[str, Any]], bool]:
-        del user_message
+        user_id: str,
+        access_context: Any,
+    ) -> str:
         if not self.host.memory_manager:
-            return "", [], len(conversation.messages) == 0
+            return ""
         try:
             important = await self.host.memory_manager.get_important_memories(
-                user_id=str(event.user_id),
+                user_id=user_id,
                 limit=5,
                 read_scope=self._get_memory_read_scope(),
-                access_context=self._build_memory_access_context(event),
+                access_context=access_context,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("旧版记忆加载失败：%s", exc)
+            logger.warning("加载持续关键信息失败：%s", exc)
             important = []
-        return self._format_legacy_important_memories(important), [], len(conversation.messages) == 0
+        return self._format_memory_context(self._collect_memory_lines(important))
 
     def _format_legacy_important_memories(self, memories: List[Any]) -> str:
-        if not memories:
-            return ""
-        lines = ["=== memory ==="]
+        return self._format_memory_context(self._collect_memory_lines(memories))
+
+    def _collect_memory_lines(self, memories: List[Any]) -> List[str]:
+        lines: List[str] = []
         formatter = getattr(self.host, "_format_memory_prompt_entry", None)
-        for index, item in enumerate(memories, start=1):
+        for item in memories:
             content = getattr(item, "content", None)
             owner = getattr(item, "owner_user_id", "")
             if content is None and isinstance(item, dict):
@@ -406,8 +428,36 @@ class ReplyPipeline:
                 continue
             if callable(formatter):
                 text = formatter(text, str(owner or ""))
-            lines.append(f"{index}. {text}")
-        return "\n".join(lines) + ("\n" if len(lines) > 1 else "")
+            lines.append(text)
+        return lines
+
+    def _format_memory_context(self, memory_lines: List[str]) -> str:
+        if not memory_lines:
+            return ""
+        return "\n".join(f"{index}. {text}" for index, text in enumerate(memory_lines, start=1))
+
+    def _collect_memory_lines_from_text(self, memory_context: str) -> List[str]:
+        lines: List[str] = []
+        for raw_line in str(memory_context or "").splitlines():
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            lines.append(re.sub(r"^\d+\.\s*", "", line))
+        return lines
+
+    def _dedupe_memory_lines(self, memory_lines: List[str], *, existing_lines: List[str]) -> List[str]:
+        seen = {self._normalize_memory_line(line) for line in existing_lines if self._normalize_memory_line(line)}
+        deduped: List[str] = []
+        for line in memory_lines:
+            normalized = self._normalize_memory_line(line)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(line)
+        return deduped
+
+    def _normalize_memory_line(self, line: str) -> str:
+        return re.sub(r"\s+", " ", str(line or "").strip()).lower()
 
     def _get_memory_read_scope(self) -> str:
         getter = getattr(self.host, "_get_memory_read_scope", None)
@@ -426,18 +476,42 @@ class ReplyPipeline:
             read_scope=self._get_memory_read_scope(),
         )
 
+    def _assistant_display_name(self) -> str:
+        getter = getattr(self.host, "_get_assistant_name", None)
+        if callable(getter):
+            name = str(getter() or "").strip()
+            if name:
+                return name
+        fallback = getattr(getattr(self.host, "app_config", None), "assistant_profile", None)
+        return str(getattr(fallback, "name", "") or "").strip() or "助手"
+
+    def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
+        identifier = str(user_id or "").strip() or "unknown"
+        name = str(display_name or "").strip()
+        if name and name != identifier:
+            return f"{identifier}（{name}）"
+        return identifier
+
+    def _current_user_label(self, event: Optional[MessageEvent]) -> str:
+        if event is None:
+            return "unknown"
+        return self._format_identity_label(event.user_id, event.get_sender_display_name())
+
+    def _assistant_self_label(self, event: Optional[MessageEvent], plan: Optional[MessageHandlingPlan] = None) -> str:
+        if event is not None:
+            return self._format_identity_label(event.self_id, self._assistant_display_name())
+        if plan and getattr(plan, "reply_context", None):
+            self_id = (plan.reply_context or {}).get("assistant_self_id")
+            if self_id:
+                return self._format_identity_label(self_id, self._assistant_display_name())
+        return self._assistant_display_name()
+
     def _build_session_context_prompt(self, event: Optional[MessageEvent]) -> str:
         if event is None:
             return ""
         session_type = str(event.message_type or "").strip().lower() or MessageType.PRIVATE.value
-        lines = [
-            "【会话】",
-            f"会话: {session_type}",
-            f"用户ID: {event.user_id}",
-        ]
-        if session_type == MessageType.GROUP.value and event.group_id is not None:
-            lines.append(f"群ID: {event.group_id}")
-        return "\n".join(lines)
+        session_label = "群聊" if session_type == MessageType.GROUP.value else "私聊"
+        return f"请注意你现在正在和{session_label}里的“用户ID：{self._current_user_label(event)}”说话。"
 
     def _build_reply_context_prompt(
         self,
@@ -445,45 +519,97 @@ class ReplyPipeline:
         event: Optional[MessageEvent],
         plan: Optional[MessageHandlingPlan],
     ) -> str:
-        if not plan:
+        if not plan or event is None:
             return ""
-        reply_context = dict(getattr(plan, "reply_context", None) or {})
-        lines = [
-            "【本轮回复上下文】",
-            f"回复理由: {plan.reason}",
-        ]
-        reply_mode = str(reply_context.get("reply_mode") or "").strip()
-        if event is not None and str(event.message_type or "").strip().lower() == MessageType.GROUP.value:
-            at_self = event.is_at(event.self_id)
-            lines.append(f"当前消息是否显式@你: {'是' if at_self else '否'}")
-            if at_self:
-                lines.append("当前消息是在群里直接叫你，请按“对你说话”来理解，不要误判成用户在讨论别人。")
-            elif reply_mode == "proactive":
-                lines.append("这次回复属于主动接话，请结合最近群聊上下文自然承接。")
-            elif reply_mode == "repeat_echo":
-                lines.append("这次回复是复读触发，直接复读目标文本，不要额外延展。")
-        return "\n".join(lines)
+        session_type = str(event.message_type or "").strip().lower() or MessageType.PRIVATE.value
+        if session_type != MessageType.GROUP.value:
+            return ""
+        return f"你回复的理由是：{plan.reason}"
+
+    def _build_history_context_prompt(
+        self,
+        event: Optional[MessageEvent],
+        recent_history_text: str,
+        plan: Optional[MessageHandlingPlan],
+    ) -> str:
+        assistant_label = self._assistant_self_label(event, plan)
+        session_type = str(getattr(event, "message_type", "") or "").strip().lower()
+        if session_type == MessageType.GROUP.value:
+            if recent_history_text.strip():
+                return (
+                    f"在当前这条群消息之前，群里刚刚聊了这些内容。"
+                    f"注意你的id和昵称是：{assistant_label}。\n"
+                    f"{recent_history_text.strip()}"
+                )
+            return ""
+        if recent_history_text.strip():
+            return (
+                f"在这条消息之前，你们刚刚聊了这些内容。"
+                f"注意你的id和昵称是：{assistant_label}。\n"
+                f"{recent_history_text.strip()}"
+            )
+        return ""
+
+    def _build_new_session_prompt(self, event: Optional[MessageEvent], is_first_turn: bool) -> str:
+        if not is_first_turn or event is None:
+            return ""
+        session_type = str(getattr(event, "message_type", "") or "").strip().lower()
+        if session_type == MessageType.GROUP.value:
+            return (
+                "这是新的一轮对话。你现在还没有和这个用户在当前会话里展开新的上下文，"
+                "请优先基于当前消息、这条消息之前的几轮群聊记录、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
+            )
+        return (
+            "这是新的一轮对话。你现在还没有和用户在当前会话里展开新的上下文，"
+            "请优先基于当前消息、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
+        )
+
+    def _build_current_message_prompt(self, event: Optional[MessageEvent], current_message: str) -> str:
+        message = str(current_message or "").strip()
+        if event is None:
+            return f"当前消息：{message}" if message else "当前消息："
+        sender_label = self._current_user_label(event)
+        return f"当前消息来自用户 {sender_label}：{message}" if message else f"当前消息来自用户 {sender_label}："
+
+    def _build_persistent_memory_prompt(self, persistent_memory_context: str) -> str:
+        if persistent_memory_context.strip():
+            return "这些是你需要注意的关键信息：\n" + persistent_memory_context.strip()
+        return "当前没有需要你持续注意的关键信息。"
+
+    def _build_dynamic_memory_prompt(self, dynamic_memory_context: str) -> str:
+        if dynamic_memory_context.strip():
+            return "与当前消息关联的记忆有：\n" + dynamic_memory_context.strip()
+        return "当前消息没有额外关联的记忆。"
+
+    def _build_reply_scope_prompt(self, event: Optional[MessageEvent]) -> str:
+        session_type = str(getattr(event, "message_type", "") or "").strip().lower()
+        if session_type == MessageType.GROUP.value:
+            return "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于理解上下文，不要把它们当成当前要回复的消息，也不要转而回复其他用户之前说的话。"
+        return "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于理解上下文，不要把它们当成当前要回复的消息。"
 
     def build_response_system_prompt(
         self,
         *,
         event: Optional[MessageEvent] = None,
-        memory_context: str,
+        persistent_memory_context: str,
+        dynamic_memory_context: str,
         is_first_turn: bool,
         plan: Optional[MessageHandlingPlan] = None,
+        recent_history_text: str = "",
+        current_message: str = "",
     ) -> str:
-        del is_first_turn
         parts = [
             self.host._build_assistant_identity_prompt(),
             self.host._build_system_prompt(),
             self._build_session_context_prompt(event),
             self._build_reply_context_prompt(event=event, plan=plan),
+            self._build_new_session_prompt(event, is_first_turn),
+            self._build_history_context_prompt(event, recent_history_text, plan),
+            self._build_current_message_prompt(event, current_message),
+            self._build_persistent_memory_prompt(persistent_memory_context),
+            self._build_dynamic_memory_prompt(dynamic_memory_context),
+            self._build_reply_scope_prompt(event),
         ]
-        group_context = self.host._format_group_window_context(getattr(plan, "reply_context", None)) if plan else ""
-        if group_context:
-            parts.append(group_context)
-        if memory_context:
-            parts.append(memory_context.strip())
         return "\n\n".join(part for part in parts if str(part or "").strip())
 
     def build_response_messages(
@@ -491,80 +617,120 @@ class ReplyPipeline:
         system_prompt: str,
         user_message: str,
         base64_images: List[str],
-        context_messages: List[Dict[str, Any]],
         related_history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         del base64_images
         messages = [self.host.ai_client.build_text_message("system", system_prompt)]
-        messages.extend(list(context_messages or []))
         messages.extend(list(related_history_messages or []))
         messages.append(self.host.ai_client.build_text_message("user", user_message))
         return messages
 
-    def _build_context_messages(
+    def _build_recent_history_text(
         self,
         *,
         event: MessageEvent,
         conversation: Conversation,
         plan: Optional[MessageHandlingPlan],
-    ) -> List[Dict[str, Any]]:
+    ) -> str:
         if str(event.message_type or "").strip().lower() == MessageType.GROUP.value:
-            messages = self._build_group_window_messages(plan=plan, current_message_id=int(event.message_id or 0))
-            if messages:
-                return messages
-        return self._build_conversation_messages(conversation)
+            history_lines = self._build_group_window_history_lines(plan=plan, current_message_id=int(event.message_id or 0))
+            if history_lines:
+                return "\n".join(history_lines)
+        return self._build_conversation_history_text(event=event, conversation=conversation, plan=plan)
 
-    def _build_conversation_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
+    def _build_conversation_history_text(
+        self,
+        *,
+        event: MessageEvent,
+        conversation: Conversation,
+        plan: Optional[MessageHandlingPlan],
+    ) -> str:
         max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
         if max_length <= 0:
-            return []
-        return [
-            self.host.ai_client.build_text_message(str(item.get("role") or "user"), str(item.get("content") or ""))
-            for item in conversation.get_messages(max_length=max_length)
-            if str(item.get("content") or "").strip()
-        ]
+            return ""
+        rendered: List[str] = []
+        for item in conversation.get_messages(max_length=max_length):
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            rendered.append(self._format_conversation_message_for_prompt(item=item, event=event, plan=plan))
+        return "\n".join(line for line in rendered if line)
 
-    def _build_group_window_messages(
+    def _format_conversation_message_for_prompt(
+        self,
+        *,
+        item: Dict[str, Any],
+        event: MessageEvent,
+        plan: Optional[MessageHandlingPlan],
+    ) -> str:
+        role = str(item.get("role") or "user").strip().lower()
+        if role == "assistant":
+            speaker = f"你 {self._assistant_self_label(event, plan)}"
+        elif role == "system":
+            speaker = "系统"
+        else:
+            speaker = f"用户 {self._current_user_label(event)}"
+        content = str(item.get("content") or "").strip()
+        if not content:
+            return ""
+        return f"{speaker}: {content}"
+
+    def _build_group_window_history_lines(
         self,
         *,
         plan: Optional[MessageHandlingPlan],
         current_message_id: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[str]:
         if not plan or not getattr(plan, "reply_context", None):
             return []
         window_messages = list((plan.reply_context or {}).get("window_messages") or [])
         max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
         if max_length <= 0:
             return []
-        rendered: List[Dict[str, Any]] = []
+        rendered: List[str] = []
         for item in window_messages:
             if bool(item.get("is_latest")):
                 continue
             if current_message_id and int(item.get("message_id", 0) or 0) == current_message_id:
                 continue
-            content = self._format_window_message_for_model(item)
+            content = self._format_window_message_for_model(item, plan=plan)
             if not content:
                 continue
-            role = "assistant" if str(item.get("speaker_role") or "").strip().lower() == "assistant" else "user"
-            rendered.append(self.host.ai_client.build_text_message(role, content))
+            rendered.append(content)
         return rendered[-max_length:]
 
-    def _format_window_message_for_model(self, item: Dict[str, Any]) -> str:
-        text = str(item.get("text") or item.get("raw_text") or "").strip()
+    def _window_speaker_label(self, item: Dict[str, Any], plan: Optional[MessageHandlingPlan]) -> str:
+        role = str(item.get("speaker_role") or "user").strip().lower()
+        if role == "assistant":
+            return f"你 {self._assistant_self_label(None, plan)}"
+        return f"用户 {self._format_identity_label(item.get('user_id'), str(item.get('speaker_name') or ''))}"
+
+    def _format_window_message_for_model(self, item: Dict[str, Any], plan: Optional[MessageHandlingPlan] = None) -> str:
+        speaker = self._window_speaker_label(item, plan)
+        text = self._window_display_text(item)
         if text:
-            return text
+            return f"{speaker}: {text}"
         merged_description = str(item.get("merged_description") or "").strip()
         if merged_description:
-            return f"图片摘要: {merged_description}"
+            return f"{speaker}: 图片摘要: {merged_description}"
         per_image_descriptions = [
             str(value).strip()
             for value in (item.get("per_image_descriptions") or [])
             if str(value).strip()
         ]
         if per_image_descriptions:
-            return "图片摘要: " + "；".join(per_image_descriptions)
+            return f"{speaker}: 图片摘要: " + "；".join(per_image_descriptions)
         if bool(item.get("has_image")):
-            return "[图片]"
+            return f"{speaker}: [图片]"
+        return ""
+
+    def _window_display_text(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        if text and text != "[空]":
+            return text
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
         return ""
 
     async def _resolve_vision_analysis(

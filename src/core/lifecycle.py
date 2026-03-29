@@ -22,7 +22,7 @@ async def close_resource(resource: Any, *, label: Optional[str] = None) -> None:
         if asyncio.iscoroutine(result):
             await result
     except Exception as exc:
-            logger.warning("关闭资源失败：%s，错误=%s", label or type(resource).__name__, exc, exc_info=True)
+        logger.warning("关闭资源失败：%s，错误=%s", label or type(resource).__name__, exc, exc_info=True)
 
 
 async def cancel_task(task: Optional[asyncio.Task], *, label: str = "task") -> None:
@@ -53,8 +53,7 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task], *, label: str = "tasks") -
     if not pending:
         return
 
-    logger.info("正在取消后台任务：%s，数量=%s", label, len(pending))
+    logger.debug("正在取消后台任务：%s，数量=%s", label, len(pending))
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
-

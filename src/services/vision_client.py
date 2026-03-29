@@ -92,7 +92,7 @@ class VisionClient:
             "extra_headers": dict(self.app_config.vision_service.extra_headers or {}),
             "response_path": self.app_config.vision_service.response_path or "choices.0.message.content",
         }
-        logger.info("初始化视觉模型：模型=%s", client_config.get("model"))
+        logger.debug("初始化视觉模型：模型=%s", client_config.get("model"))
         return AIClient(
             api_base=client_config["api_base"],
             api_key=client_config["api_key"],
@@ -105,13 +105,13 @@ class VisionClient:
         )
 
     def enabled(self) -> bool:
-        return bool(self.app_config.vision_service.enabled)
+        return bool(self.is_configured())
 
     def is_configured(self) -> bool:
         return is_vision_service_configured(self.app_config)
 
     def is_available(self) -> bool:
-        return self.enabled() and self.is_configured()
+        return self.is_configured()
 
     def status(self) -> str:
         return get_vision_service_status(self.app_config)

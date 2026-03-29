@@ -96,7 +96,7 @@ class WebUIRuntimeServer:
     def stop(self) -> None:
         if self._httpd is None:
             return
-        logger.info("正在停止 WebUI...")
+        logger.debug("正在停止 WebUI")
         self._httpd.shutdown()
         self._httpd.server_close()
         if self._thread is not None:

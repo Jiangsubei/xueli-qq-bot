@@ -226,6 +226,27 @@ class MessageEvent(OneBotEvent):
         """检查消息是否包含图片"""
         return any(seg.is_image() for seg in self.message)
 
+    def get_sender_info(self) -> Dict[str, Any]:
+        sender = self.raw_data.get("sender", {}) if isinstance(self.raw_data, dict) else {}
+        return sender if isinstance(sender, dict) else {}
+
+    def get_sender_nickname(self) -> str:
+        sender = self.get_sender_info()
+        for key in ("nickname", "card", "remark"):
+            value = str(sender.get(key, "") or "").strip()
+            if value:
+                return value
+        return ""
+
+    def get_sender_display_name(self) -> str:
+        sender = self.get_sender_info()
+        preferred_keys = ("card", "nickname", "remark") if self.message_type == MessageType.GROUP.value else ("nickname", "card", "remark")
+        for key in preferred_keys:
+            value = str(sender.get(key, "") or "").strip()
+            if value:
+                return value
+        return ""
+
     def get_image_file_ids(self) -> List[str]:
         """获取所有图片的文件 ID 列表"""
         file_ids = []

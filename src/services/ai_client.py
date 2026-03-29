@@ -195,31 +195,21 @@ class AIClient:
                 )
 
                 if status != 200:
-                    logger.error(
-                        "[%s] AI 请求失败：HTTP %s，响应=%s",
-                        self.log_label,
-                        status,
-                        response_text[:200],
-                    )
+                    logger.error("[%s] 请求失败：HTTP %s", self.log_label, status)
                     raise map_http_error(status, response_text)
 
                 try:
                     data = json.loads(response_text)
                 except json.JSONDecodeError as exc:
-                    logger.error(
-                        "[%s] AI 响应 JSON 无效：%s，原文=%s",
-                        self.log_label,
-                        exc,
-                        response_text[:200],
-                    )
+                    logger.error("[%s] 响应 JSON 无效：%s", self.log_label, exc)
                     raise map_json_error(exc)
 
                 return self._parse_response(data)
             except aiohttp.ClientError as exc:
-                logger.error("[%s] AI 客户端异常：%s", self.log_label, exc)
+                logger.error("[%s] 请求异常：%s", self.log_label, exc)
                 raise map_client_error(exc)
             except asyncio.TimeoutError:
-                logger.error("[%s] AI 请求超时：%s 秒", self.log_label, self.timeout)
+                logger.error("[%s] 请求超时：%s 秒", self.log_label, self.timeout)
                 raise map_timeout_error()
 
 

@@ -132,9 +132,9 @@ class BM25Index:
                 fallback_only=bm25 is None,
             )
             if bm25 is None:
-                logger.info("BM25 索引已降级为回退检索：用户=%s，记忆数=%s", user_id, len(memories))
+                logger.debug("BM25 索引已降级为回退检索：用户=%s，记忆数=%s", user_id, len(memories))
                 return True
-            logger.info("BM25 索引已构建：用户=%s，记忆数=%s", user_id, len(memories))
+            logger.debug("BM25 索引已构建：用户=%s，记忆数=%s", user_id, len(memories))
             return True
         except Exception as e:
             logger.error("BM25 构建失败：用户=%s，错误=%s", user_id, e, exc_info=True)
@@ -247,7 +247,7 @@ class BM25Index:
         """让指定用户的索引失效。"""
         if user_id in self._indices:
             del self._indices[user_id]
-            logger.info("BM25 索引已失效：用户=%s", user_id)
+            logger.debug("BM25 索引已失效：用户=%s", user_id)
 
 
 @dataclass
@@ -258,6 +258,5 @@ class IndexData:
     tokenized_docs: List[List[str]]
     bm25: Optional[BM25Okapi] = None
     fallback_only: bool = False
-
 
 

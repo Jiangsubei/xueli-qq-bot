@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -14,7 +14,13 @@ from django.conf import settings
 from django.urls import reverse
 from tomlkit import dumps
 
-from src.core.config import Config, ConfigValidationError, get_vision_service_status
+from src.core.config import (
+    Config,
+    ConfigValidationError,
+    get_vision_service_status,
+    is_ai_service_configured,
+    is_memory_extraction_configured,
+)
 from src.core.toml_utils import (
     dumps_toml_document,
     parse_toml_document,
@@ -69,86 +75,76 @@ MEMORY_SCOPE_OPTIONS = [
 ]
 FIELD_HELP = {
     "network": {
-        "ws_url": "这里填 QQ 事件推送用的 WebSocket 地址。",
-        "http_url": "这里填助手主动发请求用的 HTTP 地址。",
+        "ws_url": "填写 QQ 事件推送使用的 WebSocket 地址。",
+        "http_url": "填写助手主动调用使用的 HTTP 地址。",
     },
     "model": {
-        "api_base": "这里填模型服务地址。",
-        "model": "这里填要使用的模型名字。",
-        "api_key": "留空为不启用，保留当前遮罩时不会覆盖原密钥。",
-        "extra_params": "用来补充调模型时要带上的额外参数。",
-        "extra_headers": "如果这个服务需要额外请求头，就在这里填。",
-        "response_path": "用来指定回复内容在返回结果里的位置。",
+        "api_base": "填写模型服务地址。",
+        "model": "填写要使用的模型名称。",
+        "api_key": "可留空；为空时不发送 Authorization，保留遮罩时不会覆盖原密钥。",
+        "extra_params": "补充模型请求时需要附带的额外参数。",
+        "extra_headers": "如果服务需要额外请求头，就在这里填写。",
+        "response_path": "指定回复内容在返回 JSON 中的位置。",
+        "temperature": "常用采样温度，越高越发散，越低越稳定。",
     },
     "assistant": {
-        "name": "这是页面里显示的助手名字。",
-        "alias": "想换个更顺口的叫法，可以填这里。",
-        "max_context_length": "数字越大，助手一次会参考更多聊天内容。",
-        "max_message_length": "限制单次回复长度，避免一口气说太多。",
-        "response_timeout": "助手等模型返回结果的最长时间。",
-        "private_quote_reply_enabled": "打开后，私聊回复会带上对原消息的引用，方便看出是在回应哪一条。",
+        "name": "页面和对话里显示的助手名字。",
+        "alias": "更顺口的别名，可选。",
+        "max_context_length": "每次回复参考多少条最近消息。",
+        "max_message_length": "限制单次回复的最大长度。",
+        "response_timeout": "等待模型返回结果的最长时间。",
+        "private_quote_reply_enabled": "打开后，私聊回复会引用原消息。",
         "group_strategy": "决定助手在群里什么时候开口。",
-        "personality": "写助手是什么性格。",
-        "dialogue_style": "写助手平时怎么说话。",
-        "rate_limit_interval": "两次回复之间至少间隔多久。",
-        "log_full_prompt": "打开后，会在日志里记下完整提示内容。",
-        "plan_request_interval": "Cooldown between proactive planning requests in the same group.",
-        "plan_request_max_parallel": "Maximum number of group planning requests running at the same time.",
-        "plan_context_message_count": "How many recent group records to include for planning. This history also contains assistant replies.",
-        "at_user_when_proactive_reply": "Whether proactive group replies should @ the triggering user. Explicit @ replies still @ back, repeat echo never does.",
-        "repeat_echo_enabled": "\u6253\u5f00\u540e\uff0c\u7fa4\u91cc\u77ed\u65f6\u95f4\u5185\u91cd\u590d\u4e24\u6b21\u4ee5\u4e0a\u7684\u77ed\u6d88\u606f\u4f1a\u88ab\u52a9\u624b\u590d\u8bfb\u4e00\u6b21\u3002",
-        "behavior": "用来约束助手什么能做，什么不能做。",
+        "personality": "描述助手的性格。",
+        "dialogue_style": "描述助手平时怎么说话。",
+        "rate_limit_interval": "两次发送之间的最小间隔。",
+        "log_full_prompt": "打开后会在日志里记录完整提示词。",
+        "plan_request_interval": "同一群聊内主动规划请求的冷却时间。",
+        "plan_request_max_parallel": "群聊规划请求的最大并行数。",
+        "plan_context_message_count": "规划时附带的最近群聊条数。",
+        "at_user_when_proactive_reply": "主动群聊回复时是否 @ 触发用户。",
+        "repeat_echo_enabled": "打开后，群里短时间内重复出现的短消息会被复读一次。",
+        "repeat_echo_window_seconds": "统计重复消息时使用的时间窗口。",
+        "repeat_echo_min_count": "重复达到多少次后触发复读。",
+        "repeat_echo_cooldown_seconds": "两次群聊复读之间的最小间隔。",
+        "behavior": "约束助手能做什么、不能做什么。",
     },
     "emoji": {
-        "enabled": "关掉后，助手就不会处理表情相关功能。",
-        "capture_enabled": "打开后，助手会收集聊天里出现的新表情。",
-        "classification_enabled": "打开后，助手会自动给新表情分类。",
-        "reply_enabled": "打开后，助手会在合适的时候发出表情。",
+        "enabled": "关闭后，不再处理表情相关功能。",
+        "capture_enabled": "是否收集聊天里出现的新表情。",
+        "classification_enabled": "是否自动给新表情分类。",
+        "reply_enabled": "是否在合适的时候发送表情。",
         "idle_seconds_before_classify": "空闲多久后开始整理新表情。",
-        "classification_interval_seconds": "每次自动整理之间要间隔多久。",
-        "classification_windows": "只在这些时间段内进行自动分类。",
-        "emotion_labels": "给表情准备的分类标签。",
-        "reply_cooldown_seconds": "两次表情回复之间要间隔多久。",
-        "storage_path": "表情图片和索引会保存在这个位置。",
+        "classification_interval_seconds": "两次自动整理之间的间隔。",
+        "classification_windows": "仅在这些时间段内自动分类。",
+        "emotion_labels": "表情分类时可选的情绪标签。",
+        "reply_cooldown_seconds": "两次表情回复之间的最小间隔。",
+        "storage_path": "表情图片和索引的保存位置。",
     },
     "memory": {
-        "enabled": "关掉后，助手不会再读写记忆。",
-        "auto_extract": "打开后，助手会自动挑出值得记住的内容。",
-        "read_scope": "决定助手回忆时只看自己，还是把共享记忆也带上。",
-        "bm25_top_k": "数字越大，助手一次会翻更多候选记忆。",
-        "rerank_top_k": "从初筛结果里拿几条再进一步精排。",
-        "extract_every_n_turns": "每聊几轮后尝试整理一次新记忆。",
-        "conversation_save_interval": "How many turns to accumulate before refreshing the current session file on disk.",
-        "ordinary_decay_enabled": "打开后，不太重要的记忆会随时间慢慢变淡。",
-        "ordinary_half_life_days": "普通记忆大约多久会衰减一半。",
-        "ordinary_forget_threshold": "降到这个程度后，就会被当成可以遗忘。",
-        "storage_path": "记忆数据会保存在这个位置。",
-    },
-}
-
-FIELD_HELP["model"]["temperature"] = "常用采样温度，越高越发散，越低越稳定。"
-FIELD_HELP["assistant"].update(
-    {
-        "repeat_echo_window_seconds": "统计群里短时间重复内容时使用的时间窗口。",
-        "repeat_echo_min_count": "达到多少次重复后才会触发复读。",
-        "repeat_echo_cooldown_seconds": "两次群聊复读之间至少要间隔多久。",
-    }
-)
-FIELD_HELP["memory"].update(
-    {
-        "pre_rerank_top_k": "本地预排序后，最多送多少条候选给后续精排阶段。",
+        "enabled": "关闭后，不再读写记忆。",
+        "auto_extract": "打开后，助手会自动提取新记忆。",
+        "read_scope": "决定只读当前用户，还是包含共享记忆。",
+        "bm25_top_k": "本地初筛时最多取多少候选记忆。",
+        "rerank_top_k": "送去重排的候选条数。",
+        "extract_every_n_turns": "每聊多少轮后尝试提取一次记忆。",
+        "ordinary_decay_enabled": "是否让普通记忆随时间衰减。",
+        "ordinary_half_life_days": "普通记忆衰减一半所需的大致天数。",
+        "ordinary_forget_threshold": "衰减到这个阈值后视为可遗忘。",
+        "storage_path": "记忆数据的保存位置。",
+        "pre_rerank_top_k": "本地预排序后送入重排的最大候选数。",
         "dynamic_memory_limit": "最终提示词里最多保留多少条动态记忆。",
         "dynamic_dedup_enabled": "是否对动态记忆做相似内容去重。",
         "dynamic_dedup_similarity_threshold": "动态记忆去重阈值，越高越严格。",
-        "rerank_candidate_max_chars": "单条候选记忆进入重排提示词时允许的最大长度。",
+        "rerank_candidate_max_chars": "单条候选记忆进入重排提示词时的最大长度。",
         "rerank_total_prompt_budget": "重排提示词允许占用的总字符预算。",
         "local_bm25_weight": "本地排序里 BM25 分数的权重。",
-        "local_importance_weight": "本地排序里记忆重要度的权重。",
+        "local_importance_weight": "本地排序里重要度的权重。",
         "local_mention_weight": "本地排序里提及次数的权重。",
         "local_recency_weight": "本地排序里新近程度的权重。",
         "local_scene_weight": "本地排序里场景匹配的权重。",
-    }
-)
+    },
+}
 
 _CONFIG_CACHE_LOCK = Lock()
 _CONFIG_CACHE: Dict[str, Any] = {
@@ -732,10 +728,43 @@ def restart_backend_runtime() -> Dict[str, Any]:
     return {"ok": True, "message": message, "state": (result or {}).get("state", "running")}
 
 
-def _model_status(api_base: Any, model: Any, api_key: Any, *, enabled_label: str = "\u5df2\u542f\u7528") -> str:
-    if all(str(value or "").strip() for value in (api_base, model, api_key)):
+def _model_status(api_base: Any, model: Any, api_key: Any = None, *, enabled_label: str = "\u5df2\u542f\u7528") -> str:
+    del api_key
+    if all(str(value or "").strip() for value in (api_base, model)):
         return enabled_label
     return "\u672a\u542f\u7528"
+
+
+def _secret_hint(api_key: Any, *, empty_hint: str = "可留空，不发送 Authorization") -> str:
+    if str(api_key or "").strip():
+        return "密钥已保存"
+    return empty_hint
+
+
+def _memory_extraction_status(app_config: Any) -> str:
+    if is_memory_extraction_configured(app_config):
+        return "专用提取模型"
+    if is_ai_service_configured(app_config):
+        return "调用主模型提取"
+    return "无法提取"
+
+
+def _memory_extraction_description(app_config: Any) -> str:
+    if is_memory_extraction_configured(app_config):
+        return "整理新记忆时会优先使用专用提取模型，失败后回退主模型。"
+    if is_ai_service_configured(app_config):
+        return "当前未单独配置提取模型，将直接调用主模型提取记忆。"
+    return "当前未配置专用提取模型，且主模型不可用，暂时无法提取记忆。"
+
+
+def _memory_extraction_secret_hint(app_config: Any, api_key: Any) -> str:
+    if str(api_key or "").strip():
+        return "密钥已保存"
+    if is_memory_extraction_configured(app_config):
+        return "可留空，不发送 Authorization"
+    if is_ai_service_configured(app_config):
+        return "未单独配置时将直接调用主模型"
+    return "未配置专用提取模型，且主模型不可用"
 
 
 def build_dashboard_context() -> Dict[str, Any]:
@@ -769,19 +798,19 @@ def build_dashboard_context() -> Dict[str, Any]:
         "page_title": "WebUI - 控制台",
         "active_page": "page-home",
         "navigation": [
-            {"id": "page-home", "icon": "fa-house", "label": "总览"},
+            {"id": "page-home", "icon": "fa-house", "label": "鎬昏"},
             {"id": "page-status", "icon": "fa-chart-line", "label": "运行状态"},
-            {"id": "page-network", "icon": "fa-network-wired", "label": "连接设置"},
-            {"id": "page-model", "icon": "fa-cube", "label": "模型设置"},
-            {"id": "page-reply", "icon": "fa-user-gear", "label": "助手设置"},
-            {"id": "page-emoji", "icon": "fa-face-smile", "label": "表情管理"},
-            {"id": "page-memory", "icon": "fa-database", "label": "记忆管理"},
-            {"id": "page-recall", "icon": "fa-clock-rotate-left", "label": "你的回忆"},
+            {"id": "page-network", "icon": "fa-network-wired", "label": "杩炴帴璁剧疆"},
+            {"id": "page-model", "icon": "fa-cube", "label": "妯″瀷璁剧疆"},
+            {"id": "page-reply", "icon": "fa-user-gear", "label": "鍔╂墜璁剧疆"},
+            {"id": "page-emoji", "icon": "fa-face-smile", "label": "琛ㄦ儏绠＄悊"},
+            {"id": "page-memory", "icon": "fa-database", "label": "璁板繂绠＄悊"},
+            {"id": "page-recall", "icon": "fa-clock-rotate-left", "label": "浣犵殑鍥炲繂"},
         ],
         "theme_colors": [
-            {"label": "玫红", "rgb": "255, 77, 143", "active": True},
-            {"label": "天蓝", "rgb": "77, 148, 255", "active": False},
-            {"label": "翠绿", "rgb": "16, 185, 129", "active": False},
+            {"label": "鐜孩", "rgb": "255, 77, 143", "active": True},
+            {"label": "澶╄摑", "rgb": "77, 148, 255", "active": False},
+            {"label": "缈犵豢", "rgb": "16, 185, 129", "active": False},
             {"label": "紫罗兰", "rgb": "139, 92, 246", "active": False},
         ],
         "runtime": runtime,
@@ -795,8 +824,8 @@ def build_dashboard_context() -> Dict[str, Any]:
         "model_forms": [
             {
                 "slug": "ai_service",
-                "title": "回复模型",
-                "description": "平时聊天主要用它来回复。",
+                "title": "鍥炲妯″瀷",
+                "description": "平时聊天时主要用它来回复。",
                 "api_base": app_config.ai_service.api_base,
                 "model": app_config.ai_service.model,
                 "api_key": _mask_secret(app_config.ai_service.api_key),
@@ -806,12 +835,12 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "response_path": app_config.ai_service.response_path,
                 "status_label": _model_status(app_config.ai_service.api_base, app_config.ai_service.model, app_config.ai_service.api_key),
                 "secret_saved": bool(str(app_config.ai_service.api_key or "").strip()),
-                "secret_hint": "密钥已保存" if str(app_config.ai_service.api_key or "").strip() else "留空为不启用",
+                "secret_hint": _secret_hint(app_config.ai_service.api_key),
             },
             {
                 "slug": "group_reply_decision",
-                "title": "群聊判断模型",
-                "description": "它帮助手判断群里要不要接话。",
+                "title": "缇よ亰鍒ゆ柇妯″瀷",
+                "description": "它帮助助手判断群里要不要接话。",
                 "api_base": group_client["api_base"],
                 "model": group_client["model"],
                 "api_key": _mask_secret(group_client["api_key"]),
@@ -821,11 +850,11 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "response_path": group_client["response_path"] or "",
                 "status_label": _model_status(group_client["api_base"], group_client["model"], group_client["api_key"]),
                 "secret_saved": bool(str(group_client["api_key"] or "").strip()),
-                "secret_hint": "密钥已保存" if str(group_client["api_key"] or "").strip() else "留空为不启用",
+                "secret_hint": _secret_hint(group_client["api_key"]),
             },
             {
                 "slug": "vision_service",
-                "title": "识图模型",
+                "title": "璇嗗浘妯″瀷",
                 "description": "看图和识图时会用到它。",
                 "api_base": vision_client["api_base"],
                 "model": vision_client["model"],
@@ -836,11 +865,11 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "response_path": vision_client["response_path"] or "",
                 "status_label": _vision_status_label(vision_status),
                 "secret_saved": bool(str(vision_client["api_key"] or "").strip()),
-                "secret_hint": "密钥已保存" if str(vision_client["api_key"] or "").strip() else "留空为不启用",
+                "secret_hint": _secret_hint(vision_client["api_key"]),
             },
             {
                 "slug": "memory_rerank",
-                "title": "重排序模型",
+                "title": "重排模型",
                 "description": "整理候选记忆顺序时会用到它。",
                 "api_base": memory_rerank_client["api_base"],
                 "model": memory_rerank_client["model"],
@@ -851,12 +880,12 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "response_path": memory_rerank_client["response_path"] or "",
                 "status_label": _model_status(memory_rerank_client["api_base"], memory_rerank_client["model"], memory_rerank_client["api_key"]),
                 "secret_saved": bool(str(memory_rerank_client["api_key"] or "").strip()),
-                "secret_hint": "密钥已保存" if str(memory_rerank_client["api_key"] or "").strip() else "留空为不启用",
+                "secret_hint": _secret_hint(memory_rerank_client["api_key"]),
             },
             {
                 "slug": "memory_extraction",
-                "title": "记忆提取模型",
-                "description": "整理新记忆时会用到它。",
+                "title": "璁板繂鎻愬彇妯″瀷",
+                "description": _memory_extraction_description(app_config),
                 "api_base": memory_extraction_client["api_base"],
                 "model": memory_extraction_client["model"],
                 "api_key": _mask_secret(memory_extraction_client["api_key"]),
@@ -864,43 +893,43 @@ def build_dashboard_context() -> Dict[str, Any]:
                 "param_rows": _mapping_to_editor_rows(_mapping_without_temperature(memory_extraction_client["extra_params"])),
                 "header_rows": _mapping_to_editor_rows(memory_extraction_client["extra_headers"]),
                 "response_path": memory_extraction_client["response_path"] or "",
-                "status_label": _model_status(memory_extraction_client["api_base"], memory_extraction_client["model"], memory_extraction_client["api_key"]),
+                "status_label": _memory_extraction_status(app_config),
                 "secret_saved": bool(str(memory_extraction_client["api_key"] or "").strip()),
-                "secret_hint": "密钥已保存" if str(memory_extraction_client["api_key"] or "").strip() else "留空为不启用",
+                "secret_hint": _memory_extraction_secret_hint(app_config, memory_extraction_client["api_key"]),
             },
         ],
         "model_advanced_forms": [
             {
                 "slug": "ai_service",
-                "title": "回复模型",
+                "title": "鍥炲妯″瀷",
                 "param_rows": _mapping_to_editor_rows(app_config.ai_service.extra_params),
                 "header_rows": _mapping_to_editor_rows(app_config.ai_service.extra_headers),
                 "response_path": app_config.ai_service.response_path,
             },
             {
                 "slug": "group_reply_decision",
-                "title": "群聊判断模型",
+                "title": "缇よ亰鍒ゆ柇妯″瀷",
                 "param_rows": _mapping_to_editor_rows(group_client["extra_params"]),
                 "header_rows": _mapping_to_editor_rows(group_client["extra_headers"]),
                 "response_path": group_client["response_path"] or "",
             },
             {
                 "slug": "vision_service",
-                "title": "识图模型",
+                "title": "璇嗗浘妯″瀷",
                 "param_rows": _mapping_to_editor_rows(vision_client["extra_params"]),
                 "header_rows": _mapping_to_editor_rows(vision_client["extra_headers"]),
                 "response_path": vision_client["response_path"] or "",
             },
             {
                 "slug": "memory_rerank",
-                "title": "重排序模型",
+                "title": "重排模型",
                 "param_rows": _mapping_to_editor_rows(memory_rerank_client["extra_params"]),
                 "header_rows": _mapping_to_editor_rows(memory_rerank_client["extra_headers"]),
                 "response_path": memory_rerank_client["response_path"] or "",
             },
             {
                 "slug": "memory_extraction",
-                "title": "记忆提取模型",
+                "title": "璁板繂鎻愬彇妯″瀷",
                 "param_rows": _mapping_to_editor_rows(memory_extraction_client["extra_params"]),
                 "header_rows": _mapping_to_editor_rows(memory_extraction_client["extra_headers"]),
                 "response_path": memory_extraction_client["response_path"] or "",
@@ -961,7 +990,6 @@ def build_dashboard_context() -> Dict[str, Any]:
             "dynamic_dedup_similarity_threshold": app_config.memory.dynamic_dedup_similarity_threshold,
             "rerank_candidate_max_chars": app_config.memory.rerank_candidate_max_chars,
             "rerank_total_prompt_budget": app_config.memory.rerank_total_prompt_budget,
-            "conversation_save_interval": app_config.memory.conversation_save_interval,
             "ordinary_decay_enabled": bool(app_config.memory.ordinary_decay_enabled),
             "ordinary_half_life_days": app_config.memory.ordinary_half_life_days,
             "ordinary_forget_threshold": app_config.memory.ordinary_forget_threshold,
@@ -1226,7 +1254,7 @@ def save_model_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     vision["extra_headers"] = _rows_to_mapping(vision_payload.get("extra_headers_rows"), smart_values=False, empty_as_none=True)
     vision["response_path"] = _normalize_nullable_string(vision_payload.get("response_path"))
-    vision["enabled"] = bool(vision_api_base and vision_model and vision_api_key)
+    vision["enabled"] = bool(vision_api_base and vision_model)
     raw["vision_service"] = vision
 
     memory_rerank = dict(raw.get("memory_rerank") or {})
@@ -1345,7 +1373,7 @@ def save_memory_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     memory["dynamic_dedup_similarity_threshold"] = _coerce_float(payload.get("dynamic_dedup_similarity_threshold"), default=float(memory.get("dynamic_dedup_similarity_threshold", 0.72) or 0.72))
     memory["rerank_candidate_max_chars"] = _coerce_int(payload.get("rerank_candidate_max_chars"), default=_safe_int(memory.get("rerank_candidate_max_chars"), 160))
     memory["rerank_total_prompt_budget"] = _coerce_int(payload.get("rerank_total_prompt_budget"), default=_safe_int(memory.get("rerank_total_prompt_budget"), 2400))
-    memory["conversation_save_interval"] = _coerce_int(payload.get("conversation_save_interval"), default=_safe_int(memory.get("conversation_save_interval"), 10))
+    memory.pop("conversation_save_interval", None)
     memory["ordinary_decay_enabled"] = _coerce_bool(payload.get("ordinary_decay_enabled"), default=bool(memory.get("ordinary_decay_enabled", True)))
     memory["ordinary_half_life_days"] = _coerce_float(payload.get("ordinary_half_life_days"), default=float(memory.get("ordinary_half_life_days", 30.0) or 30.0))
     memory["ordinary_forget_threshold"] = _coerce_float(payload.get("ordinary_forget_threshold"), default=float(memory.get("ordinary_forget_threshold", 0.5) or 0.5))
@@ -1419,3 +1447,5 @@ def handle_save_error(exc: Exception) -> Dict[str, Any]:
     if isinstance(exc, ConfigValidationError):
         return {"ok": False, "message": "\u8bbe\u7f6e\u6709\u95ee\u9898\uff0c\u8bf7\u68c0\u67e5\u540e\u518d\u8bd5", "errors": list(exc.errors)}
     return {"ok": False, "message": str(exc) or "\u4fdd\u5b58\u5931\u8d25", "errors": []}
+
+

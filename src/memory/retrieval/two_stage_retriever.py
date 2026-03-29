@@ -279,7 +279,7 @@ class TwoStageRetriever:
         try:
             if self.config.reranker_type == "local":
                 self._reranker = CrossEncoderReranker(model_name=self.config.local_model_name)
-                logger.info("本地重排器初始化完成：模型=%s", self.config.local_model_name)
+                logger.debug("本地重排器初始化完成：模型=%s", self.config.local_model_name)
             else:
                 self._reranker = APIReranker(
                     endpoint=self.config.api_endpoint,
@@ -292,7 +292,7 @@ class TwoStageRetriever:
                     candidate_max_chars=self.config.rerank_candidate_max_chars,
                     total_prompt_budget=self.config.rerank_total_prompt_budget,
                 )
-                logger.info("API 重排器初始化完成：地址=%s，模型=%s", self.config.api_endpoint, self.config.api_model)
+                logger.debug("API 重排器初始化完成：地址=%s，模型=%s", self.config.api_endpoint, self.config.api_model)
         except Exception as exc:
             logger.error("初始化重排器失败：%s", exc)
             self._reranker = None

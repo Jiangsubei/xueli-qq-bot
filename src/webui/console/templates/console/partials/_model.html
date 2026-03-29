@@ -28,7 +28,7 @@
           <span class="config-item-head">
             <span class="config-item-title-stack">
               <span class="config-item-title">模型名称</span>
-              <span class="config-item-desc">这里填写实际使用的模型名字。</span>
+              <span class="config-item-desc">这里填写实际使用的模型名。</span>
             </span>
             <span class="field-help" tabindex="0" data-help="{{ field_help.model.model }}">?</span>
           </span>
@@ -39,37 +39,37 @@
           <span class="config-item-head">
             <span class="config-item-title-stack">
               <span class="config-item-title">密钥</span>
-              <span class="config-item-desc">留空为不启用，保持掩码时不会覆盖原值。</span>
+              <span class="config-item-desc">留空表示不修改，保持掩码时不会覆盖原值。</span>
             </span>
             <span class="field-help" tabindex="0" data-help="{{ field_help.model.api_key }}">?</span>
           </span>
           <span class="input-with-indicator">
-            <input class="form-control model-secret-input" name="{{ item.slug }}__api_key" type="text" value="{{ item.api_key }}" placeholder="留空为不启用">
+            <input class="form-control model-secret-input" name="{{ item.slug }}__api_key" type="text" value="{{ item.api_key }}" placeholder="留空表示不修改">
             <span class="model-secret-indicator {% if item.secret_saved %}is-saved{% else %}is-empty{% endif %}" title="{{ item.secret_hint }}" aria-label="{{ item.secret_hint }}">
               <i class="fa-solid {% if item.secret_saved %}fa-check{% else %}fa-minus{% endif %}"></i>
             </span>
           </span>
-        </label>
-
-        <label class="config-item-card">
-          <span class="config-item-head">
-            <span class="config-item-title-stack">
-              <span class="config-item-title">Temperature</span>
-              <span class="config-item-desc">最常用的模型采样参数，平时通常只需要改这一项。</span>
-            </span>
-            <span class="field-help" tabindex="0" data-help="{{ field_help.model.temperature }}">?</span>
-          </span>
-          <input class="form-control" name="{{ item.slug }}__temperature" type="text" value="{{ item.temperature }}" placeholder="例如 0.7">
         </label>
       </div>
 
       <div class="advanced-settings-block" data-advanced-field>
         <div class="advanced-settings-head">
           <h4>高级设置</h4>
-          <p>其他附加参数、请求头和响应路径都会放在这里。</p>
+          <p>温度、附加参数、请求头和响应路径都放在这里。</p>
         </div>
 
         <div class="config-item-grid one-up">
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">Temperature</span>
+                <span class="config-item-desc">常用采样温度，数值越高越发散，越低越稳定。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.model.temperature }}">?</span>
+            </span>
+            <input class="form-control" name="{{ item.slug }}__temperature" type="text" value="{{ item.temperature }}" placeholder="例如 0.7">
+          </label>
+
           <label class="config-item-card">
             <span class="config-item-head">
               <span class="config-item-title-stack">

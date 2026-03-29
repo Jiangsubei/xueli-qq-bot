@@ -27,7 +27,7 @@ class GroupReplyPlanner:
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
-            logger.info("未配置群聊判断模型，群聊规划器已禁用")
+            logger.debug("未配置群聊判断模型，群聊规划器已禁用")
             return None
 
         decision = self.app_config.group_reply_decision
@@ -39,7 +39,7 @@ class GroupReplyPlanner:
             "extra_headers": dict(decision.extra_headers or {}),
             "response_path": decision.response_path or "choices.0.message.content",
         }
-        logger.info("初始化群聊规划模型：模型=%s", client_config.get("model"))
+        logger.debug("初始化群聊规划模型：模型=%s", client_config.get("model"))
         return AIClient(log_label="planner", app_config=self.app_config, **client_config)
 
     def _assistant_name(self) -> str:
@@ -54,6 +54,13 @@ class GroupReplyPlanner:
             if value and value not in names:
                 names.append(value)
         return names
+
+    def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
+        identifier = str(user_id or "").strip() or "unknown"
+        name = str(display_name or "").strip()
+        if name and name != identifier:
+            return f"{identifier}（{name}）"
+        return identifier
 
     def _build_assistant_identity_text(self) -> str:
         assistant_name = self._assistant_name()
@@ -71,65 +78,69 @@ class GroupReplyPlanner:
         return mapping.get((message_shape or "").strip(), "未知消息")
 
     def _build_system_prompt(self) -> str:
-        identity_text = self._build_assistant_identity_text()
-        names_text = "、".join(f"“{name}”" for name in self._assistant_names()) or "无"
-        interest_rule = ""
-        if self.app_config.group_reply.interest_reply_enabled:
-            interest_rule = "7. 对情绪表达、日常分享、吐槽、求安慰这类消息，如果接话自然，可以更积极地选择 reply。\n"
-
         return (
-            f"你是一个群聊回复规划器，不直接生成回复内容，只负责判断 {identity_text} 此刻要不要在群里接一句话。\n"
-            "这是聊天软件里的日常聊天，不是客服问答，也不是正式讨论。群里出现短句、碎句、半截话、口头语、玩笑、表情配一句话都很正常，不能因为消息短、信息少、语法不完整，就默认不适合回复。\n"
-            "这个助手更像群里的熟人搭子：会接梗、接情绪、陪聊，语气轻松自然，有人味，但不会硬凑热闹或尬聊刷存在感。\n"
-            "你只能输出 JSON：\n"
+            "你现在的任务，不是生成回复内容，而是判断这个群聊助手此刻要不要接当前这条群消息。\n\n"
+            "请把自己当成群里的自然成员，而不是客服或问答机器人。你的判断重点不是“理论上能不能回”，而是“现在接这一句是否自然、合适、不突兀”。\n\n"
+            "你会看到当前消息，以及这条消息之前群里刚刚聊过的内容。这些上下文只是帮助你判断当前这一轮要不要接话。"
+            "你必须把注意力放在“当前消息”上，不要转而去回应前面其他人的旧消息。\n\n"
+            "一般来说：\n"
+            "- 如果当前消息很适合自然接话，回一句会更顺，就选 reply\n"
+            "- 如果当前消息暂时能接，但现在还不是最顺的时机，就选 wait\n"
+            "- 只有在明显不适合插话、插话会显得打断、抢戏、刷存在感时，才选 ignore\n\n"
+            "如果当前消息明显是在对助手说话，应该更积极地考虑 reply。\n"
+            "如果群里最近已经显示助手刚接过话，要注意避免连续刷屏。\n"
+            "如果当前消息带图，可以结合图片摘要一起判断；如果只有图片且信息不足，优先考虑 wait。\n\n"
+            "你只允许输出 JSON，格式必须是：\n"
             '{"action":"reply|wait|ignore","reason":"简短理由"}\n\n'
-            f"这个助手可能会被以下称呼提及：{names_text}。\n"
-            "你会看到“最近群聊记录”，其中可能同时包含群成员消息和助手自己之前在群里的回复。请把这些都视为真实上下文，用来判断当前这句插话是否自然。\n"
-            "判断重点不是“理论上要不要回”，而是“这时候接一句是否自然、合适、不突兀”。只要接话顺气氛、不明显打断别人，就可以更积极地选择 reply，不必卡得太严。\n"
-            "判断标准：\n"
-            "1. reply：只要当前消息有自然接话空间，回一句会更顺、更轻松、更有陪伴感，就选 reply。不要因为字少就保守。\n"
-            "2. wait：可以接，但现在不是最顺的时机，就选 wait。比如话题还在快速展开、多人接力聊天、图文信息还不够完整。wait 是“再看看”，不是“不适合回”。\n"
-            "3. ignore：只有在明显不适合插话，或者插话会显得生硬、扫兴、抢戏、强行刷存在感时才选 ignore。比如纯事务通知、工作对接、报数、确认、安排、同步进度等。\n"
-            "4. 优先像一个自然的群友，而不是一个过度谨慎的工具。\n"
-            "5. 不要动不动讲道理、提建议、做分析；很多时候大家只是想有人接一句。\n"
-            "6. 如果消息带图，请结合文字和图片描述一起判断；纯图片且语义不清时优先 wait。\n"
-            f"{interest_rule}\n"
-            "额外要求：\n"
-            "1. reason 必须简短明确。\n"
-            "2. 最近群聊记录如果已经显示助手刚接过话，要注意继续追问是否自然，避免连续刷屏。\n"
-            "3. 不要输出 markdown，不要输出 JSON 以外的解释。"
+            "不要输出 JSON 以外的任何内容。"
         ).strip()
 
     def _format_window_messages(self, window_messages: List[Dict[str, Any]]) -> str:
         if not window_messages:
             return "无"
         lines = []
-        for index, item in enumerate(window_messages, 1):
+        for item in window_messages:
             role = str(item.get("speaker_role") or "user").strip().lower()
             speaker = (
                 f"助手 {str(item.get('speaker_name') or self._assistant_name()).strip() or self._assistant_name()}"
                 if role == "assistant"
-                else f"用户 {str(item.get('user_id') or 'unknown')}"
+                else f"用户 {self._format_identity_label(item.get('user_id'), str(item.get('speaker_name') or ''))}"
             )
-            text = str(item.get("text") or item.get("raw_text") or "").strip() or "[空]"
-            shape_text = self._describe_message_shape(str(item.get("message_shape", "")))
+            text = self._window_display_text(item)
             image_note = f" [图片 {item.get('image_count', 1)} 张]" if item.get("has_image") else ""
-            latest_note = " [当前消息]" if item.get("is_latest") else ""
-            lines.append(f"{index}. {speaker}: {text}{image_note} [{shape_text}]{latest_note}")
+            lines.append(f"{speaker}: {text}{image_note}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
-                lines.append(f"   图片摘要: {merged_description}")
+                lines.append(f"图片摘要: {merged_description}")
             for image_index, description in enumerate(item.get("per_image_descriptions") or [], 1):
-                lines.append(f"   第{image_index}张: {description}")
+                lines.append(f"第{image_index}张图片: {description}")
             if item.get("has_image") and not item.get("vision_available"):
                 failure_count = int(item.get("vision_failure_count", 0) or 0)
                 if failure_count > 0:
-                    lines.append(f"   图片理解失败数: {failure_count}")
+                    lines.append(f"图片理解失败数: {failure_count}")
                 vision_error = str(item.get("vision_error") or "").strip()
                 if vision_error:
-                    lines.append(f"   图片理解错误: {vision_error}")
+                    lines.append(f"图片理解错误: {vision_error}")
         return "\n".join(lines)
+
+    def _window_display_text(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        if text and text != "[空]":
+            return text
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
+        return text or "[空]"
+
+    def _build_recent_history_text(self, window_messages: List[Dict[str, Any]]) -> str:
+        history_items = [item for item in window_messages if not bool(item.get("is_latest"))]
+        if not history_items:
+            return "在当前这条群消息之前，群里刚刚聊过的内容暂时还没有。"
+        return (
+            "在当前这条群消息之前，群里刚刚聊了这些内容：\n"
+            + self._format_window_messages(history_items)
+        )
 
     def _build_user_prompt(
         self,
@@ -139,7 +150,6 @@ class GroupReplyPlanner:
         window_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         del recent_messages
-        identity_text = self._build_assistant_identity_text()
         window_messages = window_messages or []
         latest_message = next(
             (item for item in reversed(window_messages) if item.get("is_latest")),
@@ -161,36 +171,41 @@ class GroupReplyPlanner:
             f"- 第{index}张: {description}" for index, description in enumerate(per_image_descriptions, 1)
         ) or "无"
         vision_available = "是" if latest_message.get("vision_available") else "否"
-        vision_failure_count = int(latest_message.get("vision_failure_count", 0) or 0)
-        is_image_only = "是" if latest_message.get("is_image_only") else "否"
-        text_present = "是" if latest_message.get("text_present") else "否"
-        at_self = "是" if event.is_at(event.self_id) else "否"
-        has_image = "是" if has_image_flag else "否"
-
+        sender_label = self._format_identity_label(event.user_id, event.get_sender_display_name())
         mentioned_names = [
             name for name in self._assistant_names() if name and (name in raw_text or name in clean_text)
         ]
         mentioned_names_text = "、".join(mentioned_names) if mentioned_names else "无"
+        recent_history_text = self._build_recent_history_text(window_messages)
+
+        image_context_lines = []
+        if has_image_flag:
+            image_context_lines.append(f"这条消息的内容形态：{self._describe_message_shape(message_shape)}。")
+            image_context_lines.append(f"图片数量：{image_count}。")
+            image_context_lines.append(f"图片摘要：{merged_description}")
+            if per_image_text != "无":
+                image_context_lines.append(f"逐图描述：\n{per_image_text}")
+            if vision_available == "否":
+                image_context_lines.append("这条消息里的图片信息目前不完整，理解结果有限。")
+        else:
+            image_context_lines.append(f"这条消息的内容形态：{self._describe_message_shape(message_shape)}。")
 
         return (
-            f"请判断这条群消息是否应该由 {identity_text} 立即回复。\n"
-            f"群号: {event.group_id}\n"
-            f"发送者: {event.user_id}\n"
-            f"是否 @ 助手: {at_self}\n"
-            f"消息里提到了哪些名字/别名: {mentioned_names_text}\n"
-            f"是否含图片: {has_image}\n"
-            f"图片数量: {image_count}\n"
-            f"消息形态: {self._describe_message_shape(message_shape)}\n"
-            f"是否纯图片消息: {is_image_only}\n"
-            f"是否含文字内容: {text_present}\n"
-            f"视觉结果可用: {vision_available}\n"
-            f"视觉失败数: {vision_failure_count}\n"
-            f"原始文本: {raw_text}\n"
-            f"清洗后文本: {clean_text}\n"
-            f"提供给规划器的消息文本: {planner_text}\n"
-            f"图片合并摘要: {merged_description}\n"
-            f"逐图描述:\n{per_image_text}\n"
-            f"最近群聊记录（包含助手消息）:\n{self._format_window_messages(window_messages)}"
+            "下面是当前这条群消息的判断上下文。\n\n"
+            f"当前会话：\n这是群 {event.group_id} 里的消息。\n\n"
+            f"当前消息来自用户 {sender_label}：\n{planner_text}\n\n"
+            f"原始文本：{raw_text}\n"
+            f"清洗后文本：{clean_text}\n"
+            f"消息里提到了这些名字或别名：{mentioned_names_text}\n"
+            + "\n".join(image_context_lines)
+            + "\n\n"
+            + recent_history_text
+            + "\n\n补充判断提醒：\n"
+            + "- 上面的最近群聊记录只是帮助你理解当前消息是在接什么话\n"
+            + "- 请只判断“当前消息”现在要不要接\n"
+            + "- 不要转而回复前面其他用户之前说的话\n"
+            + "- 如果最近记录里显示你刚刚已经接过话，要考虑是否会显得连续刷屏\n"
+            + "- 请只输出 JSON，不要输出解释。"
         ).strip()
 
     def _extract_json_object(self, content: str) -> Dict[str, Any]:

@@ -20,19 +20,28 @@ class ExtractionConfig:
     max_dialogue_length: int = 10
     min_memory_quality: float = 0.7
     system_prompt: str = (
-        "你是一个对话记忆提取助手。请只根据用户消息提取值得长期保存的稳定事实。\n"
-        "规则：\n"
-        "- 只提取用户自己说过的信息，不要把助手回复当成记忆。\n"
-        "- 优先提取稳定偏好、背景、边界、长期计划、称呼要求。\n"
-        "- 重要记忆只用于明确要求长期记住、硬性约束、长期身份关系等高优先级信息。\n"
-        "- 群聊内容默认不要提取为重要记忆，除非用户明确要求长期记住。\n"
-        "- 输入中的历史记录只包含用户消息，每条前面都有稳定 turn 标签，例如 T12。\n"
-        "- 你必须为每条记忆标注来源 turn，格式为 Tn 或 Tn-Tm。\n"
-        "输出要求：\n"
-        "- 每行一条。\n"
-        "- 普通记忆格式：[NORMAL:1-5][Tn] 用户123: 记忆内容\n"
-        "- 重要记忆格式：[IMPORTANT][Tn-Tm] 用户123: 记忆内容\n"
-        "- 如果没有可提取内容，只输出“无”。"
+        "你现在的任务，是从一段用户和助手之间的对话里，整理出值得记住的、关于用户的信息。\n"
+        "你会同时看到用户发言和助手发言，但你需要注意：助手发言只用于帮助你理解上下文，不能直接当成记忆来源。"
+        "你只能提取用户自己表达过、明确确认过，或者在上下文里已经表达得足够清楚的信息。\n"
+        "你要把记忆分成两类：\n"
+        "重要记忆：\n"
+        "用于那些长期稳定、以后长期都有明显帮助的信息。例如用户长期稳定的偏好、习惯、背景、身份关系、边界、长期计划、称呼要求，"
+        "或者用户明确要求你长期记住的事情。\n"
+        "普通记忆：\n"
+        "用于那些不一定是长期稳定事实，但对后续陪伴式对话有明显帮助的信息。例如用户最近在做什么、最近遇到了什么事、最近在推进什么任务、"
+        "最近关注什么、最近情绪或状态如何，或者接下来几轮到最近一段时间里大概率还会继续聊到的内容。\n"
+        "如果用户只是说“对”“就是这个”“按你刚刚说的来”这种依赖上下文的话，你可以结合前面的助手发言来理解，"
+        "但最后提取出来的记忆，仍然必须是关于用户的事实、状态、近况或需求，而不是助手的建议本身。\n"
+        "但你仍然要控制提取质量：\n"
+        "不是所有聊天内容都值得记忆。不要把寒暄、口头禅、一次性应答、没有后续价值的零碎句子、纯流水账内容提取成记忆。"
+        "只有当一段内容能够概括成“以后继续聊天时可能有帮助的信息”时，才考虑提取。\n"
+        "你会在对话里看到稳定的 turn 标记，例如 T12、T13。你输出的每一条记忆，都必须标注它来自哪个 turn，可以写成 Tn，或者 Tn-Tm。\n"
+        "如果这段对话里没有值得保存的内容，你只需要输出“无”。\n"
+        "输出时不要解释，不要分析，也不要加多余的话。每条记忆单独占一行，并严格使用下面两种格式之一：\n"
+        "普通记忆：[NORMAL:1-5][Tn] 用户123: 记忆内容\n"
+        "普通记忆：[NORMAL:1-5][Tn-Tm] 用户123: 记忆内容\n"
+        "重要记忆：[IMPORTANT][Tn] 用户123: 记忆内容\n"
+        "重要记忆：[IMPORTANT][Tn-Tm] 用户123: 记忆内容"
     )
 
 
@@ -43,6 +52,13 @@ class ExtractedMemory:
     source_turn_end: int
     is_important: bool = False
     importance: int = 3
+
+
+@dataclass
+class LLMExtractionResponse:
+    content: str
+    provider: str = ""
+    model: str = ""
 
 
 class MemoryExtractor:
@@ -111,6 +127,7 @@ class MemoryExtractor:
         return len(self._get_pending_turns(session_id))
 
     async def extract_memories(self, user_id: str, *, session_id: str, force: bool = False) -> List[MemoryItem]:
+        del force
         session_key = str(session_id or "").strip()
         pending_turns = self._get_pending_turns(session_key)
         if not pending_turns:
@@ -118,13 +135,22 @@ class MemoryExtractor:
 
         visible_turns = pending_turns[-self.config.max_dialogue_length :]
         latest_turn_id = max(int(turn.get("turn_id", 0) or 0) for turn in pending_turns)
+        pending_count = len(pending_turns)
         dialogue_text = self._format_dialogue(visible_turns, user_id)
+        logger.info(
+            "记忆提取已触发：用户=%s，会话=%s，待提取轮次=%s，送模轮次=%s",
+            user_id,
+            session_key,
+            pending_count,
+            len(visible_turns),
+        )
         if dialogue_text.strip() == "无":
             self._mark_session_extracted(session_key, latest_turn_id)
+            logger.info("记忆提取跳过：会话=%s 当前没有可供提取的用户消息，checkpoint 已推进到 T%s", session_key, latest_turn_id)
             return []
 
         try:
-            extracted = await self._call_llm_for_extraction(user_id=user_id, dialogue_text=dialogue_text)
+            llm_response = await self._call_llm_for_extraction(user_id=user_id, dialogue_text=dialogue_text)
         except Exception as exc:
             if self._is_rate_limit_error(exc):
                 logger.warning("记忆提取触发限流：用户=%s，会话=%s", user_id, session_key)
@@ -132,12 +158,31 @@ class MemoryExtractor:
             logger.error("记忆提取失败：用户=%s，会话=%s，错误=%s", user_id, session_key, exc, exc_info=True)
             return []
 
-        self._mark_session_extracted(session_key, latest_turn_id)
+        provider = llm_response.provider or "unknown"
+        model = llm_response.model or ""
+        logger.info("记忆提取本轮使用模型：provider=%s model=%s", provider, model)
+
+        if self._is_explicit_no_memory_response(llm_response.content):
+            self._mark_session_extracted(session_key, latest_turn_id)
+            logger.info("记忆提取结果为空：用户=%s，会话=%s，checkpoint 已推进到 T%s", user_id, session_key, latest_turn_id)
+            return []
+
+        extracted = self._parse_extraction_response(llm_response.content)
+        if not extracted:
+            logger.warning(
+                "记忆提取返回了内容但没有解析出有效记忆：用户=%s，会话=%s，provider=%s，checkpoint 未推进",
+                user_id,
+                session_key,
+                provider,
+            )
+            return []
+
         allowed_turn_ids = {int(turn["turn_id"]) for turn in visible_turns}
         related_dialogue = self._build_related_dialogue_snapshot(visible_turns)
         saved_memories: List[MemoryItem] = []
         important_count = 0
         ordinary_count = 0
+        valid_anchor_count = 0
 
         for item in extracted:
             if not self._is_valid_anchor(item, allowed_turn_ids):
@@ -157,6 +202,7 @@ class MemoryExtractor:
             ]
             if not anchor_turns:
                 continue
+            valid_anchor_count += 1
 
             metadata = self._build_memory_metadata(
                 owner_user_id=str(user_id),
@@ -204,15 +250,33 @@ class MemoryExtractor:
                     metadata=metadata,
                 )
 
-        logger.info(
-            "记忆提取完成：用户=%s，会话=%s，写入=%s，重要=%s，普通=%s",
-            user_id,
-            session_key,
-            len(saved_memories),
-            important_count,
-            ordinary_count,
-        )
-        return saved_memories
+        if saved_memories:
+            self._mark_session_extracted(session_key, latest_turn_id)
+            logger.info(
+                "记忆提取完成：用户=%s，会话=%s，写入=%s，重要=%s，普通=%s，checkpoint 已推进到 T%s",
+                user_id,
+                session_key,
+                len(saved_memories),
+                important_count,
+                ordinary_count,
+                latest_turn_id,
+            )
+            return saved_memories
+
+        if valid_anchor_count == 0:
+            logger.warning(
+                "记忆提取解析成功但锚点全部无效：用户=%s，会话=%s，checkpoint 未推进",
+                user_id,
+                session_key,
+            )
+        else:
+            logger.warning(
+                "记忆提取未写入任何有效记忆：用户=%s，会话=%s，provider=%s，checkpoint 未推进",
+                user_id,
+                session_key,
+                provider,
+            )
+        return []
 
     async def trigger_extraction(
         self,
@@ -248,11 +312,7 @@ class MemoryExtractor:
         if not turns:
             return []
         extracted_upto = int(self._session_extracted_upto.get(session_key, 0) or 0)
-        return [
-            turn
-            for turn in turns
-            if int(turn.get("turn_id", 0) or 0) > extracted_upto
-        ]
+        return [turn for turn in turns if int(turn.get("turn_id", 0) or 0) > extracted_upto]
 
     def _mark_session_extracted(self, session_id: str, turn_id: int) -> None:
         session_key = str(session_id or "").strip()
@@ -315,40 +375,49 @@ class MemoryExtractor:
         ]
 
     def _format_dialogue(self, dialogue: List[Dict[str, Any]], user_id: str) -> str:
+        session_type = str(dialogue[-1].get("source_message_type", "") or "").strip().lower() if dialogue else ""
+        session_label = "群聊" if session_type == "group" else "私聊"
         lines = [
-            f"=== 用户 {user_id} 的消息记录 ===",
-            "以下内容只包含用户消息。每条前缀里的 Tn 是稳定 turn 标签，输出时必须引用它。",
+            f"=== 用户 {user_id} 的{session_label}对话记录 ===",
+            "下面这些内容同时包含用户发言和助手发言。",
+            "用户发言是判断记忆的主要来源，助手发言只用于帮助理解上下文，不能直接当成记忆来源。",
+            "每条前缀里的 Tn 是稳定 turn 标签，输出时必须引用它。",
             "",
         ]
         has_user_content = False
 
         for turn in dialogue:
             user_content = str(turn.get("user", "") or "").strip()
-            if not user_content:
-                continue
-            has_user_content = True
-            lines.append(f"T{int(turn.get('turn_id', 0) or 0)}: {user_content}")
+            assistant_content = str(turn.get("assistant", "") or "").strip()
+            turn_label = f"T{int(turn.get('turn_id', 0) or 0)}"
+            if user_content:
+                has_user_content = True
+                lines.append(f"{turn_label}: 用户{user_id}: {user_content}")
+            if assistant_content:
+                lines.append(f"{turn_label}: 助手: {assistant_content}")
+            if user_content or assistant_content:
+                lines.append("")
 
         if not has_user_content:
             return "无"
-        return "\n".join(lines)
+        return "\n".join(lines).rstrip()
 
-    async def _call_llm_for_extraction(self, *, user_id: str, dialogue_text: str) -> List[ExtractedMemory]:
+    async def _call_llm_for_extraction(self, *, user_id: str, dialogue_text: str) -> LLMExtractionResponse:
         messages = [
             {
                 "role": "user",
                 "content": (
-                    "请分析下面这些用户消息，提取值得长期保存的记忆。\n"
-                    "注意：这些历史记录只包含用户消息，不包含助手回复。\n"
-                    "你必须给每条记忆标注来源 turn 标签，格式只能是 Tn 或 Tn-Tm。\n"
-                    "如果没有可提取内容，只输出“无”。\n\n"
+                    f"下面是用户 {user_id} 最近几轮和助手的对话记录。\n"
+                    "这些内容里，用户发言是你判断记忆的主要来源，助手发言只是帮助你理解用户当时在回应什么。\n"
+                    "你最终提取的记忆，必须是关于这个用户本人的稳定信息，不能直接照搬助手说的话。\n"
+                    "如果没有值得长期保存的内容，只输出“无”。\n\n"
                     f"{dialogue_text}"
                 ),
             }
         ]
 
         system_prompt = self.config.system_prompt.replace("用户123", f"用户{user_id}")
-        response = None
+        response: Any = None
         for attempt in range(1, 3):
             try:
                 response = await self.llm_callback(system_prompt, messages)
@@ -359,25 +428,33 @@ class MemoryExtractor:
                     continue
                 raise
 
-        content = ""
-        if isinstance(response, str):
-            content = response
-        elif hasattr(response, "content"):
-            content = str(response.content or "")
-        elif isinstance(response, dict):
-            content = str(response.get("content", "") or response.get("text", "") or "")
+        return self._normalize_llm_response(response)
 
-        return self._parse_extraction_response(content)
+    def _normalize_llm_response(self, response: Any) -> LLMExtractionResponse:
+        if isinstance(response, LLMExtractionResponse):
+            return response
+        if isinstance(response, str):
+            return LLMExtractionResponse(content=response)
+        if hasattr(response, "content"):
+            return LLMExtractionResponse(content=str(response.content or ""))
+        if isinstance(response, dict):
+            return LLMExtractionResponse(
+                content=str(response.get("content", "") or response.get("text", "") or ""),
+                provider=str(response.get("provider", "") or ""),
+                model=str(response.get("model", "") or ""),
+            )
+        return LLMExtractionResponse(content=str(response or ""))
 
     def _parse_extraction_response(self, content: str) -> List[ExtractedMemory]:
         memories: List[ExtractedMemory] = []
-        for raw_line in (content.split("|") if "|" in content else content.splitlines()):
+        lines = content.split("|") if "|" in content else content.splitlines()
+        for raw_line in lines:
             line = str(raw_line or "").strip()
             if not line or line.startswith("#"):
                 continue
-            if line == "无":
+            if self._is_explicit_no_memory_response(line):
                 continue
-            line = re.sub(r"^[\-\*\u2022\s]+", "", line)
+            line = re.sub(r"^(?:[\-\*\u2022]\s*|\d+[\.\)、)]\s*)+", "", line)
 
             important_match = re.match(r"^\[(?:IMPORTANT|重要)\]\[(T\d+(?:-T?\d+)?)\]\s*(.+)$", line, re.IGNORECASE)
             normal_match = re.match(r"^\[(?:NORMAL|普通):([1-5])\]\[(T\d+(?:-T?\d+)?)\]\s*(.+)$", line, re.IGNORECASE)
@@ -417,6 +494,23 @@ class MemoryExtractor:
                 )
             )
         return memories
+
+    def _is_explicit_no_memory_response(self, content: str) -> bool:
+        text = str(content or "").strip()
+        if not text:
+            return False
+        normalized = re.sub(r"[\s`'\"“”‘’。．.!！？?、,:：;；\-\*]+", "", text).lower()
+        return normalized in {
+            "无",
+            "无可提取内容",
+            "没有可提取内容",
+            "暂无可提取内容",
+            "none",
+            "nomemory",
+            "nomemories",
+            "noextractablememory",
+            "noextractablememories",
+        }
 
     def _parse_anchor(self, anchor: str) -> Optional[tuple[int, int]]:
         match = re.fullmatch(r"T(\d+)(?:-T?(\d+))?", str(anchor or "").strip(), re.IGNORECASE)

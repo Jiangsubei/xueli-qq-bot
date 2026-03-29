@@ -240,22 +240,11 @@
       <div class="card-bar">
         <div>
           <h3 class="card-title">存储高级</h3>
-          <p class="card-desc">这里控制会话落盘节奏和记忆文件存放位置。</p>
+          <p class="card-desc">这里控制记忆文件存放位置。</p>
         </div>
       </div>
 
       <div class="config-item-grid one-up">
-        <label class="config-item-card">
-          <span class="config-item-head">
-            <span class="config-item-title-stack">
-              <span class="config-item-title">保存间隔</span>
-              <span class="config-item-desc">累计多少轮后刷新一次当前会话文件。</span>
-            </span>
-            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.conversation_save_interval }}">?</span>
-          </span>
-          <input class="form-control" name="conversation_save_interval" type="number" min="1" value="{{ memory_advanced_form.conversation_save_interval }}">
-        </label>
-
         <label class="config-item-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">
