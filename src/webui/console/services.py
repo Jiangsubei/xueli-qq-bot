@@ -101,7 +101,6 @@ FIELD_HELP = {
         "log_full_prompt": "打开后会在日志里记录完整提示词。",
         "plan_request_interval": "同一群聊内主动规划请求的冷却时间。",
         "plan_request_max_parallel": "群聊规划请求的最大并行数。",
-        "plan_context_message_count": "规划时附带的最近群聊条数。",
         "at_user_when_proactive_reply": "主动群聊回复时是否 @ 触发用户。",
         "repeat_echo_enabled": "打开后，群里短时间内重复出现的短消息会被复读一次。",
         "repeat_echo_window_seconds": "统计重复消息时使用的时间窗口。",
@@ -952,7 +951,6 @@ def build_dashboard_context() -> Dict[str, Any]:
             "private_quote_reply_enabled": bool(app_config.bot_behavior.private_quote_reply_enabled),
             "plan_request_interval": app_config.group_reply.plan_request_interval,
             "plan_request_max_parallel": app_config.group_reply.plan_request_max_parallel,
-            "plan_context_message_count": app_config.group_reply.plan_context_message_count,
             "at_user_when_proactive_reply": bool(app_config.group_reply.at_user_when_proactive_reply),
             "repeat_echo_enabled": bool(app_config.group_reply.repeat_echo_enabled),
             "repeat_echo_window_seconds": app_config.group_reply.repeat_echo_window_seconds,
@@ -1312,8 +1310,8 @@ def save_assistant_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     group_reply.update(_parse_group_strategy(payload.get("group_strategy")))
     group_reply["plan_request_interval"] = _coerce_float(payload.get("plan_request_interval"), default=float(group_reply.get("plan_request_interval", 3.0) or 3.0))
     group_reply["plan_request_max_parallel"] = _coerce_int(payload.get("plan_request_max_parallel"), default=_safe_int(group_reply.get("plan_request_max_parallel"), 1))
-    group_reply["plan_context_message_count"] = _coerce_int(payload.get("plan_context_message_count"), default=_safe_int(group_reply.get("plan_context_message_count"), 5))
     group_reply["at_user_when_proactive_reply"] = _coerce_bool(payload.get("at_user_when_proactive_reply"), default=bool(group_reply.get("at_user_when_proactive_reply", False)))
+    group_reply.pop("plan_context_message_count", None)
     group_reply.pop("burst_merge_enabled", None)
     group_reply.pop("burst_window_seconds", None)
     group_reply.pop("burst_min_messages", None)

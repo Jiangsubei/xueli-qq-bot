@@ -8,8 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from src.core.config import AppConfig
+from src.core.message_trace import format_trace_log
+from src.core.model_invocation_router import ModelInvocationType
+from src.core.pipeline_errors import classify_pipeline_error
 from src.core.models import Conversation, MessageEvent, MessageHandlingPlan, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
+from src.handlers.message_context import MessageContext
 from src.services.ai_client import AIAPIError, AIResponse
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ class PreparedReplyRequest:
     related_history_messages: List[Dict[str, Any]]
     messages: List[Dict[str, Any]]
     fallback_response: Optional[str] = None
+    message_context: Optional[MessageContext] = None
 
 
 @dataclass
@@ -40,7 +45,13 @@ class ReplyPipelineHost(Protocol):
     runtime_metrics: Optional[RuntimeMetrics]
 
     async def download_images(self, event: MessageEvent) -> List[str]: ...
-    async def analyze_event_images(self, event: MessageEvent, user_text: str, base64_images: Optional[List[str]] = None) -> Dict[str, Any]: ...
+    async def analyze_event_images(
+        self,
+        event: MessageEvent,
+        user_text: str,
+        base64_images: Optional[List[str]] = None,
+        trace_id: str = "",
+    ) -> Dict[str, Any]: ...
     def vision_enabled(self) -> bool: ...
     def _get_conversation_key(self, event: MessageEvent) -> str: ...
     def _get_conversation(self, key: str) -> Conversation: ...
@@ -53,33 +64,63 @@ class ReplyPipelineHost(Protocol):
         messages: List[Dict[str, Any]],
         related_history_messages: Optional[List[Dict[str, Any]]] = None,
         title: str = "[FULL PROMPT]",
+        trace_id: str = "",
     ) -> str: ...
+    async def build_message_context(
+        self,
+        event: MessageEvent,
+        *,
+        plan: Optional[MessageHandlingPlan] = None,
+        trace_id: str = "",
+        include_memory: bool = True,
+    ) -> MessageContext: ...
+    model_invocation_router: Any
 
 
 class ReplyPipeline:
     def __init__(self, host: ReplyPipelineHost):
         self.host = host
 
-    async def prepare_request(self, *, event: MessageEvent, user_message: str, plan: Optional[MessageHandlingPlan] = None) -> PreparedReplyRequest:
-        original_user_message = user_message
-        base64_images = await self._download_images_if_needed(event)
-        conversation = self.host._get_conversation(self.host._get_conversation_key(event))
-        recent_history_text = self._build_recent_history_text(
+    async def prepare_request(
+        self,
+        *,
+        event: MessageEvent,
+        user_message: str,
+        plan: Optional[MessageHandlingPlan] = None,
+        context: Optional[MessageContext] = None,
+    ) -> PreparedReplyRequest:
+        message_context = context
+        if message_context is None:
+            message_context = await self.host.build_message_context(
+                event,
+                plan=plan,
+                include_memory=True,
+            )
+        original_user_message = str(message_context.user_message or user_message or "")
+        base64_images = list(message_context.base64_images or [])
+        if not base64_images and not message_context.vision_analysis:
+            base64_images = await self._download_images_if_needed(event)
+        conversation = message_context.conversation or self.host._get_conversation(self.host._get_conversation_key(event))
+        recent_history_text = str(message_context.recent_history_text or "").strip() or self._build_recent_history_text(
             event=event,
             conversation=conversation,
             plan=plan,
         )
-        persistent_memory_context, dynamic_memory_context, related_history_messages, is_first_turn = await self.load_memory_context(
-            event=event,
-            user_message=original_user_message,
-            conversation=conversation,
-        )
-        vision_analysis = await self._resolve_vision_analysis(
-            event=event,
-            user_message=original_user_message,
-            base64_images=base64_images,
-            plan=plan,
-        )
+        persistent_memory_context = str(message_context.persistent_memory_context or "")
+        dynamic_memory_context = str(message_context.dynamic_memory_context or "")
+        related_history_messages = list(message_context.related_history_messages or [])
+        is_first_turn = bool(message_context.is_first_turn)
+        vision_analysis = dict(message_context.vision_analysis or {})
+        if vision_analysis and self.host.runtime_metrics:
+            self.host.runtime_metrics.record_vision_request(reused_from_plan=True)
+        if not vision_analysis:
+            vision_analysis = await self._resolve_vision_analysis(
+                event=event,
+                user_message=original_user_message,
+                base64_images=base64_images,
+                plan=plan,
+                trace_id=message_context.trace_id if message_context else "",
+            )
         model_user_message = self._build_model_user_message(
             original_user_message=original_user_message,
             vision_analysis=vision_analysis,
@@ -120,27 +161,38 @@ class ReplyPipeline:
             related_history_messages=related_history_messages,
             messages=messages,
             fallback_response=fallback_response,
+            message_context=message_context,
         )
 
-    async def execute(self, *, event: MessageEvent, user_message: str, plan: Optional[MessageHandlingPlan] = None) -> ReplyResult:
-        prepared = await self.prepare_request(event=event, user_message=user_message, plan=plan)
+    async def execute(
+        self,
+        *,
+        event: MessageEvent,
+        user_message: str,
+        plan: Optional[MessageHandlingPlan] = None,
+        context: Optional[MessageContext] = None,
+    ) -> ReplyResult:
+        prepared = await self.prepare_request(event=event, user_message=user_message, plan=plan, context=context)
         self._log_prompt_if_enabled(event, prepared)
+        trace_id = prepared.message_context.trace_id if prepared.message_context else ""
+        trace_log = format_trace_log(trace_id=trace_id, session_key=self.host._get_conversation_key(event), message_id=event.message_id)
         try:
             source = "fallback" if prepared.fallback_response is not None else "ai"
             response = AIResponse(content=prepared.fallback_response) if prepared.fallback_response is not None else await self._request_model_reply(event, prepared)
             self._persist_reply_result(event, prepared, response)
             logger.debug(
-                "回复生成完成：用户=%s，群=%s，长度=%s",
+                "回复生成完成：%s 用户=%s，群=%s，长度=%s",
+                trace_log,
                 event.user_id,
                 event.group_id,
                 len(response.content),
             )
             return ReplyResult(text=response.content, source=source)
         except AIAPIError as exc:
-            logger.error("AI 请求失败：%s", exc)
+            logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
             return ReplyResult(text=f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}", source="fallback")
         except Exception as exc:
-            logger.error("回复流程异常：%s", exc, exc_info=True)
+            logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
             return ReplyResult(text="处理消息时出错，请稍后再试。", source="fallback")
 
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
@@ -153,16 +205,20 @@ class ReplyPipeline:
         if not self.host.app_config.bot_behavior.log_full_prompt:
             return
         if not prepared.messages:
+            trace_id = prepared.message_context.trace_id if prepared.message_context else ""
             logger.info(
-                    "[系统提示词]\n用户=%s\n会话=%s\n[视觉兜底回复：未请求模型]",
+                    "[系统提示词]\ntrace=%s\n用户=%s\n会话=%s\n[视觉兜底回复：未请求模型]",
+                trace_id,
                 event.user_id,
                 self.host._get_conversation_key(event),
             )
         return
 
     async def _request_model_reply(self, event: MessageEvent, prepared: PreparedReplyRequest) -> AIResponse:
+        trace_id = prepared.message_context.trace_id if prepared.message_context else ""
         logger.debug(
-            "开始请求 AI：用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
+            "开始请求 AI：%s 用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
+            format_trace_log(trace_id=trace_id, session_key=self.host._get_conversation_key(event), message_id=event.message_id),
             event.user_id,
             event.group_id,
             len(prepared.base64_images),
@@ -174,6 +230,7 @@ class ReplyPipeline:
             user_id=str(event.user_id),
             temperature=0.7,
             event=event,
+            trace_id=trace_id,
         )
 
     def _persist_reply_result(self, event: MessageEvent, prepared: PreparedReplyRequest, response: AIResponse) -> None:
@@ -197,6 +254,7 @@ class ReplyPipeline:
                 dialogue_key=dialogue_key,
                 message_type=event.message_type,
                 group_id=str(event.group_id or ""),
+                trace_id=prepared.message_context.trace_id if prepared.message_context else "",
             )
         except Exception as exc:
             logger.warning("记录记忆副作用失败：%s", exc, exc_info=True)
@@ -208,9 +266,12 @@ class ReplyPipeline:
         dialogue_key: Optional[str] = None,
         message_type: str = "private",
         group_id: Optional[str] = None,
+        trace_id: str = "",
     ) -> None:
         scheduler = getattr(self.host.memory_manager, "schedule_memory_extraction", None)
         if callable(scheduler):
+            if trace_id:
+                logger.info("已调度记忆提取：%s user=%s", format_trace_log(trace_id=trace_id, session_key=str(dialogue_key or ""), message_id=""), user_id)
             scheduler(
                 user_id,
                 dialogue_key=dialogue_key,
@@ -303,6 +364,7 @@ class ReplyPipeline:
         user_id: str,
         temperature: float = 0.7,
         event: Optional[MessageEvent] = None,
+        trace_id: str = "",
     ) -> AIResponse:
         tools = self.build_memory_tools()
         request_messages = list(messages)
@@ -311,11 +373,14 @@ class ReplyPipeline:
                 "role": "system",
                 "content": self.augment_system_prompt_for_tools(str(request_messages[0].get("content", "")), tools),
             }
-        self._log_actual_prompt_messages(event=event, messages=request_messages, title="[FULL PROMPT]")
-        response = await self.host.ai_client.chat_completion(
+        self._log_actual_prompt_messages(event=event, messages=request_messages, title="[FULL PROMPT]", trace_id=trace_id)
+        response = await self._invoke_reply_model(
             messages=request_messages,
             temperature=temperature,
             tools=tools or None,
+            event=event,
+            trace_id=trace_id,
+            label="主回复生成",
         )
         tool_calls = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
@@ -331,8 +396,43 @@ class ReplyPipeline:
         )
         for tool_call in tool_calls:
             follow_up_messages.append(await self.execute_tool_call(tool_call, user_id))
-        self._log_actual_prompt_messages(event=event, messages=follow_up_messages, title="[FULL PROMPT][ROUND 2]")
-        return await self.host.ai_client.chat_completion(messages=follow_up_messages, temperature=temperature)
+        self._log_actual_prompt_messages(event=event, messages=follow_up_messages, title="[FULL PROMPT][ROUND 2]", trace_id=trace_id)
+        return await self._invoke_reply_model(
+            messages=follow_up_messages,
+            temperature=temperature,
+            event=event,
+            trace_id=trace_id,
+            label="主回复生成-工具续轮",
+        )
+
+    async def _invoke_reply_model(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        event: Optional[MessageEvent],
+        trace_id: str,
+        label: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> AIResponse:
+        async def run_chat():
+            return await self.host.ai_client.chat_completion(
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+            )
+
+        router = getattr(self.host, "model_invocation_router", None)
+        if router is None:
+            return await run_chat()
+        return await router.submit(
+            purpose=ModelInvocationType.REPLY_GENERATION,
+            trace_id=trace_id,
+            session_key=self.host._get_conversation_key(event) if event else "",
+            message_id=getattr(event, "message_id", ""),
+            label=label,
+            runner=run_chat,
+        )
 
     def _log_actual_prompt_messages(
         self,
@@ -340,12 +440,13 @@ class ReplyPipeline:
         event: Optional[MessageEvent],
         messages: List[Dict[str, Any]],
         title: str,
+        trace_id: str = "",
     ) -> None:
         if not event or not self.host.app_config.bot_behavior.log_full_prompt:
             return
         formatter = getattr(self.host, "_format_system_prompt_log_with_history", None)
         if callable(formatter):
-            logger.info(formatter(event, messages, title=title))
+            logger.info(formatter(event, messages, title=title, trace_id=trace_id))
 
     async def load_memory_context(
         self,
@@ -748,6 +849,7 @@ class ReplyPipeline:
         user_message: str,
         base64_images: List[str],
         plan: Optional[MessageHandlingPlan],
+        trace_id: str = "",
     ) -> Dict[str, Any]:
         reused = self._extract_reusable_vision_analysis(event=event, plan=plan)
         if reused:
@@ -756,7 +858,12 @@ class ReplyPipeline:
             return reused
         if not event.has_image() or not self._vision_enabled():
             return {}
-        return await self.host.analyze_event_images(event, user_message, base64_images=base64_images)
+        return await self.host.analyze_event_images(
+            event,
+            user_message,
+            base64_images=base64_images,
+            trace_id=trace_id,
+        )
 
     def _extract_reusable_vision_analysis(self, *, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Dict[str, Any]:
         if not plan or not getattr(plan, "reply_context", None):

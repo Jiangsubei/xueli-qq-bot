@@ -6,7 +6,10 @@ import re
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig, config, is_group_reply_decision_configured
+from src.core.message_trace import format_trace_log
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
+from src.handlers.message_context import MessageContext
 from src.services.ai_client import AIAPIError, AIClient
 
 logger = logging.getLogger(__name__)
@@ -20,10 +23,12 @@ class GroupReplyPlanner:
         ai_client: Optional[AIClient] = None,
         *,
         app_config: Optional[AppConfig] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> None:
         self.app_config = app_config or config.app
         self.ai_client = ai_client or self._create_ai_client()
         self._owns_ai_client = ai_client is None
+        self.model_invocation_router = model_invocation_router
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
@@ -148,9 +153,10 @@ class GroupReplyPlanner:
         user_message: str,
         recent_messages: List[Dict[str, str]],
         window_messages: Optional[List[Dict[str, Any]]] = None,
+        context: Optional[MessageContext] = None,
     ) -> str:
         del recent_messages
-        window_messages = window_messages or []
+        window_messages = list((context.window_messages if context else window_messages) or [])
         latest_message = next(
             (item for item in reversed(window_messages) if item.get("is_latest")),
             window_messages[-1] if window_messages else {},
@@ -171,12 +177,12 @@ class GroupReplyPlanner:
             f"- 第{index}张: {description}" for index, description in enumerate(per_image_descriptions, 1)
         ) or "无"
         vision_available = "是" if latest_message.get("vision_available") else "否"
-        sender_label = self._format_identity_label(event.user_id, event.get_sender_display_name())
+        sender_label = context.current_sender_label if context and context.current_sender_label else self._format_identity_label(event.user_id, event.get_sender_display_name())
         mentioned_names = [
             name for name in self._assistant_names() if name and (name in raw_text or name in clean_text)
         ]
         mentioned_names_text = "、".join(mentioned_names) if mentioned_names else "无"
-        recent_history_text = self._build_recent_history_text(window_messages)
+        recent_history_text = context.recent_history_text if context and context.recent_history_text else self._build_recent_history_text(window_messages)
 
         image_context_lines = []
         if has_image_flag:
@@ -297,6 +303,7 @@ class GroupReplyPlanner:
         user_message: str,
         recent_messages: Optional[List[Dict[str, str]]] = None,
         window_messages: Optional[List[Dict[str, Any]]] = None,
+        context: Optional[MessageContext] = None,
     ) -> MessageHandlingPlan:
         if event.message_type != "group":
             return MessageHandlingPlan(
@@ -306,7 +313,7 @@ class GroupReplyPlanner:
             )
 
         recent_messages = recent_messages or []
-        window_messages = window_messages or []
+        window_messages = list((context.window_messages if context else window_messages) or [])
 
         if self.ai_client is None:
             return self._build_rule_plan(
@@ -321,16 +328,42 @@ class GroupReplyPlanner:
                 "user",
                 self._build_user_prompt(
                     event,
-                    user_message,
+                    context.user_message if context and context.user_message else user_message,
                     recent_messages,
                     window_messages=window_messages,
+                    context=context,
                 ),
             ),
         ]
 
         try:
-            response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
-            return self._parse_plan(response.content)
+            if context and context.trace_id:
+                logger.info(
+                    "开始群聊规划：%s",
+                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or f"group:{event.group_id}", message_id=event.message_id),
+                )
+            async def run_chat():
+                return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+            if self.model_invocation_router is not None:
+                response = await self.model_invocation_router.submit(
+                    purpose=ModelInvocationType.GROUP_PLAN,
+                    trace_id=context.trace_id if context else "",
+                    session_key=context.execution_key if context else f"group:{event.group_id}",
+                    message_id=event.message_id,
+                    label="群聊规划",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
+            plan = self._parse_plan(response.content)
+            if context and context.trace_id:
+                logger.info(
+                    "群聊规划完成：%s action=%s",
+                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or f"group:{event.group_id}", message_id=event.message_id),
+                    plan.action,
+                )
+            return plan
         except (AIAPIError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("群聊规划失败，改用回退策略：%s", exc)
             return self._build_fallback_plan(event, str(exc))

@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional, Set
 from src.core.bootstrap import BotBootstrapper
 from src.core.config import Config
 from src.core.dispatcher import EventContext, EventDispatcher
+from src.core.log_text import preview_json_for_log, preview_text_for_log
+from src.core.message_trace import build_trace_id, format_trace_log, get_execution_key
+from src.core.model_invocation_router import ModelInvocationRouter
+from src.core.pipeline_errors import SendError, classify_pipeline_error
+from src.core.session_message_pipeline import SessionMessagePipeline
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
 from src.core.models import MessageEvent, MessageSegment, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
@@ -48,6 +53,8 @@ class QQBot:
         self._closed = False
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
+        self._message_pipeline = SessionMessagePipeline(on_state_change=self._on_pipeline_state_change)
+        self._model_router = ModelInvocationRouter(on_state_change=self._on_model_router_state_change)
         self._connection_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._handlers_registered = False
@@ -75,6 +82,7 @@ class QQBot:
                 on_disconnect=self._on_disconnect,
                 runtime_metrics=self.runtime_metrics,
                 status_provider=self.get_status,
+                model_invocation_router=self._model_router,
             )
         except asyncio.CancelledError:
             await self.close()
@@ -115,15 +123,30 @@ class QQBot:
 
         @self.dispatcher.on_message
         async def handle_message(event: MessageEvent):
-            self._start_message_task(event)
+            message_id = getattr(event, "message_id", 0)
+            trace_id = build_trace_id(message_id)
+            execution_key = get_execution_key(event)
+            logger.info(
+                "收到消息：%s key=%s",
+                format_trace_log(trace_id=trace_id, session_key=execution_key, message_id=message_id),
+                execution_key,
+            )
+            await self._message_pipeline.submit(
+                execution_key=execution_key,
+                trace_id=trace_id,
+                event=event,
+                handler=self._handle_pipeline_message,
+            )
+            logger.info(
+                "消息已入队：%s key=%s",
+                format_trace_log(trace_id=trace_id, session_key=execution_key, message_id=message_id),
+                execution_key,
+            )
 
         self._handlers_registered = True
 
-    def _start_message_task(self, event: MessageEvent) -> None:
-        task = asyncio.create_task(self._handle_message_event(event))
-        self._message_tasks.add(task)
-        self._sync_runtime_counters()
-        task.add_done_callback(self._on_message_task_done)
+    async def _handle_pipeline_message(self, event: MessageEvent, trace_id: str) -> None:
+        await self._handle_message_event(event, trace_id=trace_id)
 
     def _on_message_task_done(self, task: asyncio.Task) -> None:
         self._message_tasks.discard(task)
@@ -138,21 +161,29 @@ class QQBot:
             self._sync_status_cache()
 
     async def _cancel_message_tasks(self) -> None:
-        tasks = list(self._message_tasks)
-        if not tasks:
-            self._sync_runtime_counters()
-            return
-        await cancel_tasks(tasks, label="message_tasks")
+        if self._message_pipeline:
+            await self._message_pipeline.close()
+        tasks = [task for task in self._message_tasks if not task.done()]
+        if tasks:
+            await cancel_tasks(tasks, label="message_tasks")
         self._message_tasks.clear()
         self._sync_runtime_counters()
 
-    async def _handle_message_event(self, event: MessageEvent):
+    async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
         plan = None
+        session_key_getter = getattr(self.message_handler, "_get_conversation_key", None)
+        session_key = session_key_getter(event) if callable(session_key_getter) else get_execution_key(event)
+        message_id = getattr(event, "message_id", 0)
+        trace_log = format_trace_log(trace_id=trace_id, session_key=session_key, message_id=message_id)
 
         try:
-            plan = await self.message_handler.plan_message(event)
+            logger.info("开始处理消息：%s", trace_log)
+            logger.info("开始规划：%s", trace_log)
+            plan = await self.message_handler.plan_message(event, trace_id=trace_id)
+            logger.info("规划结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
+            self._log_plan_preview(plan, trace_log)
             if self._should_log_message_summary():
                 logger.info(
                     "消息计划：动作=%s，来源=%s，原因=%s，用户=%s，群=%s",
@@ -170,64 +201,70 @@ class QQBot:
                 event.user_id if event.message_type == MessageType.PRIVATE.value else event.group_id
             )
             await self.message_handler.check_rate_limit(target_id)
-            reply_result = await self.message_handler.get_ai_response(event, plan=plan)
+            logger.info("开始生成回复：%s", trace_log)
+            reply_result = await self.message_handler.get_ai_response(event, plan=plan, trace_id=trace_id)
             if not reply_result or not reply_result.text:
+                logger.info("回复为空，跳过发送：%s", trace_log)
                 return
 
-            sent = await self._send_response(event, reply_result.text, plan=plan)
+            self._log_reply_preview(reply_result.text, trace_log, source=getattr(reply_result, "source", ""))
+            logger.info("开始发送回复：%s", trace_log)
+            sent = await self._send_response(event, reply_result.text, plan=plan, trace_id=trace_id)
             if sent:
+                logger.info("发送完成：%s", trace_log)
                 await self.message_handler.record_group_reply_sent(event, reply_result.text)
-                await self._send_emoji_follow_up_if_needed(event, reply_result, plan)
+                await self._send_emoji_follow_up_if_needed(event, reply_result, plan, trace_id=trace_id)
+            logger.info("消息处理结束：%s", trace_log)
         except Exception as exc:
-            logger.error("处理消息事件失败：%s", exc, exc_info=True)
+            category = classify_pipeline_error(exc)
+            logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             if plan is not None and plan.should_reply:
-                await self._send_response(event, "抱歉，这次处理消息时出了点问题。")
+                try:
+                    await self._send_response(event, "抱歉，这次处理消息时出了点问题。", trace_id=trace_id)
+                except Exception as fallback_exc:
+                    logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 
-    async def _send_response(self, event: MessageEvent, message: str, plan: Any = None) -> bool:
-        try:
-            parts = self.message_handler.split_long_message(message)
-            if event.message_type == MessageType.PRIVATE.value:
-                quote_reply_enabled = self._private_quote_reply_enabled()
-                for index, part in enumerate(parts):
-                    use_quote_reply = (
-                        quote_reply_enabled
-                        and index == 0
-                        and int(event.message_id or 0) > 0
-                    )
-                    if use_quote_reply:
-                        await self._send_private_segments(
-                            event.user_id,
-                            [MessageSegment.reply(event.message_id), MessageSegment.text(part)],
-                        )
-                    else:
-                        await self._send_private_msg(event.user_id, part)
-                    await asyncio.sleep(0.5)
-            else:
-                at_user = self.message_handler.resolve_group_at_user(event, plan)
-                for index, part in enumerate(parts):
-                    part_at_user = at_user if index == 0 else None
-                    await self._send_group_msg(event.group_id, part, part_at_user)
-                    await asyncio.sleep(0.5)
-
-            self.runtime_metrics.inc_messages_replied(len(parts))
-            self._sync_status_cache()
-            if self._should_log_message_summary():
-                logger.info(
-                    "回复已发送：目标=%s，类型=%s，分段=%s",
-                    event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
-                    event.message_type,
-                    len(parts),
+    async def _send_response(self, event: MessageEvent, message: str, plan: Any = None, trace_id: str = "") -> bool:
+        parts = self.message_handler.split_long_message(message)
+        if event.message_type == MessageType.PRIVATE.value:
+            quote_reply_enabled = self._private_quote_reply_enabled()
+            for index, part in enumerate(parts):
+                use_quote_reply = (
+                    quote_reply_enabled
+                    and index == 0
+                    and int(getattr(event, "message_id", 0) or 0) > 0
                 )
-            return True
-        except Exception as exc:
-            logger.error("发送回复失败：%s", exc, exc_info=True)
-            self.runtime_metrics.record_error(message_error=True)
-            self._sync_status_cache()
-            return False
+                if use_quote_reply:
+                    await self._send_private_segments(
+                        event.user_id,
+                        [MessageSegment.reply(getattr(event, "message_id", 0)), MessageSegment.text(part)],
+                        trace_id=trace_id,
+                    )
+                else:
+                    await self._send_private_msg(event.user_id, part, trace_id=trace_id)
+                await asyncio.sleep(0.5)
+        else:
+            at_user = self.message_handler.resolve_group_at_user(event, plan)
+            for index, part in enumerate(parts):
+                part_at_user = at_user if index == 0 else None
+                await self._send_group_msg(event.group_id, part, part_at_user, trace_id=trace_id)
+                await asyncio.sleep(0.5)
 
-    async def _send_emoji_follow_up_if_needed(self, event: MessageEvent, reply_result: Any, plan: Any) -> None:
+        self.runtime_metrics.inc_messages_replied(len(parts))
+        self._sync_status_cache()
+        if self._should_log_message_summary():
+            logger.info(
+                "回复已发送：%s 目标=%s 类型=%s 分段=%s",
+                format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
+                event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
+                event.message_type,
+                len(parts),
+            )
+        return True
+
+    async def _send_emoji_follow_up_if_needed(self, event: MessageEvent, reply_result: Any, plan: Any, *, trace_id: str = "") -> None:
         if event.message_type != MessageType.GROUP.value:
             return
         selection = await self.message_handler.plan_emoji_follow_up(event, reply_result, plan=plan)
@@ -239,28 +276,37 @@ class QQBot:
             return
 
         try:
-            await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)])
+            await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)], trace_id=trace_id)
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
             if self._should_log_message_summary():
                 logger.info(
-                    "群聊表情跟进已发送：group=%s，emoji_id=%s",
+                    "群聊表情跟进已发送：%s group=%s emoji_id=%s",
+                    format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
                     event.group_id,
                     getattr(selection.emoji, "emoji_id", ""),
                 )
         except Exception as exc:
-            logger.error("发送表情跟进失败：%s", exc, exc_info=True)
+            logger.error(
+                "发送表情跟进失败：%s category=%s 错误=%s",
+                format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
+                classify_pipeline_error(exc),
+                exc,
+                exc_info=True,
+            )
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
 
-    async def _send_private_msg(self, user_id: int, message: str):
+    async def _send_private_msg(self, user_id: int, message: str, *, trace_id: str = ""):
         payload = {
             "action": "send_private_msg",
             "params": {"user_id": user_id, "message": message},
         }
-        await self.connection.send(payload)
+        result = await self.connection.send(payload)
+        if result is False:
+            raise SendError("发送私聊消息失败")
         logger.debug("已发送私聊消息：user=%s", user_id)
 
-    async def _send_private_segments(self, user_id: int, segments: List[MessageSegment]) -> None:
+    async def _send_private_segments(self, user_id: int, segments: List[MessageSegment], *, trace_id: str = "") -> None:
         payload = {
             "action": "send_private_msg",
             "params": {
@@ -268,10 +314,12 @@ class QQBot:
                 "message": [segment.to_dict() for segment in segments],
             },
         }
-        await self.connection.send(payload)
+        result = await self.connection.send(payload)
+        if result is False:
+            raise SendError("发送私聊分段消息失败")
         logger.debug("已发送私聊分段消息：user=%s，segments=%s", user_id, len(segments))
 
-    async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None):
+    async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None, *, trace_id: str = ""):
         if at_user:
             segments = [MessageSegment.at(at_user)]
             if message:
@@ -283,7 +331,9 @@ class QQBot:
                     "message": [segment.to_dict() for segment in segments],
                 },
             }
-            await self.connection.send(payload)
+            result = await self.connection.send(payload)
+            if result is False:
+                raise SendError("发送群聊 @ 消息失败")
             logger.debug("已发送群聊@消息：group=%s，at_user=%s", group_id, at_user)
             return
 
@@ -291,10 +341,12 @@ class QQBot:
             "action": "send_group_msg",
             "params": {"group_id": group_id, "message": message},
         }
-        await self.connection.send(payload)
+        result = await self.connection.send(payload)
+        if result is False:
+            raise SendError("发送群聊消息失败")
         logger.debug("已发送群聊消息：group=%s", group_id)
 
-    async def _send_group_segments(self, group_id: int, segments: List[MessageSegment]) -> None:
+    async def _send_group_segments(self, group_id: int, segments: List[MessageSegment], *, trace_id: str = "") -> None:
         payload = {
             "action": "send_group_msg",
             "params": {
@@ -302,7 +354,9 @@ class QQBot:
                 "message": [segment.to_dict() for segment in segments],
             },
         }
-        await self.connection.send(payload)
+        result = await self.connection.send(payload)
+        if result is False:
+            raise SendError("发送群聊分段消息失败")
         logger.debug("已发送群聊分段消息：group=%s，segments=%s", group_id, len(segments))
 
     def _private_quote_reply_enabled(self) -> bool:
@@ -385,6 +439,7 @@ class QQBot:
         self._shutdown_event.set()
 
         await self._cancel_message_tasks()
+        await self._model_router.close()
 
         if self.connection:
             try:
@@ -406,6 +461,9 @@ class QQBot:
             connected=False,
             ready=False,
             active_message_tasks=0,
+            active_session_workers=0,
+            active_model_workers=0,
+            pending_model_jobs=0,
             active_conversations=0,
             background_tasks=0,
         )
@@ -439,8 +497,13 @@ class QQBot:
         active_conversations = 0
         if self.message_handler and hasattr(self.message_handler, "get_active_conversation_count"):
             active_conversations = self.message_handler.get_active_conversation_count()
+        pipeline_snapshot = self._message_pipeline.snapshot() if self._message_pipeline else {"active_workers": 0}
+        model_snapshot = self._model_router.snapshot() if self._model_router else {"active_workers": 0, "pending_jobs": 0}
         self.runtime_metrics.set_state(
-            active_message_tasks=len(self._message_tasks),
+            active_message_tasks=int(pipeline_snapshot.get("active_workers", 0)),
+            active_session_workers=int(pipeline_snapshot.get("active_workers", 0)),
+            active_model_workers=int(model_snapshot.get("active_workers", 0)),
+            pending_model_jobs=int(model_snapshot.get("pending_jobs", 0)),
             active_conversations=active_conversations,
         )
 
@@ -474,3 +537,40 @@ class QQBot:
             "is_latest": planner_batch.get("is_latest", True),
             "merged_into_latest": planner_batch.get("merged_into_latest", False),
         }
+
+    def _on_pipeline_state_change(self, state: Dict[str, int]) -> None:
+        active_workers = int(state.get("active_workers", 0))
+        self.runtime_metrics.set_state(
+            active_message_tasks=active_workers,
+            active_session_workers=active_workers,
+        )
+        self._sync_status_cache()
+
+    def _on_model_router_state_change(self, state: Dict[str, Any]) -> None:
+        self.runtime_metrics.set_state(
+            active_model_workers=int(state.get("active_workers", 0)),
+            pending_model_jobs=int(state.get("pending_jobs", 0)),
+        )
+        self._sync_status_cache()
+
+    def _log_plan_preview(self, plan: Any, trace_log: str) -> None:
+        if not plan:
+            return
+        source = str(getattr(plan, "source", "") or "").strip().lower()
+        if source not in {"planner", "fallback"}:
+            return
+        raw_decision = getattr(plan, "raw_decision", None)
+        if raw_decision is None:
+            return
+        logger.info(
+            "规划原始结果：%s preview=%s",
+            trace_log,
+            preview_json_for_log(raw_decision),
+        )
+
+    def _log_reply_preview(self, reply_text: str, trace_log: str, *, source: str = "") -> None:
+        preview = preview_text_for_log(reply_text)
+        if not preview:
+            return
+        normalized_source = str(source or "").strip() or "unknown"
+        logger.info("最终回复预览：%s source=%s content=%s", trace_log, normalized_source, preview)

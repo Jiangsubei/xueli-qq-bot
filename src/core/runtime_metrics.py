@@ -48,6 +48,9 @@ class RuntimeMetrics:
             "memory_migrations": 0,
             "memory_compactions": 0,
             "active_message_tasks": 0,
+            "active_session_workers": 0,
+            "active_model_workers": 0,
+            "pending_model_jobs": 0,
             "active_conversations": 0,
             "background_tasks": 0,
         }

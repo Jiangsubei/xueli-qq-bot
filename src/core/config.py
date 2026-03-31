@@ -84,7 +84,6 @@ class GroupReplyConfig:
     interest_reply_enabled: bool = True
     plan_request_interval: float = 3.0
     plan_request_max_parallel: int = 1
-    plan_context_message_count: int = 5
     at_user_when_proactive_reply: bool = False
     repeat_echo_enabled: bool = False
     repeat_echo_window_seconds: float = 20.0
@@ -231,7 +230,6 @@ class Config:
         "GROUP_REPLY_INTEREST_REPLY_ENABLED": ("group_reply", "interest_reply_enabled"),
         "GROUP_REPLY_PLAN_REQUEST_INTERVAL": ("group_reply", "plan_request_interval"),
         "GROUP_REPLY_PLAN_MAX_PARALLEL": ("group_reply", "plan_request_max_parallel"),
-        "GROUP_REPLY_PLAN_CONTEXT_MESSAGE_COUNT": ("group_reply", "plan_context_message_count"),
         "GROUP_REPLY_AT_USER_WHEN_PROACTIVE_REPLY": ("group_reply", "at_user_when_proactive_reply"),
         "GROUP_REPLY_REPEAT_ECHO_ENABLED": ("group_reply", "repeat_echo_enabled"),
         "GROUP_REPLY_REPEAT_ECHO_WINDOW_SECONDS": ("group_reply", "repeat_echo_window_seconds"),
@@ -541,7 +539,6 @@ class Config:
             interest_reply_enabled=self._bool_value(section, "group_reply", "interest_reply_enabled", default=True),
             plan_request_interval=self._bounded_float(section, "group_reply", "plan_request_interval", default=3.0, minimum=0.0),
             plan_request_max_parallel=self._bounded_int(section, "group_reply", "plan_request_max_parallel", default=1, minimum=1),
-            plan_context_message_count=self._bounded_int(section, "group_reply", "plan_context_message_count", default=5, minimum=0),
             at_user_when_proactive_reply=self._bool_value(section, "group_reply", "at_user_when_proactive_reply", default=False),
             repeat_echo_enabled=self._bool_value(section, "group_reply", "repeat_echo_enabled", default=False),
             repeat_echo_window_seconds=self._bounded_float(section, "group_reply", "repeat_echo_window_seconds", default=20.0, minimum=1.0),

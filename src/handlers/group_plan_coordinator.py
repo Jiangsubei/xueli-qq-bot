@@ -6,14 +6,16 @@ from collections import deque
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
 
 from src.core.config import GroupReplyConfig, config
+from src.core.message_trace import format_trace_log
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers.conversation_session_manager import ConversationSessionManager
+from src.handlers.message_context import MessageContext
 from src.handlers.group_reply_planner import GroupReplyPlanner
 
 logger = logging.getLogger(__name__)
 
-ImageAnalyzer = Callable[[MessageEvent, str], Awaitable[Dict[str, Any]]]
+ImageAnalyzer = Callable[[MessageEvent, str, str], Awaitable[Dict[str, Any]]]
 
 
 class GroupPlanCoordinator:
@@ -27,12 +29,14 @@ class GroupPlanCoordinator:
         runtime_metrics: Optional[RuntimeMetrics] = None,
         group_reply_config: Optional[GroupReplyConfig] = None,
         image_analyzer: Optional[ImageAnalyzer] = None,
+        context_window_size: int = 10,
     ) -> None:
         self.planner = planner
         self.session_manager = session_manager
         self.runtime_metrics = runtime_metrics
         self.group_reply_config = group_reply_config or config.app.group_reply
         self.image_analyzer = image_analyzer
+        self.context_window_size = max(0, int(context_window_size or 0))
 
         self.group_plan_locks: Dict[str, asyncio.Lock] = {}
         max_parallel = max(1, int(self.group_reply_config.plan_request_max_parallel or 1))
@@ -154,22 +158,17 @@ class GroupPlanCoordinator:
         lines.append("")
         return "\n".join(lines)
 
-    async def plan_group_message(self, event: MessageEvent, user_message: str) -> MessageHandlingPlan:
+    async def build_message_context(
+        self,
+        *,
+        event: MessageEvent,
+        user_message: str,
+        trace_id: str = "",
+    ) -> MessageContext:
         group_id = str(event.group_id or "unknown_group")
         history_items = self._get_recent_group_history(group_id)
-        current_message = await self._build_current_message(event=event, user_message=user_message)
+        current_message = await self._build_current_message(event=event, user_message=user_message, trace_id=trace_id)
         window_messages = self._compose_window_messages(history_items, current_message)
-
-        try:
-            plan = await self._plan_with_window_messages(
-                event=event,
-                user_message=user_message,
-                recent_messages=[],
-                window_messages=window_messages,
-            )
-        finally:
-            self._record_group_user_message(group_id, current_message)
-
         reply_context = self._merge_reply_context(
             self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
@@ -179,9 +178,50 @@ class GroupPlanCoordinator:
                 is_latest=True,
             ),
         )
+        return MessageContext(
+            trace_id=trace_id,
+            execution_key=f"group:{group_id}",
+            conversation_key=f"group:{group_id}:{event.user_id}",
+            user_message=str(current_message.get("text_content") or user_message or "").strip(),
+            current_sender_label=self._format_window_speaker(current_message).replace("用户 ", "", 1),
+            is_first_turn=False,
+            window_messages=window_messages,
+            recent_history_text=self._build_recent_history_text(window_messages),
+            vision_analysis={
+                "per_image_descriptions": list(current_message.get("per_image_descriptions") or []),
+                "merged_description": str(current_message.get("merged_description", "") or ""),
+                "vision_success_count": int(current_message.get("vision_success_count", 0) or 0),
+                "vision_failure_count": int(current_message.get("vision_failure_count", 0) or 0),
+                "vision_source": str(current_message.get("vision_source", "") or ""),
+                "vision_error": str(current_message.get("vision_error", "") or ""),
+                "vision_available": bool(current_message.get("vision_available", False)),
+            },
+            reply_context=reply_context,
+        )
+
+    async def plan_group_message(self, event: MessageEvent, user_message: str, *, trace_id: str = "") -> MessageHandlingPlan:
+        context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
+        group_id = str(event.group_id or "unknown_group")
+        window_messages = list(context.window_messages or [])
+
+        try:
+            plan = await self._plan_with_window_messages(
+                event=event,
+                user_message=user_message,
+                recent_messages=[],
+                window_messages=window_messages,
+                context=context,
+            )
+        finally:
+            if window_messages:
+                self._record_group_user_message(group_id, window_messages[-1])
+
+        reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
         if reply_mode:
             reply_context["reply_mode"] = reply_mode
+        if trace_id:
+            reply_context["trace_id"] = trace_id
         plan = self._clone_plan(plan, reply_context=reply_context)
         self._record_plan_metric(plan.action)
         return plan
@@ -193,15 +233,15 @@ class GroupPlanCoordinator:
         user_message: str,
         reply_mode: str,
         planner_mode: str = "direct",
+        trace_id: str = "",
     ) -> Dict[str, Any]:
+        context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
         group_id = str(event.group_id or "unknown_group")
-        history_items = self._get_recent_group_history(group_id)
-        current_message = await self._build_current_message(event=event, user_message=user_message)
-        window_messages = self._compose_window_messages(history_items, current_message)
+        window_messages = list(context.window_messages or [])
 
         try:
             reply_context = self._merge_reply_context(
-                self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
+                dict(context.reply_context or {}),
                 self._build_planner_batch_context(
                     group_id=group_id,
                     mode=planner_mode,
@@ -210,9 +250,12 @@ class GroupPlanCoordinator:
                 ),
             )
             reply_context["reply_mode"] = reply_mode
+            if trace_id:
+                reply_context["trace_id"] = trace_id
             return reply_context
         finally:
-            self._record_group_user_message(group_id, current_message)
+            if window_messages:
+                self._record_group_user_message(group_id, window_messages[-1])
 
     async def record_assistant_reply(self, group_id: Optional[int], message: str) -> None:
         text = str(message or "").strip()
@@ -250,11 +293,11 @@ class GroupPlanCoordinator:
     def _get_plan_request_interval(self) -> float:
         return max(0.0, float(self.group_reply_config.plan_request_interval or 0))
 
-    def _get_plan_context_message_count(self) -> int:
-        return max(0, int(self.group_reply_config.plan_context_message_count or 0))
+    def _get_context_window_size(self) -> int:
+        return self.context_window_size
 
     def _max_history_buffer_size(self) -> int:
-        return max(self._history_limit_floor, self._get_plan_context_message_count() + 10)
+        return max(self._history_limit_floor, self._get_context_window_size() + 10)
 
     def _history_deque(self, group_id: str) -> Deque[Dict[str, Any]]:
         history = self.group_message_history.get(group_id)
@@ -269,14 +312,14 @@ class GroupPlanCoordinator:
         self._history_deque(group_id).append(dict(item))
 
     def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
-        count = self._get_plan_context_message_count()
+        count = self._get_context_window_size()
         if count <= 0:
             return []
         history = list(self._history_deque(group_id))
         return [dict(item) for item in history[-count:]]
 
-    async def _build_current_message(self, *, event: MessageEvent, user_message: str) -> Dict[str, Any]:
-        image_analysis = await self._analyze_images_for_event(event, user_message)
+    async def _build_current_message(self, *, event: MessageEvent, user_message: str, trace_id: str = "") -> Dict[str, Any]:
+        image_analysis = await self._analyze_images_for_event(event, user_message, trace_id=trace_id)
         planner_message = self.build_planner_message_info(
             event,
             user_message,
@@ -292,11 +335,16 @@ class GroupPlanCoordinator:
             **planner_message,
         }
 
-    async def _analyze_images_for_event(self, event: MessageEvent, user_message: str) -> Dict[str, Any]:
+    async def _analyze_images_for_event(self, event: MessageEvent, user_message: str, *, trace_id: str = "") -> Dict[str, Any]:
         if not event.has_image() or self.image_analyzer is None:
             return {}
         try:
-            return await self.image_analyzer(event, user_message)
+            try:
+                return await self.image_analyzer(event, user_message, trace_id)
+            except TypeError as exc:
+                if "positional arguments" not in str(exc):
+                    raise
+                return await self.image_analyzer(event, user_message)
         except Exception as exc:
             logger.warning(
                 "规划前图片分析失败：消息ID=%s，错误=%s",
@@ -448,6 +496,7 @@ class GroupPlanCoordinator:
         user_message: str,
         recent_messages: List[Dict[str, str]],
         window_messages: List[Dict[str, Any]],
+        context: Optional[MessageContext] = None,
     ) -> MessageHandlingPlan:
         latest_message = next(
             (item for item in reversed(window_messages) if item.get("is_latest")),
@@ -476,6 +525,7 @@ class GroupPlanCoordinator:
             user_message=planner_user_message,
             recent_messages=recent_messages,
             window_messages=window_messages,
+            context=context,
         )
 
     async def _execute_group_plan(
@@ -484,6 +534,7 @@ class GroupPlanCoordinator:
         user_message: str,
         recent_messages: List[Dict[str, str]],
         window_messages: Optional[List[Dict[str, Any]]] = None,
+        context: Optional[MessageContext] = None,
     ) -> MessageHandlingPlan:
         group_id = str(event.group_id or "unknown_group")
         cooldown = self._get_plan_request_interval()
@@ -491,12 +542,23 @@ class GroupPlanCoordinator:
 
         async with group_lock:
             async with self.group_plan_semaphore:
-                plan = await self.planner.plan(
-                    event=event,
-                    user_message=user_message,
-                    recent_messages=recent_messages,
-                    window_messages=window_messages,
-                )
+                try:
+                    plan = await self.planner.plan(
+                        event=event,
+                        user_message=user_message,
+                        recent_messages=recent_messages,
+                        window_messages=window_messages,
+                        context=context,
+                    )
+                except TypeError as exc:
+                    if "unexpected keyword argument 'context'" not in str(exc):
+                        raise
+                    plan = await self.planner.plan(
+                        event=event,
+                        user_message=user_message,
+                        recent_messages=recent_messages,
+                        window_messages=window_messages,
+                    )
             if cooldown > 0:
                 await asyncio.sleep(cooldown)
             return plan
@@ -511,6 +573,18 @@ class GroupPlanCoordinator:
         if display_name and display_name != user_id:
             return f"用户 {user_id}（{display_name}）"
         return f"用户 {user_id}"
+
+    def _build_recent_history_text(self, window_messages: List[Dict[str, Any]]) -> str:
+        builder = getattr(self.planner, "_build_recent_history_text", None)
+        if callable(builder):
+            return str(builder(window_messages) or "")
+        history_items = [item for item in window_messages if not bool(item.get("is_latest"))]
+        if not history_items:
+            return "在当前这条群消息之前，群里刚刚聊过的内容暂时还没有。"
+        lines = ["在当前这条群消息之前，群里刚刚聊了这些内容："]
+        for item in history_items:
+            lines.append(f"{self._format_window_speaker(item)}: {self._window_display_text(item)}")
+        return "\n".join(lines)
 
     def _record_plan_metric(self, action: str, source: str = "") -> None:
         if self.runtime_metrics:

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.services.ai_client import AIClient
 from src.memory_limits import MIN_RERANK_CANDIDATE_MAX_CHARS, MIN_RERANK_TOTAL_PROMPT_BUDGET
 
@@ -40,6 +41,7 @@ class RetrievalConfig:
     api_extra_headers: Dict[str, str] = field(default_factory=dict)
     api_response_path: str = "choices.0.message.content"
     api_timeout: float = 5.0
+    model_invocation_router: Optional[ModelInvocationRouter] = None
     local_bm25_weight: float = 1.0
     local_importance_weight: float = 0.35
     local_mention_weight: float = 0.2
@@ -129,10 +131,12 @@ class APIReranker(BaseReranker):
         timeout: float = 5.0,
         candidate_max_chars: int = 160,
         total_prompt_budget: int = 2400,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ):
         self.endpoint = str(endpoint or "").rstrip("/")
         self.candidate_max_chars = max(MIN_RERANK_CANDIDATE_MAX_CHARS, int(candidate_max_chars or 160))
         self.total_prompt_budget = max(MIN_RERANK_TOTAL_PROMPT_BUDGET, int(total_prompt_budget or 2400))
+        self._model_invocation_router = model_invocation_router
         self._client = AIClient(
             api_base=self.endpoint,
             api_key=api_key,
@@ -234,14 +238,27 @@ class APIReranker(BaseReranker):
         if not candidates:
             return []
         try:
-            response = await self._client.chat_completion(
-                messages=[
-                    self._client.build_text_message("system", self._build_system_prompt()),
-                    self._client.build_text_message("user", self._build_user_prompt(query, candidates, top_k, retrieval_context)),
-                ],
-                temperature=0.1,
-                max_tokens=1200,
-            )
+            async def run_chat():
+                return await self._client.chat_completion(
+                    messages=[
+                        self._client.build_text_message("system", self._build_system_prompt()),
+                        self._client.build_text_message("user", self._build_user_prompt(query, candidates, top_k, retrieval_context)),
+                    ],
+                    temperature=0.1,
+                    max_tokens=1200,
+                )
+
+            if self._model_invocation_router is not None:
+                response = await self._model_invocation_router.submit(
+                    purpose=ModelInvocationType.MEMORY_RERANK,
+                    trace_id="",
+                    session_key="",
+                    message_id="",
+                    label="记忆重排",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
             ranked = self._parse_response(getattr(response, "content", ""))
         except Exception as exc:
             logger.error("API 重排失败：地址=%s，错误=%s", self.endpoint, exc)
@@ -291,6 +308,7 @@ class TwoStageRetriever:
                     timeout=self.config.api_timeout,
                     candidate_max_chars=self.config.rerank_candidate_max_chars,
                     total_prompt_budget=self.config.rerank_total_prompt_budget,
+                    model_invocation_router=self.config.model_invocation_router,
                 )
                 logger.debug("API 重排器初始化完成：地址=%s，模型=%s", self.config.api_endpoint, self.config.api_model)
         except Exception as exc:

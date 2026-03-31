@@ -15,6 +15,7 @@ from src.core.config import (
 )
 from src.core.connection import NapCatConnection
 from src.core.lifecycle import close_resource
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers.group_reply_planner import GroupReplyPlanner
 from src.handlers.message_handler import MessageHandler
@@ -43,21 +44,29 @@ class BotBootstrapper:
         on_disconnect: Callable[[], Awaitable[None]],
         runtime_metrics: Optional[RuntimeMetrics] = None,
         status_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> BotRuntimeComponents:
         app_config = self.config.validate()
         logger.info("开始启动助手：%s", self.config.get_assistant_name())
         self._log_runtime_config()
 
-        memory_manager = await self._initialize_memory_manager(runtime_metrics=runtime_metrics)
+        memory_manager = await self._initialize_memory_manager(
+            runtime_metrics=runtime_metrics,
+            model_invocation_router=model_invocation_router,
+        )
         message_handler: Optional[MessageHandler] = None
 
         try:
             message_handler = MessageHandler(
                 memory_manager=memory_manager,
-                group_reply_planner=GroupReplyPlanner(app_config=app_config),
+                group_reply_planner=GroupReplyPlanner(
+                    app_config=app_config,
+                    model_invocation_router=model_invocation_router,
+                ),
                 runtime_metrics=runtime_metrics,
                 status_provider=status_provider,
                 app_config=app_config,
+                model_invocation_router=model_invocation_router,
             )
             await message_handler.initialize()
             connection = self._create_connection(
@@ -96,12 +105,12 @@ class BotBootstrapper:
             vision_service.get("model"),
         )
         logger.info(
-            "群聊规划：已配置=%s，模型=%s，仅@回复=%s，兴趣回复=%s，上下文条数=%s，复读回声=%s",
+            "群聊规划：已配置=%s，模型=%s，仅@回复=%s，兴趣回复=%s，统一上下文条数=%s，复读回声=%s",
             is_group_reply_decision_configured(app_config),
             decision_config.get("model"),
             group_reply.only_reply_when_at,
             group_reply.interest_reply_enabled,
-            group_reply.plan_context_message_count,
+            app_config.bot_behavior.max_context_length,
             group_reply.repeat_echo_enabled,
         )
         if is_memory_extraction_configured(app_config):
@@ -115,6 +124,7 @@ class BotBootstrapper:
         self,
         *,
         runtime_metrics: Optional[RuntimeMetrics] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ):
         app_config = self.config.app
         memory_config = app_config.memory
@@ -165,6 +175,7 @@ class BotBootstrapper:
                 api_extra_params=memory_rerank_client_config.get("extra_params", {}),
                 api_extra_headers=memory_rerank_client_config.get("extra_headers", {}),
                 api_response_path=memory_rerank_client_config.get("response_path", "choices.0.message.content"),
+                model_invocation_router=model_invocation_router,
                 local_bm25_weight=memory_config.local_bm25_weight,
                 local_importance_weight=memory_config.local_importance_weight,
                 local_mention_weight=memory_config.local_mention_weight,
@@ -187,6 +198,7 @@ class BotBootstrapper:
                 main_client_config=main_ai_client_config,
                 use_dedicated_first=dedicated_extraction_configured,
                 main_available=main_ai_configured,
+                model_invocation_router=model_invocation_router,
             ),
             config=manager_config,
             runtime_metrics=runtime_metrics,
@@ -207,6 +219,7 @@ class BotBootstrapper:
         main_client_config: Dict[str, Any],
         use_dedicated_first: bool,
         main_available: bool,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ):
         if not use_dedicated_first and not main_available:
             return None
@@ -226,11 +239,24 @@ class BotBootstrapper:
                 for message in messages:
                     full_messages.append(client.build_text_message(message["role"], message["content"]))
 
-                result = await client.chat_completion(
-                    messages=full_messages,
-                    temperature=0.3,
-                    model=client_config.get("model"),
-                )
+                async def run_chat():
+                    return await client.chat_completion(
+                        messages=full_messages,
+                        temperature=0.3,
+                        model=client_config.get("model"),
+                    )
+
+                if model_invocation_router is not None:
+                    result = await model_invocation_router.submit(
+                        purpose=ModelInvocationType.MEMORY_EXTRACTION,
+                        trace_id="",
+                        session_key="",
+                        message_id="",
+                        label=f"记忆提取-{provider}",
+                        runner=run_chat,
+                    )
+                else:
+                    result = await run_chat()
                 content = result.content if hasattr(result, "content") else str(result)
                 return {
                     "content": str(content or ""),

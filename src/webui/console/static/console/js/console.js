@@ -574,7 +574,6 @@ function collectSectionPayload(section) {
             private_quote_reply_enabled: checkboxValue(formData, "private_quote_reply_enabled"),
             plan_request_interval: numberOrZero(formData.get("plan_request_interval")),
             plan_request_max_parallel: numberOrZero(formData.get("plan_request_max_parallel")),
-            plan_context_message_count: numberOrZero(formData.get("plan_context_message_count")),
             at_user_when_proactive_reply: checkboxValue(formData, "at_user_when_proactive_reply"),
             repeat_echo_enabled: checkboxValue(formData, "repeat_echo_enabled"),
             repeat_echo_window_seconds: numberOrZero(formData.get("repeat_echo_window_seconds")),

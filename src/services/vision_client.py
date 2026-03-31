@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig, config, get_vision_service_status, is_vision_service_configured
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.emoji.models import DEFAULT_REPLY_TONES
 from src.services.ai_client import AIAPIError, AIClient
 
@@ -75,9 +76,11 @@ class VisionClient:
         ai_client: Optional[AIClient] = None,
         *,
         app_config: Optional[AppConfig] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> None:
         self.app_config = app_config or config.app
         self._owns_ai_client = ai_client is None
+        self.model_invocation_router = model_invocation_router
         self.ai_client = ai_client
         if self.ai_client is None and self.is_available():
             self.ai_client = self._create_ai_client()
@@ -235,6 +238,9 @@ class VisionClient:
         *,
         base64_images: List[str],
         user_text: str = "",
+        trace_id: str = "",
+        session_key: str = "",
+        message_id: Any = "",
     ) -> ImageAnalysisResult:
         if not base64_images:
             return ImageAnalysisResult(source="vision")
@@ -255,7 +261,20 @@ class VisionClient:
             ),
         ]
         try:
-            response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+            async def run_chat():
+                return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+            if self.model_invocation_router is not None:
+                response = await self.model_invocation_router.submit(
+                    purpose=ModelInvocationType.VISION_ANALYSIS,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    message_id=message_id,
+                    label="图片理解",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
             result = self._parse_result(response.content, len(base64_images))
             result.source = "vision"
             return result
@@ -281,6 +300,9 @@ class VisionClient:
         *,
         image_base64: str,
         emotion_labels: List[str],
+        trace_id: str = "",
+        session_key: str = "",
+        message_id: Any = "",
     ) -> Dict[str, Any]:
         labels = [label.strip() for label in emotion_labels if str(label).strip()]
         if not labels:
@@ -296,7 +318,20 @@ class VisionClient:
                 images=[image_base64],
             ),
         ]
-        response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+        async def run_chat():
+            return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+        if self.model_invocation_router is not None:
+            response = await self.model_invocation_router.submit(
+                purpose=ModelInvocationType.VISION_STICKER_EMOTION,
+                trace_id=trace_id,
+                session_key=session_key,
+                message_id=message_id,
+                label="表情包情绪分类",
+                runner=run_chat,
+            )
+        else:
+            response = await run_chat()
         data = self._extract_json_object(response.content)
 
         all_emotions = data.get("all_emotions")

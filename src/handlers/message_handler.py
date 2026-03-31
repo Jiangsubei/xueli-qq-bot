@@ -9,6 +9,9 @@ from collections import defaultdict, deque
 from typing import Any, Deque, Dict, List, Optional
 
 from src.core.config import AppConfig, config, get_vision_service_status, is_group_reply_decision_configured, is_vision_service_configured
+from src.core.message_trace import format_trace_log, get_execution_key
+from src.core.model_invocation_router import ModelInvocationRouter
+from src.core.pipeline_errors import ImageProcessingError, wrap_image_error
 from src.core.models import (
     Conversation,
     MessageEvent,
@@ -22,6 +25,7 @@ from src.emoji.reply_service import EmojiReplyService
 from src.handlers.command_handler import CommandHandler
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.group_plan_coordinator import GroupPlanCoordinator
+from src.handlers.message_context import MessageContext
 from src.handlers.group_reply_planner import GroupReplyPlanner
 from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
 from src.services.ai_client import AIClient, AIResponse
@@ -45,10 +49,12 @@ class MessageHandler:
         runtime_metrics: Optional[RuntimeMetrics] = None,
         status_provider: Optional[Any] = None,
         app_config: Optional[AppConfig] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> None:
         self.app_config = app_config or config.app
         self.runtime_metrics = runtime_metrics
         self.memory_manager = memory_manager
+        self.model_invocation_router = model_invocation_router
         self.ai_client = ai_client or self._create_ai_client()
         self.image_client = image_client or ImageClient()
         self.vision_client = vision_client or self._create_vision_client()
@@ -62,8 +68,12 @@ class MessageHandler:
             ai_client=self.ai_client,
             runtime_metrics=self.runtime_metrics,
             app_config=self.app_config,
+            model_invocation_router=self.model_invocation_router,
         )
-        self.group_reply_planner = group_reply_planner or GroupReplyPlanner(app_config=self.app_config)
+        self.group_reply_planner = group_reply_planner or GroupReplyPlanner(
+            app_config=self.app_config,
+            model_invocation_router=self.model_invocation_router,
+        )
 
         self.session_manager = ConversationSessionManager()
         self.group_plan_coordinator = GroupPlanCoordinator(
@@ -71,7 +81,12 @@ class MessageHandler:
             session_manager=self.session_manager,
             runtime_metrics=self.runtime_metrics,
             group_reply_config=self.app_config.group_reply,
-            image_analyzer=self.analyze_event_images if self.vision_enabled() else None,
+            context_window_size=self.app_config.bot_behavior.max_context_length,
+            image_analyzer=(
+                (lambda event, user_text, trace_id="": self.analyze_event_images(event, user_text, trace_id=trace_id))
+                if self.vision_enabled()
+                else None
+            ),
         )
         self.command_handler = CommandHandler(
             self.session_manager,
@@ -102,7 +117,7 @@ class MessageHandler:
         return AIClient(log_label="reply", app_config=self.app_config)
 
     def _create_vision_client(self) -> VisionClient:
-        return VisionClient(app_config=self.app_config)
+        return VisionClient(app_config=self.app_config, model_invocation_router=self.model_invocation_router)
 
     def _get_assistant_name(self) -> str:
         if self.app_config is config.app:
@@ -129,6 +144,13 @@ class MessageHandler:
         if owner and self._should_label_memory_owner():
             return f"[来源用户 {owner}] {text}"
         return text
+
+    def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
+        identifier = str(user_id or "").strip() or "unknown"
+        name = str(display_name or "").strip()
+        if name and name != identifier:
+            return f"{identifier}（{name}）"
+        return identifier
 
     def _build_assistant_identity_text(self) -> str:
         assistant_name = self._get_assistant_name()
@@ -221,6 +243,7 @@ class MessageHandler:
         messages: List[Dict[str, Any]],
         related_history_messages: Optional[List[Dict[str, Any]]] = None,
         title: str = "[FULL PROMPT]",
+        trace_id: str = "",
     ) -> str:
         del related_history_messages
         system_prompt = ""
@@ -232,13 +255,14 @@ class MessageHandler:
 
         lines = [
             title,
+            f"trace: {trace_id}" if trace_id else "",
             f"用户: {event.user_id}",
             f"会话: {self._get_conversation_key(event)}",
             "",
             "--- 完整提示词 ---",
             system_prompt or "[空]",
         ]
-        return "\n".join(lines).rstrip()
+        return "\n".join(line for line in lines if line is not None).rstrip()
     def _get_conversation_key(self, event: MessageEvent) -> str:
         return self.session_manager.get_key(event)
 
@@ -318,21 +342,23 @@ class MessageHandler:
             logger.info("触发群聊复读：群=%s，触发用户数=%s", group_id, len(unique_users))
         return display_text
 
-    async def _plan_group_message(self, event: MessageEvent) -> MessageHandlingPlan:
+    async def _plan_group_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         return await self.group_plan_coordinator.plan_group_message(
             event=event,
             user_message=self.extract_user_message(event),
+            trace_id=trace_id,
         )
 
-    async def _build_group_at_reply_context(self, event: MessageEvent) -> Dict[str, Any]:
+    async def _build_group_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
         return await self.group_plan_coordinator.build_direct_reply_context(
             event=event,
             user_message=self.extract_user_message(event),
             reply_mode="at",
             planner_mode="direct_at",
+            trace_id=trace_id,
         )
 
-    async def plan_message(self, event: MessageEvent) -> MessageHandlingPlan:
+    async def plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._record_background_activity()
         self._clean_expired_conversations()
 
@@ -357,7 +383,7 @@ class MessageHandler:
 
         if only_at_mode:
             if event.is_at(event.self_id):
-                reply_context = await self._build_group_at_reply_context(event)
+                reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
                 if planner_available and self.app_config.group_reply.only_reply_when_at:
                     return self._build_rule_plan(
                         MessagePlanAction.REPLY,
@@ -374,14 +400,14 @@ class MessageHandler:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
         if event.is_at(event.self_id):
-            reply_context = await self._build_group_at_reply_context(event)
+            reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
             return self._build_rule_plan(
                 MessagePlanAction.REPLY,
                 "群聊消息显式 @ 了助手，直接回复",
                 reply_context=reply_context,
             )
 
-        return await self._plan_group_message(event)
+        return await self._plan_group_message(event, trace_id=trace_id)
 
     def should_process(self, event: MessageEvent) -> bool:
         if event.user_id == event.self_id:
@@ -419,6 +445,7 @@ class MessageHandler:
         event: MessageEvent,
         user_text: str,
         base64_images: Optional[List[str]] = None,
+        trace_id: str = "",
     ) -> Dict[str, Any]:
         if not event.has_image() or not self.vision_enabled():
             return {}
@@ -437,7 +464,16 @@ class MessageHandler:
                 "vision_available": False,
             }
 
-        result = await self.vision_client.analyze_images(base64_images=images, user_text=user_text)
+        try:
+            result = await self.vision_client.analyze_images(
+                base64_images=images,
+                user_text=user_text,
+                trace_id=trace_id,
+                session_key=get_execution_key(event),
+                message_id=getattr(event, "message_id", 0),
+            )
+        except Exception as exc:
+            raise wrap_image_error(exc)
         if self.runtime_metrics:
             self.runtime_metrics.record_vision_request(image_count=len(images), failure_count=result.failure_count)
         if self.emoji_manager:
@@ -542,6 +578,7 @@ class MessageHandler:
         self,
         event: MessageEvent,
         plan: Optional[MessageHandlingPlan] = None,
+        trace_id: str = "",
     ) -> ReplyResult:
         if plan and isinstance(plan.reply_context, dict):
             direct_reply_text = str(plan.reply_context.get("direct_reply_text") or "").strip()
@@ -552,7 +589,84 @@ class MessageHandler:
         command_result = self.check_command(user_message, event)
         if command_result is not None:
             return ReplyResult(text=command_result, source="command")
-        return await self.reply_pipeline.execute(event=event, user_message=user_message, plan=plan)
+        context = await self.build_message_context(
+            event,
+            plan=plan,
+            trace_id=trace_id,
+            include_memory=True,
+        )
+        return await self.reply_pipeline.execute(
+            event=event,
+            user_message=user_message,
+            plan=plan,
+            context=context,
+        )
+
+    async def build_message_context(
+        self,
+        event: MessageEvent,
+        *,
+        plan: Optional[MessageHandlingPlan] = None,
+        trace_id: str = "",
+        include_memory: bool = True,
+    ) -> MessageContext:
+        user_message = self.extract_user_message(event)
+        execution_key = get_execution_key(event)
+        conversation_key = self._get_conversation_key(event)
+        conversation = self._get_conversation(conversation_key)
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        window_messages = list(reply_context.get("window_messages") or [])
+        recent_history_text = self.reply_pipeline._build_recent_history_text(
+            event=event,
+            conversation=conversation,
+            plan=plan,
+        )
+        is_first_turn = len(conversation.messages) == 0
+        persistent_memory_context = ""
+        dynamic_memory_context = ""
+        related_history_messages: List[Dict[str, Any]] = []
+        if include_memory:
+            persistent_memory_context, dynamic_memory_context, related_history_messages, is_first_turn = await self._load_memory_context(
+                event=event,
+                user_message=user_message,
+                conversation=conversation,
+            )
+
+        base64_images: List[str] = []
+        vision_analysis = self.reply_pipeline._extract_reusable_vision_analysis(event=event, plan=plan)
+        if event.has_image() and not vision_analysis and self.vision_enabled():
+            try:
+                base64_images = await self.download_images(event)
+                if base64_images:
+                    vision_analysis = await self.analyze_event_images(
+                        event,
+                        user_message,
+                        base64_images=base64_images,
+                        trace_id=trace_id,
+                    )
+            except ImageProcessingError:
+                raise
+            except Exception as exc:
+                raise wrap_image_error(exc)
+
+        return MessageContext(
+            trace_id=trace_id,
+            execution_key=execution_key,
+            conversation_key=conversation_key,
+            user_message=user_message,
+            current_sender_label=self._format_identity_label(event.user_id, event.get_sender_display_name()),
+            is_first_turn=is_first_turn,
+            window_messages=window_messages,
+            recent_history_text=recent_history_text,
+            base64_images=base64_images,
+            vision_analysis=vision_analysis,
+            persistent_memory_context=persistent_memory_context,
+            dynamic_memory_context=dynamic_memory_context,
+            related_history_messages=related_history_messages,
+            reply_context=reply_context,
+            direct_reply_text=str(reply_context.get("direct_reply_text") or "").strip(),
+            conversation=conversation,
+        )
 
     async def plan_emoji_follow_up(
         self,
@@ -567,6 +681,7 @@ class MessageHandler:
             user_message=self.extract_user_message(event),
             assistant_reply=reply_result.text,
             reply_context=plan.reply_context if plan else None,
+            trace_id=str((plan.reply_context or {}).get("trace_id") or ""),
         )
 
     async def get_emoji_follow_up_image_path(self, selection) -> Optional[str]:

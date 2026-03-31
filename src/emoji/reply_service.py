@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
 
@@ -31,11 +32,13 @@ class EmojiReplyService:
         ai_client: Any,
         runtime_metrics: Optional[RuntimeMetrics],
         app_config: AppConfig,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> None:
         self.repository = repository
         self.ai_client = ai_client
         self.runtime_metrics = runtime_metrics
         self.app_config = app_config
+        self.model_invocation_router = model_invocation_router
         emoji_config = app_config.emoji
         self.enabled = bool(emoji_config.enabled and getattr(emoji_config, "reply_enabled", True))
         self.cooldown_seconds = float(getattr(emoji_config, "reply_cooldown_seconds", 180.0))
@@ -51,6 +54,7 @@ class EmojiReplyService:
         user_message: str,
         assistant_reply: str,
         reply_context: Optional[Dict[str, Any]] = None,
+        trace_id: str = "",
     ) -> EmojiReplySelection:
         if not self.enabled:
             return self._skip("feature_disabled")
@@ -65,6 +69,9 @@ class EmojiReplyService:
             user_message=user_message,
             assistant_reply=assistant_reply,
             reply_context=reply_context,
+            trace_id=trace_id,
+            session_key=f"group:{event.group_id}" if event.group_id is not None else "",
+            message_id=getattr(event, "message_id", 0),
         )
         if self.runtime_metrics:
             self.runtime_metrics.record_emoji_reply_decision(1)
@@ -110,6 +117,9 @@ class EmojiReplyService:
         user_message: str,
         assistant_reply: str,
         reply_context: Optional[Dict[str, Any]],
+        trace_id: str = "",
+        session_key: str = "",
+        message_id: Any = "",
     ) -> EmojiReplyDecision:
         if not self.ai_client:
             return EmojiReplyDecision(should_send=False, reason="ai_client_unavailable")
@@ -133,7 +143,20 @@ class EmojiReplyService:
             self.ai_client.build_text_message("user", json.dumps(payload, ensure_ascii=False)),
         ]
         try:
-            response = await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+            async def run_chat():
+                return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+            if self.model_invocation_router is not None:
+                response = await self.model_invocation_router.submit(
+                    purpose=ModelInvocationType.EMOJI_REPLY_DECISION,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    message_id=message_id,
+                    label="表情跟进决策",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
         except Exception as exc:
             logger.warning("表情包回复意图判断失败：%s", exc)
             return EmojiReplyDecision(should_send=False, reason=f"decision_error:{exc}")
