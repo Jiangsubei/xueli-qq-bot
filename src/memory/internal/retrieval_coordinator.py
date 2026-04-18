@@ -4,8 +4,10 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.memory.conversation_recall_service import ConversationRecallService
 from src.memory.retrieval.bm25_index import ChineseTokenizer, SearchResult
 from src.memory.retrieval.two_stage_retriever import RetrievalContext, TwoStageRetriever
+from src.memory.session_restore_service import SessionRestoreService
 from src.memory.storage.conversation_store import ConversationStore
 from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
 from src.memory.storage.markdown_store import MemoryItem, MarkdownMemoryStore
@@ -29,6 +31,8 @@ class MemoryRetrievalCoordinator:
         index_coordinator: MemoryIndexCoordinator,
         memory_read_scope: str,
         access_policy: MemoryAccessPolicy,
+        session_restore_service: Optional[SessionRestoreService] = None,
+        conversation_recall_service: Optional[ConversationRecallService] = None,
         runtime_metrics: Optional[Any] = None,
         prompt_budgets: Optional[Dict[str, int]] = None,
     ) -> None:
@@ -37,6 +41,8 @@ class MemoryRetrievalCoordinator:
         self.conversation_store = conversation_store
         self.retriever = retriever
         self.index_coordinator = index_coordinator
+        self.session_restore_service = session_restore_service
+        self.conversation_recall_service = conversation_recall_service
         self.memory_read_scope = memory_read_scope
         self.access_policy = access_policy
         self.runtime_metrics = runtime_metrics
@@ -44,6 +50,8 @@ class MemoryRetrievalCoordinator:
             "user_important": 360,
             "addressing": 180,
             "shared": 260,
+            "session_restore": 260,
+            "precise_recall": 260,
             "dynamic": 420,
             **(prompt_budgets or {}),
         }
@@ -166,6 +174,8 @@ class MemoryRetrievalCoordinator:
             "context_text": prompt_context.get("prompt_text", ""),
             "history_messages": history_messages,
             "prompt_sections": prompt_context.get("sections", {}),
+            "session_restore": prompt_context.get("session_restore", []),
+            "precise_recall": prompt_context.get("precise_recall", []),
         }
 
     async def build_prompt_context(
@@ -189,6 +199,15 @@ class MemoryRetrievalCoordinator:
             access_context=context,
         )
         ordinary_memories = await self._load_accessible_ordinary_memories(context)
+        session_restore = await self._build_session_restore_entries(
+            user_id=str(user_id),
+            context=context,
+        )
+        precise_recall = await self._build_precise_recall_entries(
+            user_id=str(user_id),
+            query=query,
+            context=context,
+        )
 
         user_important = [
             self._memory_to_prompt_entry(memory, section="user_important", requester_user_id=str(user_id))
@@ -224,12 +243,16 @@ class MemoryRetrievalCoordinator:
         user_important = self.access_policy.dedupe_entries(user_important)
         addressing = self.access_policy.dedupe_entries(addressing)
         shared_memories = self.access_policy.dedupe_entries(shared_memories)
+        session_restore = self.access_policy.dedupe_entries(session_restore)
+        precise_recall = self.access_policy.dedupe_entries(precise_recall)
         dynamic_memories = self.access_policy.dedupe_entries(dynamic_memories)
 
         sections = {
             "user_important": self._trim_entries(user_important, self.prompt_budgets["user_important"]),
             "addressing": self._trim_entries(addressing, self.prompt_budgets["addressing"]),
             "shared": self._trim_entries(shared_memories, self.prompt_budgets["shared"]),
+            "session_restore": self._trim_entries(session_restore, self.prompt_budgets["session_restore"]),
+            "precise_recall": self._trim_entries(precise_recall, self.prompt_budgets["precise_recall"]),
             "dynamic": self._trim_entries(dynamic_memories, self.prompt_budgets["dynamic"]),
         }
 
@@ -244,8 +267,40 @@ class MemoryRetrievalCoordinator:
             "sections": sections,
             "prompt_text": prompt_text,
             "history_messages": history_messages,
+            "session_restore": sections["session_restore"],
+            "precise_recall": sections["precise_recall"],
             "dynamic_memories": sections["dynamic"],
         }
+
+    async def _build_session_restore_entries(
+        self,
+        *,
+        user_id: str,
+        context: MemoryAccessContext,
+    ) -> List[Dict[str, Any]]:
+        if not self.session_restore_service:
+            return []
+        return await self.session_restore_service.build_restore_entries(
+            user_id=user_id,
+            message_type=context.message_type,
+            group_id=context.group_id,
+        )
+
+    async def _build_precise_recall_entries(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        context: MemoryAccessContext,
+    ) -> List[Dict[str, Any]]:
+        if not self.conversation_recall_service:
+            return []
+        return await self.conversation_recall_service.build_recall_entries(
+            user_id=user_id,
+            query=query,
+            message_type=context.message_type,
+            group_id=context.group_id,
+        )
 
     async def search_important_memories(
         self,
@@ -694,6 +749,8 @@ class MemoryRetrievalCoordinator:
             ("=== 当前用户重要记忆 ===", sections.get("user_important", [])),
             ("=== 当前场景称呼要求 ===", sections.get("addressing", [])),
             ("=== 当前场景共享规则 / 共享重要记忆 ===", sections.get("shared", [])),
+            ("=== 最近相关会话恢复 ===", sections.get("session_restore", [])),
+            ("=== 相关旧对话精准定位 ===", sections.get("precise_recall", [])),
             ("=== 动态相关普通记忆 ===", sections.get("dynamic", [])),
         ]
         for title, entries in section_specs:

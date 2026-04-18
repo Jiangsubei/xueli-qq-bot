@@ -78,7 +78,7 @@ class MessageSegment:
     def get_image_file_id(self) -> Optional[str]:
         """获取图片文件 ID（用于下载）"""
         if self.type == "image":
-            # NapCat 可能使用 file 或 file_id 字段
+            # 不同 adapter 可能使用 file 或 file_id 字段
             return self.data.get("file") or self.data.get("file_id")
         return None
 
@@ -201,14 +201,14 @@ class MessageEvent(OneBotEvent):
         return "".join(seg.extract_text() for seg in self.message)
 
     def is_at(self, qq: int) -> bool:
-        """检查消息是否 @ 了指定 QQ"""
+        """检查消息是否包含指定 at 目标（基于 OneBot 段格式）"""
         for seg in self.message:
             if seg.type == "at" and seg.data.get("qq") == str(qq):
                 return True
         return False
 
     def get_at_qqs(self) -> List[int]:
-        """获取消息中所有 @ 的 QQ 号"""
+        """获取消息中所有 at 目标 ID（基于 OneBot 段格式）"""
         qq_list = []
         for seg in self.message:
             if seg.type == "at":

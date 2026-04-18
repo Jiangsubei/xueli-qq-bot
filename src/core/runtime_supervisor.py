@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Dict, Optional
 
-from src.core.bot import QQBot
+from src.core.runtime import BotRuntime
 from src.core.config import Config
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class BotRuntimeSupervisor:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._bot: Optional[QQBot] = None
+        self._bot: Optional[BotRuntime] = None
         self._bot_task: Optional[asyncio.Task] = None
         self._state = "stopped"
         self._last_error = ""
@@ -71,7 +71,7 @@ class BotRuntimeSupervisor:
 
         self._state = "starting"
         self._last_error = ""
-        bot = QQBot(manage_signals=False, config_obj=Config())
+        bot = BotRuntime(manage_signals=False, config_obj=Config())
         task = asyncio.create_task(self._run_bot(bot), name="bot-runtime")
         self._bot = bot
         self._bot_task = task
@@ -109,7 +109,7 @@ class BotRuntimeSupervisor:
         self._state = "stopped"
         return {"state": self._state, "message": "助手已停止"}
 
-    async def _wait_until_started(self, bot: QQBot, task: asyncio.Task, *, timeout: float = 20.0) -> None:
+    async def _wait_until_started(self, bot: BotRuntime, task: asyncio.Task, *, timeout: float = 20.0) -> None:
         async def _poll() -> None:
             while True:
                 if task.done():
@@ -120,7 +120,7 @@ class BotRuntimeSupervisor:
 
         await asyncio.wait_for(_poll(), timeout=timeout)
 
-    async def _run_bot(self, bot: QQBot) -> None:
+    async def _run_bot(self, bot: BotRuntime) -> None:
         try:
             await bot.run()
         except asyncio.CancelledError:

@@ -43,7 +43,7 @@ ALLOWED_AVATAR_CONTENT_TYPES = {
 }
 SNAPSHOT_FIELDS = (
     "assistant_name",
-    "qq_connection",
+    "adapter_connection",
     "vision_status",
     "memory_status",
     "messages_received",
@@ -75,8 +75,8 @@ MEMORY_SCOPE_OPTIONS = [
 ]
 FIELD_HELP = {
     "network": {
-        "ws_url": "填写 QQ 事件推送使用的 WebSocket 地址。",
-        "http_url": "填写助手主动调用使用的 HTTP 地址。",
+        "ws_url": "填写平台 adapter 接收事件的 WebSocket 地址。",
+        "http_url": "填写平台 adapter 主动调用使用的 HTTP 地址。",
     },
     "model": {
         "api_base": "填写模型服务地址。",
@@ -444,7 +444,7 @@ def _build_runtime_payload(app_config, snapshot_state: Dict[str, Any]) -> Dict[s
         "online": available and lifecycle_state not in {"restarting", "starting", "error"},
         "online_label": online_label,
         "assistant_name": str(assistant.get("name") or app_config.assistant_profile.name),
-        "qq_connection": "\u5df2\u8fde\u63a5" if connected else "\u672a\u8fde\u63a5",
+        "adapter_connection": "\u5df2\u8fde\u63a5" if connected else "\u672a\u8fde\u63a5",
         "vision_status": _vision_status_label(vision_status),
         "memory_status": "\u5df2\u5f00\u542f" if memory_enabled else "\u672a\u5f00\u542f",
         "messages_received": _format_count(messages.get("messages_received"), available),
@@ -817,8 +817,8 @@ def build_dashboard_context() -> Dict[str, Any]:
         "assistant_avatar_url": assistant_avatar_url,
         "field_help": FIELD_HELP,
         "network_form": {
-            "ws_url": app_config.napcat.ws_url,
-            "http_url": app_config.napcat.http_url,
+            "ws_url": app_config.adapter_connection.ws_url,
+            "http_url": app_config.adapter_connection.http_url,
         },
         "model_forms": [
             {
@@ -1197,10 +1197,11 @@ def _write_validated_config(raw_data: Dict[str, Any]) -> None:
 
 def save_network_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     _, raw = _load_config_document()
-    napcat = dict(raw.get("napcat") or {})
-    napcat["ws_url"] = str(payload.get("ws_url") or "").strip()
-    napcat["http_url"] = str(payload.get("http_url") or "").strip()
-    raw["napcat"] = napcat
+    adapter_connection = dict(raw.get("adapter_connection") or raw.get("napcat") or {})
+    adapter_connection["ws_url"] = str(payload.get("ws_url") or "").strip()
+    adapter_connection["http_url"] = str(payload.get("http_url") or "").strip()
+    raw["adapter_connection"] = adapter_connection
+    raw.pop("napcat", None)
     _write_validated_config(raw)
     return {"ok": True, "message": "\u5df2\u7ecf\u8bb0\u597d\u4e86\uff0c\u91cd\u542f\u52a9\u624b\u540e\u751f\u6548"}
 

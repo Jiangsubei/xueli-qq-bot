@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig
+from src.core.message_trace import get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
@@ -70,7 +71,7 @@ class EmojiReplyService:
             assistant_reply=assistant_reply,
             reply_context=reply_context,
             trace_id=trace_id,
-            session_key=f"group:{event.group_id}" if event.group_id is not None else "",
+            session_key=get_execution_key(event) if event.group_id is not None else "",
             message_id=getattr(event, "message_id", 0),
         )
         if self.runtime_metrics:

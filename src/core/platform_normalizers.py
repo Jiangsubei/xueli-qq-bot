@@ -141,6 +141,33 @@ def get_attached_inbound_event(event: MessageEvent) -> Optional[InboundEvent]:
     return None
 
 
+def get_inbound_mentioned_user_ids(event: MessageEvent) -> Tuple[str, ...]:
+    inbound_event = get_attached_inbound_event(event)
+    if inbound_event is not None:
+        return tuple(str(user_id) for user_id in inbound_event.mentioned_user_ids if str(user_id or ""))
+    return tuple(str(user_id) for user_id in event.get_at_qqs())
+
+
+def get_inbound_reply_to_message_id(event: MessageEvent) -> str:
+    inbound_event = get_attached_inbound_event(event)
+    if inbound_event is not None:
+        return str(inbound_event.reply_to_message_id or "")
+    return _extract_reply_to_message_id(list(event.message or []))
+
+
+def event_mentions_account(event: MessageEvent, account_id: Any = "") -> bool:
+    inbound_event = get_attached_inbound_event(event)
+    resolved_account_id = str(account_id or "").strip()
+    if not resolved_account_id and inbound_event is not None:
+        resolved_account_id = str(inbound_event.session.account_id or "").strip()
+    if not resolved_account_id:
+        resolved_account_id = str(event.self_id or "").strip()
+    if not resolved_account_id:
+        return False
+    mentioned_user_ids = {str(user_id or "").strip() for user_id in get_inbound_mentioned_user_ids(event)}
+    return resolved_account_id in mentioned_user_ids
+
+
 def get_or_normalize_onebot_inbound_event(
     event: MessageEvent,
     *,

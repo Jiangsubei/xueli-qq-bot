@@ -52,7 +52,11 @@ class SessionRef:
 
     @property
     def qualified_key(self) -> str:
-        return f"{self.platform}:{self.key}" if self.platform else self.key
+        key = self.key
+        if not self.platform:
+            return key
+        platform_prefix = f"{self.platform}:"
+        return key if key.startswith(platform_prefix) else f"{self.platform}:{key}"
 
 
 @dataclass(frozen=True)

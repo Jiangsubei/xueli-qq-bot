@@ -1,7 +1,7 @@
 """
 图片下载客户端
 支持从 WebSocket 消息中的 URL 直接下载图片
-无需依赖 NapCat HTTP API
+无需依赖平台专属 HTTP API
 """
 import aiohttp
 import base64
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class ImageClient:
-    """图片下载客户端 - 纯 WebSocket 方式"""
+    """图片下载客户端 - 纯事件载荷方式"""
 
     def __init__(self):
         """初始化图片客户端"""

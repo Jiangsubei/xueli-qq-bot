@@ -11,6 +11,7 @@
 from .storage.markdown_store import MemoryItem, MarkdownMemoryStore
 from .storage.conversation_store import ConversationRecord, ConversationStore
 from .storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
+from .storage.person_fact_store import PersonFactItem, PersonFactStore
 from .retrieval.bm25_index import BM25Index, ChineseTokenizer, SearchResult
 from .retrieval.two_stage_retriever import (
     TwoStageRetriever,
@@ -21,6 +22,8 @@ from .retrieval.two_stage_retriever import (
 )
 from .extraction.memory_extractor import MemoryExtractor, ExtractionConfig
 from .memory_manager import MemoryManager, MemoryManagerConfig
+from .conversation_recall_service import ConversationRecallService
+from .person_fact_service import PersonFactService
 
 __version__ = "1.0.0"
 
@@ -32,6 +35,8 @@ __all__ = [
     "ConversationStore",
     "ImportantMemoryItem",
     "ImportantMemoryStore",
+    "PersonFactItem",
+    "PersonFactStore",
 
     # 检索层
     "BM25Index",
@@ -50,6 +55,8 @@ __all__ = [
     # 管理器
     "MemoryManager",
     "MemoryManagerConfig",
+    "ConversationRecallService",
+    "PersonFactService",
 ]
 
 
