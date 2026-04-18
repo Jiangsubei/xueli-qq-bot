@@ -20,7 +20,10 @@ class MessageContext:
     recent_history_text: str = ""
     base64_images: List[str] = field(default_factory=list)
     vision_analysis: Dict[str, Any] = field(default_factory=dict)
+    person_fact_context: str = ""
     persistent_memory_context: str = ""
+    session_restore_context: str = ""
+    precise_recall_context: str = ""
     dynamic_memory_context: str = ""
     related_history_messages: List[Dict[str, Any]] = field(default_factory=list)
     reply_context: Dict[str, Any] = field(default_factory=dict)

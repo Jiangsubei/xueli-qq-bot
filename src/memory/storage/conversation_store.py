@@ -88,6 +88,7 @@ class ConversationRecord:
             "updated_at": self.updated_at,
             "closed_at": self.closed_at,
             "turns": [turn.to_dict() for turn in self.turns],
+            "metadata": copy.deepcopy(self.metadata or {}),
         }
 
     @classmethod
@@ -154,6 +155,21 @@ class ConversationStore:
         if str(message_type or "private") == "group" and str(group_id or "").strip():
             return f"group:{group_id}:{user_id}"
         return f"private:{user_id}"
+
+    def build_dialogue_key(
+        self,
+        *,
+        user_id: str,
+        dialogue_key: Optional[str] = None,
+        message_type: str = "private",
+        group_id: Optional[str] = None,
+    ) -> str:
+        return self._dialogue_key(
+            user_id=user_id,
+            dialogue_key=dialogue_key,
+            message_type=message_type,
+            group_id=group_id,
+        )
 
     def _new_session_id(self, user_id: str, dialogue_key: str) -> str:
         normalized_dialogue = dialogue_key.replace(":", "_")
@@ -396,6 +412,50 @@ class ConversationStore:
                 exc,
             )
             return None
+
+    async def update_session_metadata(
+        self,
+        user_id: str,
+        session_id: str,
+        metadata: Dict[str, Any],
+    ) -> Optional[ConversationRecord]:
+        file_path = self._session_file_path(str(user_id), str(session_id))
+        async with self._lock:
+            payload: Optional[Dict[str, Any]] = None
+
+            live_session = self._sessions.get(str(session_id))
+            if live_session is not None:
+                live_session.metadata.update(dict(metadata or {}))
+                payload = live_session.to_dict()
+            elif file_path.exists():
+                try:
+                    async with aiofiles.open(file_path, "r", encoding="utf-8") as handle:
+                        payload = json.loads(await handle.read())
+                except Exception as exc:
+                    logger.warning(
+                        "读取会话元数据失败：用户=%s，会话=%s，错误=%s",
+                        user_id,
+                        session_id,
+                        exc,
+                    )
+                    return None
+
+            if payload is None:
+                return None
+
+            payload["metadata"] = {**dict(payload.get("metadata") or {}), **dict(metadata or {})}
+            try:
+                async with aiofiles.open(file_path, "w", encoding="utf-8") as handle:
+                    await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                return ConversationRecord.from_dict(copy.deepcopy(payload))
+            except Exception as exc:
+                logger.warning(
+                    "写入会话元数据失败：用户=%s，会话=%s，错误=%s",
+                    user_id,
+                    session_id,
+                    exc,
+                )
+                return None
 
     async def get_conversations(self, user_id: str, limit: int = 10) -> List[ConversationRecord]:
         user_dir = self.base_path / str(user_id)

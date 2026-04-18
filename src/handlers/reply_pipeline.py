@@ -106,7 +106,10 @@ class ReplyPipeline:
             conversation=conversation,
             plan=plan,
         )
+        person_fact_context = str(message_context.person_fact_context or "")
         persistent_memory_context = str(message_context.persistent_memory_context or "")
+        session_restore_context = str(message_context.session_restore_context or "")
+        precise_recall_context = str(message_context.precise_recall_context or "")
         dynamic_memory_context = str(message_context.dynamic_memory_context or "")
         related_history_messages = list(message_context.related_history_messages or [])
         is_first_turn = bool(message_context.is_first_turn)
@@ -127,7 +130,10 @@ class ReplyPipeline:
         )
         system_prompt = self.build_response_system_prompt(
             event=event,
+            person_fact_context=person_fact_context,
             persistent_memory_context=persistent_memory_context,
+            session_restore_context=session_restore_context,
+            precise_recall_context=precise_recall_context,
             dynamic_memory_context=dynamic_memory_context,
             is_first_turn=is_first_turn,
             plan=plan,
@@ -454,12 +460,16 @@ class ReplyPipeline:
         event: MessageEvent,
         user_message: str,
         conversation: Conversation,
-    ) -> Tuple[str, str, List[Dict[str, Any]], bool]:
+    ) -> Tuple[str, str, str, str, str, List[Dict[str, Any]], bool]:
         if not self.host.memory_manager:
-            return "", "", [], len(conversation.messages) == 0
+            return "", "", "", "", "", [], len(conversation.messages) == 0
 
         is_first_turn = len(conversation.messages) == 0
         access_context = self._build_memory_access_context(event)
+        person_fact_context = await self._load_person_fact_context(
+            user_id=str(event.user_id),
+            access_context=access_context,
+        )
         persistent_memory_context = await self._load_persistent_memory_context(
             user_id=str(event.user_id),
             access_context=access_context,
@@ -478,17 +488,49 @@ class ReplyPipeline:
             raise
         except Exception as exc:
             logger.warning("检索记忆上下文失败：%s", exc)
-            return persistent_memory_context, "", [], is_first_turn
+            return person_fact_context, persistent_memory_context, "", "", "", [], is_first_turn
 
         memories = payload.get("memories", []) if isinstance(payload, dict) else []
+        session_restore_entries = payload.get("session_restore", []) if isinstance(payload, dict) else []
+        precise_recall_entries = payload.get("precise_recall", []) if isinstance(payload, dict) else []
         history_messages = payload.get("history_messages", []) if isinstance(payload, dict) else []
+        session_restore_context = self._format_memory_context(self._collect_memory_lines(session_restore_entries))
+        precise_recall_context = self._format_memory_context(self._collect_memory_lines(precise_recall_entries))
         dynamic_memory_context = self._format_memory_context(
             self._dedupe_memory_lines(
                 self._collect_memory_lines(memories),
                 existing_lines=self._collect_memory_lines_from_text(persistent_memory_context),
             )
         )
-        return persistent_memory_context, dynamic_memory_context, list(history_messages or []), is_first_turn
+        return (
+            person_fact_context,
+            persistent_memory_context,
+            session_restore_context,
+            precise_recall_context,
+            dynamic_memory_context,
+            list(history_messages or []),
+            is_first_turn,
+        )
+
+    async def _load_person_fact_context(
+        self,
+        *,
+        user_id: str,
+        access_context: Any,
+    ) -> str:
+        if not self.host.memory_manager:
+            return ""
+        try:
+            return await self.host.memory_manager.format_person_facts_for_prompt(
+                user_id=user_id,
+                access_context=access_context,
+                limit=6,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("加载人物事实失败：%s", exc)
+            return ""
 
     async def _load_persistent_memory_context(
         self,
@@ -670,11 +712,11 @@ class ReplyPipeline:
         if session_type == MessageType.GROUP.value:
             return (
                 "这是新的一轮对话。你现在还没有和这个用户在当前会话里展开新的上下文，"
-                "请优先基于当前消息、这条消息之前的几轮群聊记录、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
+                "请优先基于当前消息、这条消息之前的几轮群聊记录、人物事实、上一轮会话恢复摘要、旧对话精准定位、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
             )
         return (
             "这是新的一轮对话。你现在还没有和用户在当前会话里展开新的上下文，"
-            "请优先基于当前消息、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
+            "请优先基于当前消息、人物事实、上一轮会话恢复摘要、旧对话精准定位、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
         )
 
     def _build_current_message_prompt(self, event: Optional[MessageEvent], current_message: str) -> str:
@@ -686,8 +728,23 @@ class ReplyPipeline:
 
     def _build_persistent_memory_prompt(self, persistent_memory_context: str) -> str:
         if persistent_memory_context.strip():
-            return "这些是你需要注意的关键信息：\n" + persistent_memory_context.strip()
-        return "当前没有需要你持续注意的关键信息。"
+            return "这些是其他需要注意的关键信息：\n" + persistent_memory_context.strip()
+        return "当前没有额外需要你持续注意的关键信息。"
+
+    def _build_person_fact_prompt(self, person_fact_context: str) -> str:
+        if person_fact_context.strip():
+            return "这些是关于当前用户的长期人物事实：\n" + person_fact_context.strip()
+        return "当前没有独立整理出的人物事实。"
+
+    def _build_session_restore_prompt(self, session_restore_context: str) -> str:
+        if session_restore_context.strip():
+            return "这是上一轮相关会话的恢复摘要：\n" + session_restore_context.strip()
+        return "当前没有可用的上一轮会话恢复摘要。"
+
+    def _build_precise_recall_prompt(self, precise_recall_context: str) -> str:
+        if precise_recall_context.strip():
+            return "这是和当前话题直接相关的旧对话定位：\n" + precise_recall_context.strip()
+        return "当前没有定位到更早的相关旧对话。"
 
     def _build_dynamic_memory_prompt(self, dynamic_memory_context: str) -> str:
         if dynamic_memory_context.strip():
@@ -698,12 +755,12 @@ class ReplyPipeline:
         session_type = str(getattr(event, "message_type", "") or "").strip().lower()
         if session_type == MessageType.GROUP.value:
             return (
-                "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于帮助你理解上下文，"
+                "注意请从当前消息开始回复。最近聊天记录、人物事实、会话恢复摘要、旧对话定位和关联记忆只用于帮助你理解上下文，"
                 "不要把它们当成当前要回复的消息，也不要转而回复其他用户之前说的话，"
                 "不要直接复述、照搬或引用其中的原文内容，也不要向用户暴露这些内容来自提示词中的聊天记录或记忆。"
             )
         return (
-            "注意请从当前消息开始回复。最近聊天记录和关联记忆只用于帮助你理解上下文，"
+            "注意请从当前消息开始回复。最近聊天记录、人物事实、会话恢复摘要、旧对话定位和关联记忆只用于帮助你理解上下文，"
             "不要把它们当成当前要回复的消息，不要直接复述、照搬或引用其中的原文内容，"
             "也不要向用户暴露这些内容来自提示词中的聊天记录或记忆。"
         )
@@ -712,7 +769,10 @@ class ReplyPipeline:
         self,
         *,
         event: Optional[MessageEvent] = None,
+        person_fact_context: str,
         persistent_memory_context: str,
+        session_restore_context: str,
+        precise_recall_context: str,
         dynamic_memory_context: str,
         is_first_turn: bool,
         plan: Optional[MessageHandlingPlan] = None,
@@ -726,6 +786,9 @@ class ReplyPipeline:
             self._build_reply_context_prompt(event=event, plan=plan),
             self._build_new_session_prompt(event, is_first_turn),
             self._build_history_context_prompt(event, recent_history_text, plan),
+            self._build_person_fact_prompt(person_fact_context),
+            self._build_session_restore_prompt(session_restore_context),
+            self._build_precise_recall_prompt(precise_recall_context),
             self._build_current_message_prompt(event, current_message),
             self._build_persistent_memory_prompt(persistent_memory_context),
             self._build_dynamic_memory_prompt(dynamic_memory_context),

@@ -1,10 +1,11 @@
-"""QQ bot runtime coordinator."""
+"""Bot runtime coordinator."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import signal
 import sys
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Set
 
 from src.core.bootstrap import BotBootstrapper
@@ -14,7 +15,8 @@ from src.core.log_text import preview_json_for_log, preview_text_for_log
 from src.core.message_trace import build_trace_id, format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import SendError, classify_pipeline_error
-from src.core.platform_models import ReplyAction, SessionRef
+from src.core.platform_models import InboundEvent, ReplyAction, SessionRef
+from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.session_message_pipeline import SessionMessagePipeline
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
 from src.core.models import MessageEvent, MessageSegment, MessageType
@@ -30,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class QQBot:
+class BotRuntime:
     """Main bot runtime facade."""
 
     def __init__(self, *, manage_signals: bool = True, config_obj: Config | None = None):
@@ -46,6 +48,8 @@ class QQBot:
 
         self.adapter = None
         self.connection = None
+        self._adapters_by_name: Dict[str, Any] = {}
+        self._adapters_by_platform: Dict[str, Any] = {}
         self.message_handler = None
         self.memory_manager = None
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -96,6 +100,7 @@ class QQBot:
 
         self.adapter = runtime.connection
         self.connection = self.adapter
+        self.register_runtime_adapter(self.adapter)
         self.message_handler = runtime.message_handler
         self.memory_manager = runtime.memory_manager
         self.dispatcher.configure_inbound_event_attacher(
@@ -236,28 +241,30 @@ class QQBot:
 
     async def _send_response(self, event: MessageEvent, message: str, plan: Any = None, trace_id: str = "") -> bool:
         parts = self.message_handler.split_long_message(message)
+        reply_session = self._reply_session_for_event(event)
         if event.message_type == MessageType.PRIVATE.value:
             quote_reply_enabled = self._private_quote_reply_enabled()
             for index, part in enumerate(parts):
+                message_id = getattr(event, "message_id", "")
                 use_quote_reply = (
                     quote_reply_enabled
                     and index == 0
-                    and int(getattr(event, "message_id", 0) or 0) > 0
+                    and bool(str(message_id or "").strip())
                 )
                 if use_quote_reply:
                     await self._send_private_segments(
-                        event.user_id,
-                        [MessageSegment.reply(getattr(event, "message_id", 0)), MessageSegment.text(part)],
+                        reply_session,
+                        [MessageSegment.reply(message_id), MessageSegment.text(part)],
                         trace_id=trace_id,
                     )
                 else:
-                    await self._send_private_msg(event.user_id, part, trace_id=trace_id)
+                    await self._send_private_msg(reply_session, part, trace_id=trace_id)
                 await asyncio.sleep(0.5)
         else:
             at_user = self.message_handler.resolve_group_at_user(event, plan)
             for index, part in enumerate(parts):
                 part_at_user = at_user if index == 0 else None
-                await self._send_group_msg(event.group_id, part, part_at_user, trace_id=trace_id)
+                await self._send_group_msg(reply_session, part, part_at_user, trace_id=trace_id)
                 await asyncio.sleep(0.5)
 
         self.runtime_metrics.inc_messages_replied(len(parts))
@@ -284,7 +291,7 @@ class QQBot:
             return
 
         try:
-            await self._send_group_segments(event.group_id, [MessageSegment.image(image_path)], trace_id=trace_id)
+            await self._send_group_segments(self._reply_session_for_event(event), [MessageSegment.image(image_path)], trace_id=trace_id)
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
             if self._should_log_message_summary():
                 logger.info(
@@ -304,63 +311,60 @@ class QQBot:
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
 
-    async def _send_private_msg(self, user_id: int, message: str, *, trace_id: str = ""):
-        result = await self._get_adapter().send_action(
+    async def _send_private_msg(self, target: Any, message: str, *, trace_id: str = ""):
+        session = self._resolve_private_reply_session(target)
+        result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
-                session=SessionRef(platform="qq", scope="private", conversation_id=f"private:{user_id}", user_id=str(user_id)),
+                session=session,
                 text=message,
             )
         )
         if result is False:
             raise SendError("发送私聊消息失败")
-        logger.debug("已发送私聊消息：user=%s", user_id)
+        logger.debug("已发送私聊消息：session=%s", session.key)
 
-    async def _send_private_segments(self, user_id: int, segments: List[MessageSegment], *, trace_id: str = "") -> None:
-        result = await self._get_adapter().send_action(
+    async def _send_private_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
+        session = self._resolve_private_reply_session(target)
+        result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
-                session=SessionRef(platform="qq", scope="private", conversation_id=f"private:{user_id}", user_id=str(user_id)),
+                session=session,
                 segments=tuple(segment.to_dict() for segment in segments),
             )
         )
         if result is False:
             raise SendError("发送私聊分段消息失败")
-        logger.debug("已发送私聊分段消息：user=%s，segments=%s", user_id, len(segments))
+        logger.debug("已发送私聊分段消息：session=%s，segments=%s", session.key, len(segments))
 
-    async def _send_group_msg(self, group_id: int, message: str, at_user: Optional[int] = None, *, trace_id: str = ""):
-        session = SessionRef(
-            platform="qq",
-            scope="group",
-            conversation_id=f"group:{group_id}:{at_user or 0}",
-            channel_id=str(group_id),
-            user_id=str(at_user or ""),
-        )
+    async def _send_group_msg(self, target: Any, message: str, at_user: Optional[Any] = None, *, trace_id: str = ""):
+        session = self._resolve_group_reply_session(target, at_user=at_user)
         if at_user:
-            segments = [MessageSegment.at(at_user)]
+            segments = [self._build_mention_segment(session, at_user)]
             if message:
-                segments.append(MessageSegment.text(f" {message}"))
-            result = await self._get_adapter().send_action(
-                ReplyAction(session=session, segments=tuple(segment.to_dict() for segment in segments))
+                segments.append(MessageSegment.text(f" {message}").to_dict())
+            result = await self._get_adapter_for_session(session).send_action(
+                ReplyAction(session=session, segments=tuple(dict(segment or {}) for segment in segments))
             )
             if result is False:
                 raise SendError("发送群聊 @ 消息失败")
-            logger.debug("已发送群聊@消息：group=%s，at_user=%s", group_id, at_user)
+            logger.debug("已发送群聊@消息：session=%s，at_user=%s", session.key, at_user)
             return
 
-        result = await self._get_adapter().send_action(ReplyAction(session=session, text=message))
+        result = await self._get_adapter_for_session(session).send_action(ReplyAction(session=session, text=message))
         if result is False:
             raise SendError("发送群聊消息失败")
-        logger.debug("已发送群聊消息：group=%s", group_id)
+        logger.debug("已发送群聊消息：session=%s", session.key)
 
-    async def _send_group_segments(self, group_id: int, segments: List[MessageSegment], *, trace_id: str = "") -> None:
-        result = await self._get_adapter().send_action(
+    async def _send_group_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
+        session = self._resolve_group_reply_session(target)
+        result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
-                session=SessionRef(platform="qq", scope="group", conversation_id=f"group:{group_id}:0", channel_id=str(group_id)),
+                session=session,
                 segments=tuple(segment.to_dict() for segment in segments),
             )
         )
         if result is False:
             raise SendError("发送群聊分段消息失败")
-        logger.debug("已发送群聊分段消息：group=%s，segments=%s", group_id, len(segments))
+        logger.debug("已发送群聊分段消息：session=%s，segments=%s", session.key, len(segments))
 
     def _private_quote_reply_enabled(self) -> bool:
         app_config = getattr(self.message_handler, "app_config", None)
@@ -374,11 +378,33 @@ class QQBot:
 
     async def _on_websocket_message(self, data: Dict[str, Any]):
         try:
-            await self.dispatcher.dispatch(data)
+            await self.ingest_adapter_payload(data)
         except Exception as exc:
             logger.error("处理 WebSocket 消息失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error()
             self._sync_status_cache()
+
+    async def ingest_inbound_event(self, inbound_event: InboundEvent, *, self_id: Any = "") -> None:
+        resolved_self_id = self_id or inbound_event.session.account_id or ""
+        await self.dispatcher.dispatch_inbound_event(inbound_event, self_id=resolved_self_id)
+
+    async def ingest_adapter_payload(
+        self,
+        payload: Dict[str, Any],
+        *,
+        adapter: Any = None,
+        self_id: Any = "",
+    ) -> None:
+        adapter_obj = adapter or self.adapter or self.connection
+        if adapter_obj is not None:
+            self.register_runtime_adapter(adapter_obj)
+        normalizer = getattr(adapter_obj, "normalize_inbound_payload", None)
+        if callable(normalizer):
+            inbound_event = normalizer(payload)
+            if inbound_event is not None:
+                await self.ingest_inbound_event(inbound_event, self_id=self_id or payload.get("self_id", ""))
+                return
+        await self.dispatcher.dispatch(payload)
 
     async def _on_connect(self):
         self.runtime_metrics.set_connected(True)
@@ -516,6 +542,76 @@ class QQBot:
         if adapter is None:
             raise RuntimeError("platform adapter is not initialized")
         return adapter
+
+    def register_runtime_adapter(self, adapter: Any) -> None:
+        if adapter is None:
+            return
+        if not hasattr(self, "_adapters_by_name") or not isinstance(self._adapters_by_name, dict):
+            self._adapters_by_name = {}
+        if not hasattr(self, "_adapters_by_platform") or not isinstance(self._adapters_by_platform, dict):
+            self._adapters_by_platform = {}
+        adapter_name = str(getattr(adapter, "adapter_name", "") or "").strip()
+        platform = str(getattr(adapter, "platform", "") or "").strip()
+        if adapter_name:
+            self._adapters_by_name[adapter_name] = adapter
+        if platform:
+            self._adapters_by_platform[platform] = adapter
+
+    def _get_adapter_for_session(self, session: SessionRef):
+        adapter = None
+        platform = str(session.platform or "").strip()
+        if platform:
+            adapter = self._adapters_by_platform.get(platform)
+        return adapter or self._get_adapter()
+
+    def _reply_session_for_event(self, event: MessageEvent) -> SessionRef:
+        inbound_event = get_attached_inbound_event(event)
+        if inbound_event is not None:
+            return inbound_event.session
+        if event.message_type == MessageType.GROUP.value:
+            return self._fallback_group_reply_session(event.group_id)
+        return self._fallback_private_reply_session(event.user_id)
+
+    def _resolve_private_reply_session(self, target: Any) -> SessionRef:
+        if isinstance(target, SessionRef):
+            return target if target.scope == "private" else replace(target, scope="private")
+        return self._fallback_private_reply_session(target)
+
+    def _resolve_group_reply_session(self, target: Any, *, at_user: Optional[Any] = None) -> SessionRef:
+        if isinstance(target, SessionRef):
+            session = target if target.scope in {"group", "channel"} else replace(target, scope="group")
+            if at_user not in (None, ""):
+                return replace(session, user_id=str(at_user))
+            return session
+        return self._fallback_group_reply_session(target, user_id=at_user)
+
+    @staticmethod
+    def _fallback_private_reply_session(user_id: Any) -> SessionRef:
+        resolved_user_id = str(user_id or "")
+        return SessionRef(
+            platform="qq",
+            scope="private",
+            conversation_id=f"private:{resolved_user_id}",
+            user_id=resolved_user_id,
+        )
+
+    @staticmethod
+    def _fallback_group_reply_session(group_id: Any, *, user_id: Any = "") -> SessionRef:
+        resolved_group_id = str(group_id or "")
+        resolved_user_id = str(user_id or "")
+        return SessionRef(
+            platform="qq",
+            scope="group",
+            conversation_id=f"group:{resolved_group_id}:{resolved_user_id or 0}",
+            channel_id=resolved_group_id,
+            user_id=resolved_user_id,
+        )
+
+    @staticmethod
+    def _build_mention_segment(session: SessionRef, user_id: Any) -> Dict[str, Any]:
+        if session.platform == "qq":
+            return MessageSegment.at(user_id).to_dict()
+        return {"type": "mention", "data": {"user_id": str(user_id)}}
 
     def _sync_status_cache(self) -> None:
         self._sync_runtime_counters()

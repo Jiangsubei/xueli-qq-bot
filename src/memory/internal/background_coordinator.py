@@ -5,6 +5,8 @@ import logging
 from typing import Callable, List, Optional
 
 from src.memory.extraction.memory_extractor import MemoryExtractor
+from src.memory.chat_summary_service import ChatSummaryService
+from src.memory.person_fact_service import PersonFactService
 from src.memory.storage.conversation_store import ConversationStore
 from src.memory.storage.markdown_store import MemoryItem
 
@@ -24,12 +26,44 @@ class MemoryBackgroundCoordinator:
         task_manager: MemoryTaskManager,
         auto_extract_memory: bool,
         on_memory_changed: Callable[[str], None],
+        summary_service: Optional[ChatSummaryService] = None,
+        person_fact_service: Optional[PersonFactService] = None,
     ) -> None:
         self.conversation_store = conversation_store
         self.extractor = extractor
+        self.summary_service = summary_service
+        self.person_fact_service = person_fact_service
         self.task_manager = task_manager
         self.auto_extract_memory = auto_extract_memory
         self.on_memory_changed = on_memory_changed
+
+    async def _sync_person_facts(self, user_id: str) -> None:
+        if not self.person_fact_service:
+            return
+        try:
+            await self.person_fact_service.sync_user_facts(str(user_id))
+        except Exception as exc:
+            logger.warning("同步人物事实失败：用户=%s，错误=%s", user_id, exc)
+
+    async def _save_conversation_and_summary(
+        self,
+        *,
+        user_id: str,
+        session_id: Optional[str] = None,
+        dialogue_key: Optional[str] = None,
+        force: bool = False,
+    ):
+        result = await self.conversation_store.save_conversation(
+            user_id=user_id,
+            session_id=session_id,
+            dialogue_key=dialogue_key,
+            force=force,
+        )
+        if result and self.summary_service and str(result.closed_at or "").strip():
+            updated = await self.summary_service.refresh_session_summary(user_id=user_id, record=result)
+            if updated is not None:
+                result = updated
+        return result
 
     def register_dialogue_turn(
         self,
@@ -88,7 +122,7 @@ class MemoryBackgroundCoordinator:
     ) -> asyncio.Task:
         async def save_conversation() -> None:
             try:
-                result = await self.conversation_store.save_conversation(
+                result = await self._save_conversation_and_summary(
                     user_id=user_id,
                     session_id=session_id,
                     dialogue_key=dialogue_key,
@@ -111,7 +145,7 @@ class MemoryBackgroundCoordinator:
     ) -> List[MemoryItem]:
         saved_memories: List[MemoryItem] = []
         try:
-            await self.conversation_store.save_conversation(
+            await self._save_conversation_and_summary(
                 user_id=user_id,
                 session_id=session_id,
                 force=True,
@@ -119,6 +153,7 @@ class MemoryBackgroundCoordinator:
             if extract_pending and self.auto_extract_memory and self.extractor:
                 saved_memories = await self.extractor.extract_memories(user_id, session_id=session_id, force=True)
                 if saved_memories:
+                    await self._sync_person_facts(user_id)
                     self.on_memory_changed(user_id)
             return saved_memories
         finally:
@@ -167,6 +202,7 @@ class MemoryBackgroundCoordinator:
 
         memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id)
         if memories:
+            await self._sync_person_facts(user_id)
             self.on_memory_changed(user_id)
         return memories
 
@@ -220,6 +256,7 @@ class MemoryBackgroundCoordinator:
                 return []
             memories = await self.extractor.extract_memories(user_id, session_id=resolved_session_id, force=True)
             if memories:
+                await self._sync_person_facts(user_id)
                 self.on_memory_changed(user_id)
             return memories
 
@@ -268,7 +305,7 @@ class MemoryBackgroundCoordinator:
             owner_user_id = self.conversation_store.get_session_owner(session_id)
             if not owner_user_id:
                 continue
-            await self.conversation_store.save_conversation(
+            await self._save_conversation_and_summary(
                 user_id=owner_user_id,
                 session_id=session_id,
                 force=True,

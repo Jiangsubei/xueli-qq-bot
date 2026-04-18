@@ -34,8 +34,11 @@ def register_builtin_adapters() -> None:
     if _builtins_registered:
         return
     from src.adapters.napcat.adapter import NapCatAdapter
+    from src.adapters.api.adapter import ApiAdapter
 
     _registry.register("napcat", NapCatAdapter)
+    _registry.register("api", ApiAdapter)
+    _registry.register("openapi", ApiAdapter)
     _builtins_registered = True
 
 

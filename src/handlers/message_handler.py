@@ -12,7 +12,7 @@ from src.core.config import AppConfig, config, get_vision_service_status, is_gro
 from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import ImageProcessingError, wrap_image_error
-from src.core.platform_normalizers import get_attached_inbound_event
+from src.core.platform_normalizers import event_mentions_account, get_attached_inbound_event, get_inbound_reply_to_message_id
 from src.core.models import (
     Conversation,
     MessageEvent,
@@ -310,6 +310,12 @@ class MessageHandler:
             ]
         return event.get_image_file_ids()
 
+    def _is_direct_mention(self, event: MessageEvent) -> bool:
+        return event_mentions_account(event)
+
+    def _get_reply_to_message_id(self, event: MessageEvent) -> str:
+        return get_inbound_reply_to_message_id(event)
+
     def _get_conversation(self, key: str) -> Conversation:
         conversation = self.session_manager.get(key)
         self._sync_active_conversations_metric()
@@ -342,7 +348,7 @@ class MessageHandler:
             return False
         if not self.app_config.group_reply.repeat_echo_enabled:
             return False
-        if event.is_at(event.self_id) or self._has_image_input(event):
+        if self._is_direct_mention(event) or self._has_image_input(event):
             return False
         normalized = self._normalize_repeat_echo_text(text)
         if not normalized or normalized.startswith("/"):
@@ -426,7 +432,7 @@ class MessageHandler:
         only_at_mode = self.app_config.group_reply.only_reply_when_at or not planner_available
 
         if only_at_mode:
-            if event.is_at(event.self_id):
+            if self._is_direct_mention(event):
                 reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
                 if planner_available and self.app_config.group_reply.only_reply_when_at:
                     return self._build_rule_plan(
@@ -443,7 +449,7 @@ class MessageHandler:
                 return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
             return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
-        if event.is_at(event.self_id):
+        if self._is_direct_mention(event):
             reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
             return self._build_rule_plan(
                 MessagePlanAction.REPLY,
@@ -460,7 +466,7 @@ class MessageHandler:
             return True
         if event.message_type == MessageType.GROUP.value:
             only_at_mode = self.app_config.group_reply.only_reply_when_at or not self._group_planner_available()
-            return event.is_at(event.self_id) if only_at_mode else True
+            return self._is_direct_mention(event) if only_at_mode else True
         return False
 
     def extract_user_message(self, event: MessageEvent) -> str:
@@ -502,7 +508,7 @@ class MessageHandler:
                 "per_image_descriptions": [],
                 "merged_description": "",
                 "vision_success_count": 0,
-                "vision_failure_count": len(event.get_image_segments()),
+                "vision_failure_count": self._get_image_count(event),
                 "vision_source": "image_download_error",
                 "vision_error": "image download failed",
                 "vision_available": False,
@@ -534,7 +540,7 @@ class MessageHandler:
         self._sync_active_conversations_metric()
         return result
 
-    def resolve_group_at_user(self, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Optional[int]:
+    def resolve_group_at_user(self, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Optional[Any]:
         if event.message_type != MessageType.GROUP.value:
             return None
         reply_context = dict(getattr(plan, "reply_context", None) or {})
@@ -542,9 +548,9 @@ class MessageHandler:
         if reply_mode == "repeat_echo":
             return None
         if reply_mode == "at":
-            return int(event.user_id)
+            return event.user_id
         if reply_mode == "proactive" and self.app_config.group_reply.at_user_when_proactive_reply:
-            return int(event.user_id)
+            return event.user_id
         return None
 
     async def record_group_reply_sent(self, event: MessageEvent, message: str) -> None:
@@ -577,7 +583,7 @@ class MessageHandler:
         event: MessageEvent,
         user_message: str,
         conversation: Conversation,
-    ) -> tuple[str, List[Dict[str, Any]], bool]:
+    ) -> tuple[str, str, str, str, str, List[Dict[str, Any]], bool]:
         return await self.reply_pipeline.load_memory_context(
             event=event,
             user_message=user_message,
@@ -586,7 +592,10 @@ class MessageHandler:
 
     def _build_response_system_prompt(
         self,
+        person_fact_context: str,
         persistent_memory_context: str,
+        session_restore_context: str,
+        precise_recall_context: str,
         dynamic_memory_context: str,
         is_first_turn: bool,
         event: Optional[MessageEvent] = None,
@@ -596,7 +605,10 @@ class MessageHandler:
     ) -> str:
         return self.reply_pipeline.build_response_system_prompt(
             event=event,
+            person_fact_context=person_fact_context,
             persistent_memory_context=persistent_memory_context,
+            session_restore_context=session_restore_context,
+            precise_recall_context=precise_recall_context,
             dynamic_memory_context=dynamic_memory_context,
             is_first_turn=is_first_turn,
             plan=plan,
@@ -666,11 +678,22 @@ class MessageHandler:
             plan=plan,
         )
         is_first_turn = len(conversation.messages) == 0
+        person_fact_context = ""
         persistent_memory_context = ""
+        session_restore_context = ""
+        precise_recall_context = ""
         dynamic_memory_context = ""
         related_history_messages: List[Dict[str, Any]] = []
         if include_memory:
-            persistent_memory_context, dynamic_memory_context, related_history_messages, is_first_turn = await self._load_memory_context(
+            (
+                person_fact_context,
+                persistent_memory_context,
+                session_restore_context,
+                precise_recall_context,
+                dynamic_memory_context,
+                related_history_messages,
+                is_first_turn,
+            ) = await self._load_memory_context(
                 event=event,
                 user_message=user_message,
                 conversation=conversation,
@@ -704,7 +727,10 @@ class MessageHandler:
             recent_history_text=recent_history_text,
             base64_images=base64_images,
             vision_analysis=vision_analysis,
+            person_fact_context=person_fact_context,
             persistent_memory_context=persistent_memory_context,
+            session_restore_context=session_restore_context,
+            precise_recall_context=precise_recall_context,
             dynamic_memory_context=dynamic_memory_context,
             related_history_messages=related_history_messages,
             reply_context=reply_context,

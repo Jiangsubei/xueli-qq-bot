@@ -15,7 +15,7 @@ class ConversationSessionManager:
         self._conversations: Dict[str, Conversation] = {}
 
     def get_key_for_session(self, session: SessionRef) -> str:
-        return session.key
+        return session.qualified_key
 
     def get_key_for_inbound_event(self, event: InboundEvent) -> str:
         return self.get_key_for_session(event.session)

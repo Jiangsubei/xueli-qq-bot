@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
 from src.core.models import MessageEvent, MessageType, OneBotEvent
+from src.core.platform_bridge import build_message_event_from_inbound
 from src.core.platform_models import InboundEvent
 from src.core.platform_normalizers import attach_normalized_onebot_event
 
@@ -123,9 +124,40 @@ class EventDispatcher:
         """分发事件。"""
         self.stats["total_events"] += 1
         event = OneBotEvent.from_dict(raw_data)
-        ctx = EventContext(event=event, raw_data=raw_data)
+        await self._dispatch_event(event, raw_data=raw_data)
 
-        if isinstance(event, MessageEvent):
+    async def dispatch_inbound_event(
+        self,
+        inbound_event: InboundEvent,
+        *,
+        raw_data: Optional[Dict[str, Any]] = None,
+        self_id: Any = "",
+    ):
+        event = build_message_event_from_inbound(inbound_event, self_id=self_id, raw_data=raw_data)
+        self.stats["total_events"] += 1
+        await self._dispatch_event(event, raw_data=dict(event.raw_data or {}), inbound_event=inbound_event)
+
+    def get_stats(self) -> Dict[str, int]:
+        """获取统计信息。"""
+        return self.stats.copy()
+
+    def _attach_default_inbound_event(self, event: MessageEvent) -> InboundEvent:
+        return attach_normalized_onebot_event(
+            event,
+            platform=self.platform,
+            adapter=self.adapter_name,
+        )
+
+    async def _dispatch_event(
+        self,
+        event: OneBotEvent,
+        *,
+        raw_data: Dict[str, Any],
+        inbound_event: Optional[InboundEvent] = None,
+    ) -> None:
+        ctx = EventContext(event=event, raw_data=raw_data, inbound_event=inbound_event)
+
+        if isinstance(event, MessageEvent) and ctx.inbound_event is None:
             try:
                 attacher = self.inbound_event_attacher or self._attach_default_inbound_event
                 ctx.inbound_event = attacher(event)
@@ -196,14 +228,3 @@ class EventDispatcher:
                 )
 
         self.stats["handled_events"] += 1
-
-    def get_stats(self) -> Dict[str, int]:
-        """获取统计信息。"""
-        return self.stats.copy()
-
-    def _attach_default_inbound_event(self, event: MessageEvent) -> InboundEvent:
-        return attach_normalized_onebot_event(
-            event,
-            platform=self.platform,
-            adapter=self.adapter_name,
-        )

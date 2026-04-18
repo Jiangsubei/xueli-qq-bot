@@ -6,8 +6,9 @@ from collections import deque
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
 
 from src.core.config import GroupReplyConfig, config
-from src.core.message_trace import format_trace_log
+from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
+from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.message_context import MessageContext
@@ -181,13 +182,16 @@ class GroupPlanCoordinator:
         trace_id: str = "",
     ) -> MessageContext:
         group_id = str(event.group_id or "unknown_group")
-        history_items = self._get_recent_group_history(group_id)
+        history_key = self._group_history_key(event)
+        history_items = self._get_recent_group_history(history_key)
         current_message = await self._build_current_message(event=event, user_message=user_message, trace_id=trace_id)
         window_messages = self._compose_window_messages(history_items, current_message)
+        execution_key = get_execution_key(event)
+        conversation_key = self.session_manager.get_key(event)
         reply_context = self._merge_reply_context(
             self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
-                group_id=group_id,
+                group_id=history_key,
                 mode="single",
                 batch_size=1,
                 is_latest=True,
@@ -195,8 +199,8 @@ class GroupPlanCoordinator:
         )
         return MessageContext(
             trace_id=trace_id,
-            execution_key=f"group:{group_id}",
-            conversation_key=f"group:{group_id}:{event.user_id}",
+            execution_key=execution_key,
+            conversation_key=conversation_key,
             user_message=str(current_message.get("text_content") or user_message or "").strip(),
             current_sender_label=self._format_window_speaker(current_message).replace("用户 ", "", 1),
             is_first_turn=False,
@@ -216,7 +220,7 @@ class GroupPlanCoordinator:
 
     async def plan_group_message(self, event: MessageEvent, user_message: str, *, trace_id: str = "") -> MessageHandlingPlan:
         context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
-        group_id = str(event.group_id or "unknown_group")
+        group_id = self._group_history_key(event)
         window_messages = list(context.window_messages or [])
 
         try:
@@ -251,7 +255,7 @@ class GroupPlanCoordinator:
         trace_id: str = "",
     ) -> Dict[str, Any]:
         context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
-        group_id = str(event.group_id or "unknown_group")
+        group_id = self._group_history_key(event)
         window_messages = list(context.window_messages or [])
 
         try:
@@ -332,6 +336,18 @@ class GroupPlanCoordinator:
             return []
         history = list(self._history_deque(group_id))
         return [dict(item) for item in history[-count:]]
+
+    def _group_history_key(self, event: MessageEvent) -> str:
+        inbound_event = get_attached_inbound_event(event)
+        if inbound_event is not None:
+            session = inbound_event.session
+            channel_id = str(session.channel_id or "").strip()
+            if channel_id:
+                if session.platform:
+                    return f"{session.platform}:{session.scope}:{channel_id}"
+                return f"{session.scope}:{channel_id}"
+            return session.qualified_key
+        return f"qq:group:{event.group_id or 'unknown_group'}"
 
     async def _build_current_message(self, *, event: MessageEvent, user_message: str, trace_id: str = "") -> Dict[str, Any]:
         image_analysis = await self._analyze_images_for_event(event, user_message, trace_id=trace_id)

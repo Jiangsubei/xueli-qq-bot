@@ -294,7 +294,7 @@ class BotBootstrapper:
         return llm_callback
 
     def _parse_ws_endpoint(self) -> tuple[str, int]:
-        ws_url = self.config.app.napcat.ws_url
+        ws_url = self.config.app.adapter_connection.ws_url
         normalized = ws_url.split("://", 1)[1] if "://" in ws_url else ws_url
         if ":" in normalized:
             host, port_str = normalized.rsplit(":", 1)

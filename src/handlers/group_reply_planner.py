@@ -6,9 +6,10 @@ import re
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig, config, is_group_reply_decision_configured
-from src.core.message_trace import format_trace_log
+from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
+from src.core.platform_normalizers import event_mentions_account
 from src.handlers.message_context import MessageContext
 from src.services.ai_client import AIAPIError, AIClient
 
@@ -330,7 +331,7 @@ class GroupReplyPlanner:
         return MessageHandlingPlan(action=action.value, reason=reason, source=source)
 
     def _build_fallback_plan(self, event: MessageEvent, error: str) -> MessageHandlingPlan:
-        if event.is_at(event.self_id):
+        if event_mentions_account(event):
             return MessageHandlingPlan(
                 action=MessagePlanAction.REPLY.value,
                 reason=f"规划模型异常，但消息显式 @ 了 {self._assistant_name()}，回退为回复",
@@ -384,10 +385,11 @@ class GroupReplyPlanner:
         ]
 
         try:
+            execution_key = context.execution_key if context else get_execution_key(event)
             if context and context.trace_id:
                 logger.info(
                     "开始群聊规划：%s",
-                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or f"group:{event.group_id}", message_id=event.message_id),
+                    format_trace_log(trace_id=context.trace_id, session_key=execution_key, message_id=event.message_id),
                 )
             async def run_chat():
                 return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
@@ -396,7 +398,7 @@ class GroupReplyPlanner:
                 response = await self.model_invocation_router.submit(
                     purpose=ModelInvocationType.GROUP_PLAN,
                     trace_id=context.trace_id if context else "",
-                    session_key=context.execution_key if context else f"group:{event.group_id}",
+                    session_key=execution_key,
                     message_id=event.message_id,
                     label="群聊规划",
                     runner=run_chat,
@@ -407,7 +409,7 @@ class GroupReplyPlanner:
             if context and context.trace_id:
                 logger.info(
                     "群聊规划完成：%s action=%s",
-                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or f"group:{event.group_id}", message_id=event.message_id),
+                    format_trace_log(trace_id=context.trace_id, session_key=execution_key, message_id=event.message_id),
                     plan.action,
                 )
             return plan

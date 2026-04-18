@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 from src.adapters.base import PlatformAdapter
-from src.core.connection import NapCatConnection
+from src.adapters.napcat.connection import NapCatConnection
 from src.core.models import MessageEvent, MessageSegment
 from src.core.platform_models import ImageAction, InboundEvent, OutgoingAction, ReplyAction, SessionRef
 from src.core.platform_normalizers import attach_normalized_onebot_event

@@ -312,6 +312,43 @@ class MarkdownMemoryStore:
     def _get_base_importance(self, mem: MemoryItem) -> float:
         return self._safe_float(mem.metadata.get("importance"), 3.0)
 
+    def _get_mention_count(self, mem: MemoryItem) -> int:
+        try:
+            return max(1, int(float(mem.metadata.get("mention_count", 1) or 1)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _get_observation_count(self, mem: MemoryItem) -> int:
+        observations = mem.metadata.get("source_observations")
+        if not isinstance(observations, list):
+            return 0
+        return len([item for item in observations if isinstance(item, dict)])
+
+    def _get_reference_datetime(self, mem: MemoryItem) -> datetime:
+        reference_time = (
+            mem.metadata.get("last_reinforced_at")
+            or mem.metadata.get("last_recalled_at")
+            or mem.updated_at
+            or mem.created_at
+        )
+        try:
+            return datetime.fromisoformat(str(reference_time or ""))
+        except ValueError:
+            return datetime.now()
+
+    def _get_retention_bonus(self, mem: MemoryItem, *, age_days: float) -> float:
+        mention_bonus = min(max(self._get_mention_count(mem) - 1, 0) * 0.35, 1.2)
+        observation_bonus = min(max(self._get_observation_count(mem) - 1, 0) * 0.2, 0.8)
+        if age_days <= 7:
+            recency_bonus = 0.6
+        elif age_days <= 21:
+            recency_bonus = 0.35
+        elif age_days <= 45:
+            recency_bonus = 0.15
+        else:
+            recency_bonus = 0.0
+        return mention_bonus + observation_bonus + recency_bonus
+
     def _get_effective_importance(self, mem: MemoryItem, now: Optional[datetime] = None) -> float:
         if not self.ordinary_decay_enabled:
             return self._get_base_importance(mem)
@@ -322,17 +359,13 @@ class MarkdownMemoryStore:
         if mem.metadata.get("decay_exempt", False):
             return self._get_base_importance(mem)
 
-        reference_time = mem.updated_at or mem.created_at
-        try:
-            reference_dt = datetime.fromisoformat(reference_time)
-        except ValueError:
-            reference_dt = datetime.now()
-
+        reference_dt = self._get_reference_datetime(mem)
         now_dt = now or datetime.now()
         age_days = max((now_dt - reference_dt).total_seconds() / 86400.0, 0.0)
         base = max(self._get_base_importance(mem), 0.0)
         decay_factor = math.pow(0.5, age_days / self.ordinary_half_life_days)
-        return base * decay_factor
+        retention_bonus = self._get_retention_bonus(mem, age_days=age_days)
+        return min(5.0, (base * decay_factor) + retention_bonus)
 
     def _should_forget(self, mem: MemoryItem, now: Optional[datetime] = None) -> bool:
         if not self.ordinary_decay_enabled:

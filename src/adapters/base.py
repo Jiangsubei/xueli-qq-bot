@@ -30,3 +30,7 @@ class PlatformAdapter(ABC):
     def attach_inbound_event(self, event: MessageEvent) -> Optional[InboundEvent]:
         del event
         return None
+
+    def normalize_inbound_payload(self, payload: Dict[str, Any]) -> Optional[InboundEvent]:
+        del payload
+        return None

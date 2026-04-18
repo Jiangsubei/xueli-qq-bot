@@ -439,7 +439,7 @@ async function pollRuntime() {
             runtime: { online: false },
             fields: {
                 assistant_name: document.querySelector('[data-runtime-key="assistant_name"]')?.textContent || "--",
-                qq_connection: "未连接",
+                adapter_connection: "未连接",
                 vision_status: "未知",
                 memory_status: "未知",
                 messages_received: "--",

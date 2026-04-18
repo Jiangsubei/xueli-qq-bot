@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.runtime_metrics import RuntimeMetrics
+from src.memory.chat_summary_service import ChatSummaryService
+from src.memory.conversation_recall_service import ConversationRecallService
 from src.memory.extraction.memory_extractor import ExtractionConfig, MemoryExtractor
 from src.memory.internal import (
     MemoryAccessContext,
@@ -22,9 +24,12 @@ from src.memory.internal import (
 )
 from src.memory.retrieval.bm25_index import BM25Index, SearchResult
 from src.memory.retrieval.two_stage_retriever import RetrievalConfig, TwoStageRetriever
+from src.memory.person_fact_service import PersonFactService
+from src.memory.session_restore_service import SessionRestoreService
 from src.memory.storage.conversation_store import ConversationStore
 from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
 from src.memory.storage.markdown_store import MemoryItem, MarkdownMemoryStore
+from src.memory.storage.person_fact_store import PersonFactItem, PersonFactStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,8 @@ class MemoryManagerConfig:
     user_important_budget_chars: int = 360
     addressing_budget_chars: int = 180
     shared_budget_chars: int = 260
+    session_restore_budget_chars: int = 260
+    precise_recall_budget_chars: int = 260
     dynamic_budget_chars: int = 420
 
 
@@ -75,10 +82,28 @@ class MemoryManager:
         self.important_memory_store = ImportantMemoryStore(
             base_path=os.path.join(self.config.storage_base_path, "important")
         )
+        self.person_fact_store = PersonFactStore(
+            base_path=os.path.join(self.config.storage_base_path, "person_facts")
+        )
         self.conversation_store = ConversationStore(
             base_path=os.path.join(self.config.storage_base_path, "conversations"),
         )
+        self.chat_summary_service = ChatSummaryService(
+            conversation_store=self.conversation_store,
+        )
+        self.session_restore_service = SessionRestoreService(
+            conversation_store=self.conversation_store,
+            summary_service=self.chat_summary_service,
+        )
         self.access_policy = MemoryAccessPolicy()
+        self.conversation_recall_service = ConversationRecallService(
+            conversation_store=self.conversation_store,
+        )
+        self.person_fact_service = PersonFactService(
+            store=self.person_fact_store,
+            important_memory_store=self.important_memory_store,
+            access_policy=self.access_policy,
+        )
 
         self.extractor: Optional[MemoryExtractor] = None
         if llm_callback:
@@ -104,6 +129,8 @@ class MemoryManager:
             conversation_store=self.conversation_store,
             retriever=self.retriever,
             index_coordinator=self.index_coordinator,
+            session_restore_service=self.session_restore_service,
+            conversation_recall_service=self.conversation_recall_service,
             memory_read_scope=self.config.memory_read_scope,
             access_policy=self.access_policy,
             runtime_metrics=self.runtime_metrics,
@@ -111,12 +138,16 @@ class MemoryManager:
                 "user_important": self.config.user_important_budget_chars,
                 "addressing": self.config.addressing_budget_chars,
                 "shared": self.config.shared_budget_chars,
+                "session_restore": self.config.session_restore_budget_chars,
+                "precise_recall": self.config.precise_recall_budget_chars,
                 "dynamic": self.config.dynamic_budget_chars,
             },
         )
         self.background_coordinator = MemoryBackgroundCoordinator(
             conversation_store=self.conversation_store,
             extractor=self.extractor,
+            summary_service=self.chat_summary_service,
+            person_fact_service=self.person_fact_service,
             task_manager=self.task_manager,
             auto_extract_memory=self.config.auto_extract_memory,
             on_memory_changed=self.index_coordinator.mark_dirty,
@@ -130,6 +161,7 @@ class MemoryManager:
         compaction_count = await self._compact_existing_memories()
         if compaction_count:
             self._inc_memory_compactions(compaction_count)
+        await self._sync_existing_person_facts()
         await self.index_coordinator.initialize()
         logger.debug("记忆管理器初始化完成")
 
@@ -327,6 +359,30 @@ class MemoryManager:
     async def get_user_memories(self, user_id: str) -> List[MemoryItem]:
         return await self.storage.get_user_memories(user_id)
 
+    async def get_person_facts(
+        self,
+        user_id: str,
+        access_context: Optional[MemoryAccessContext] = None,
+        limit: int = 6,
+    ) -> List[Dict[str, Any]]:
+        return await self.person_fact_service.get_prompt_entries(
+            user_id=user_id,
+            access_context=access_context,
+            limit=limit,
+        )
+
+    async def format_person_facts_for_prompt(
+        self,
+        user_id: str,
+        access_context: Optional[MemoryAccessContext] = None,
+        limit: int = 6,
+    ) -> str:
+        return await self.person_fact_service.format_facts_for_prompt(
+            user_id=user_id,
+            access_context=access_context,
+            limit=limit,
+        )
+
     async def delete_memory(self, mem_id: str, user_id: Optional[str] = None) -> bool:
         result = await self.storage.delete_memory(mem_id, user_id)
         if result and user_id:
@@ -464,6 +520,7 @@ class MemoryManager:
             metadata=normalized_metadata,
         )
         if memory:
+            await self.person_fact_service.sync_user_facts(str(user_id))
             self._inc_memory_writes()
         return memory
 
@@ -498,22 +555,30 @@ class MemoryManager:
         )
 
     async def delete_important_memory(self, user_id: str, content_substring: str) -> bool:
-        return await self.important_memory_store.delete_memory(user_id, content_substring)
+        result = await self.important_memory_store.delete_memory(user_id, content_substring)
+        if result:
+            await self.person_fact_service.sync_user_facts(str(user_id))
+        return result
 
     async def update_important_memory(self, user_id: str, memory_id: str, content: str) -> bool:
         result = await self.important_memory_store.update_memory(user_id, memory_id, content)
         if result:
+            await self.person_fact_service.sync_user_facts(str(user_id))
             self._inc_memory_writes()
         return result
 
     async def delete_important_memory_by_id(self, user_id: str, memory_id: str) -> bool:
         result = await self.important_memory_store.delete_memory_by_id(user_id, memory_id)
         if result:
+            await self.person_fact_service.sync_user_facts(str(user_id))
             self._inc_memory_writes()
         return result
 
     async def clear_important_memories(self, user_id: str) -> bool:
-        return await self.important_memory_store.clear_memories(user_id)
+        result = await self.important_memory_store.clear_memories(user_id)
+        if result:
+            await self.person_fact_store.clear_facts(str(user_id))
+        return result
 
     async def close(self):
         await self.background_coordinator.close()
@@ -617,6 +682,11 @@ class MemoryManager:
                 await self.important_memory_store.replace_memories(user_id, compacted)
                 changed += len(memories) - len(compacted)
         return changed
+
+    async def _sync_existing_person_facts(self) -> None:
+        user_ids = set(self.important_memory_store.get_user_ids()) | set(self.person_fact_store.get_user_ids())
+        for user_id in sorted(uid for uid in user_ids if uid):
+            await self.person_fact_service.sync_user_facts(str(user_id))
 
     def _compact_memory_items(self, memories: List[MemoryItem]) -> List[MemoryItem]:
         seen: Dict[str, MemoryItem] = {}

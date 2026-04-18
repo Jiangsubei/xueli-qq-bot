@@ -16,7 +16,7 @@ _DEFAULT_EMOTION_LABELS = ["开心", "喜欢", "惊讶", "无语", "委屈", "�
 
 
 @dataclass(frozen=True)
-class NapCatConfig:
+class AdapterConnectionConfig:
     ws_url: str = "ws://0.0.0.0:8095"
     http_url: str = "http://127.0.0.1:6700"
 
@@ -144,7 +144,7 @@ class MemoryConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    napcat: NapCatConfig = field(default_factory=NapCatConfig)
+    adapter_connection: AdapterConnectionConfig = field(default_factory=AdapterConnectionConfig)
     ai_service: AIServiceConfig = field(default_factory=AIServiceConfig)
     vision_service: VisionServiceConfig = field(default_factory=VisionServiceConfig)
     emoji: EmojiConfig = field(default_factory=EmojiConfig)
@@ -157,6 +157,10 @@ class AppConfig:
     behavior: ContentSection = field(default_factory=ContentSection)
     memory_rerank: MemoryRerankConfig = field(default_factory=MemoryRerankConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+
+    @property
+    def napcat(self) -> AdapterConnectionConfig:
+        return self.adapter_connection
 
 
 def _is_model_endpoint_configured(api_base: Any, model: Any) -> bool:
@@ -201,8 +205,10 @@ class ConfigValidationError(ValueError):
 
 class Config:
     _MAPPING = {
-        "NAPCAT_WS_URL": ("napcat", "ws_url"),
-        "NAPCAT_HTTP_URL": ("napcat", "http_url"),
+        "NAPCAT_WS_URL": ("adapter_connection", "ws_url"),
+        "NAPCAT_HTTP_URL": ("adapter_connection", "http_url"),
+        "ADAPTER_CONNECTION_WS_URL": ("adapter_connection", "ws_url"),
+        "ADAPTER_CONNECTION_HTTP_URL": ("adapter_connection", "http_url"),
         "OPENAI_API_BASE": ("ai_service", "api_base"),
         "OPENAI_API_KEY": ("ai_service", "api_key"),
         "OPENAI_MODEL": ("ai_service", "model"),
@@ -459,7 +465,7 @@ class Config:
 
     def _build_app_config(self) -> AppConfig:
         return AppConfig(
-            napcat=self._build_napcat_config(), ai_service=self._build_ai_service_config(),
+            adapter_connection=self._build_adapter_connection_config(), ai_service=self._build_ai_service_config(),
             vision_service=self._build_vision_service_config(), emoji=self._build_emoji_config(),
             bot_behavior=self._build_bot_behavior_config(), assistant_profile=self._build_assistant_profile_config(),
             group_reply=self._build_group_reply_config(), group_reply_decision=self._build_group_reply_decision_config(),
@@ -468,12 +474,18 @@ class Config:
             behavior=self._build_content_section("behavior"), memory=self._build_memory_config(),
         )
 
-    def _build_napcat_config(self) -> NapCatConfig:
-        section = self._get_section("napcat")
-        return NapCatConfig(
-            ws_url=self._require_string(section, "napcat", "ws_url", default="ws://0.0.0.0:8095"),
-            http_url=self._require_string(section, "napcat", "http_url", default="http://127.0.0.1:6700"),
+    def _build_adapter_connection_config(self) -> AdapterConnectionConfig:
+        section = self._get_adapter_connection_section()
+        return AdapterConnectionConfig(
+            ws_url=self._require_string(section, "adapter_connection", "ws_url", default="ws://0.0.0.0:8095"),
+            http_url=self._require_string(section, "adapter_connection", "http_url", default="http://127.0.0.1:6700"),
         )
+
+    def _get_adapter_connection_section(self) -> Dict[str, Any]:
+        section = self._get_section("adapter_connection")
+        if section:
+            return section
+        return self._get_section("napcat")
 
     def _build_ai_service_config(self) -> AIServiceConfig:
         section = self._get_section("ai_service")
