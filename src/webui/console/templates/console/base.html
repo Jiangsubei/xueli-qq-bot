@@ -1,0 +1,17 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{% static 'console/css/console.css' %}">
+</head>
+<body>
+    {% block body %}{% endblock %}
+    {{ client_config|json_script:"console-client-config" }}
+    {{ runtime_payload|json_script:"console-runtime-data" }}
+    <script src="{% static 'console/js/console.js' %}"></script>
+</body>
+</html>

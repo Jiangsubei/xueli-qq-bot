@@ -1,0 +1,132 @@
+<div id="page-model" class="page-section" data-advanced-page="model" data-advanced-visible="false">
+  <form class="grid-container console-grid settings-form stacked-form multi-card-form" data-form-section="model">
+    {% for item in model_forms %}
+    <section class="card mica-material col-6 config-section-card" data-model-group="{{ item.slug }}">
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">{{ item.title }}</h3>
+          <p class="card-desc">{{ item.description }}</p>
+        </div>
+        <div class="card-bar-actions">
+          <span class="model-status-badge">{{ item.status_label }}</span>
+        </div>
+      </div>
+
+      <div class="config-item-grid two-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">接口地址</span>
+              <span class="config-item-desc">告诉助手该去哪里调用这个模型。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.model.api_base }}">?</span>
+          </span>
+          <input class="form-control" name="{{ item.slug }}__api_base" type="text" value="{{ item.api_base }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">模型名称</span>
+              <span class="config-item-desc">这里填写实际使用的模型名。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.model.model }}">?</span>
+          </span>
+          <input class="form-control" name="{{ item.slug }}__model" type="text" value="{{ item.model }}">
+        </label>
+
+        <label class="config-item-card full-span">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">密钥</span>
+              <span class="config-item-desc">留空表示不修改，保持掩码时不会覆盖原值。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.model.api_key }}">?</span>
+          </span>
+          <span class="input-with-indicator">
+            <input class="form-control model-secret-input" name="{{ item.slug }}__api_key" type="text" value="{{ item.api_key }}" placeholder="留空表示不修改">
+            <span class="model-secret-indicator {% if item.secret_saved %}is-saved{% else %}is-empty{% endif %}" title="{{ item.secret_hint }}" aria-label="{{ item.secret_hint }}">
+              <i class="fa-solid {% if item.secret_saved %}fa-check{% else %}fa-minus{% endif %}"></i>
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div class="advanced-settings-block" data-advanced-field>
+        <div class="advanced-settings-head">
+          <h4>高级设置</h4>
+          <p>温度、附加参数、请求头和响应路径都放在这里。</p>
+        </div>
+
+        <div class="config-item-grid one-up">
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">Temperature</span>
+                <span class="config-item-desc">常用采样温度，数值越高越发散，越低越稳定。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.model.temperature }}">?</span>
+            </span>
+            <input class="form-control" name="{{ item.slug }}__temperature" type="text" value="{{ item.temperature }}" placeholder="例如 0.7">
+          </label>
+
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">响应位置</span>
+                <span class="config-item-desc">如果返回内容不在默认位置，可以在这里填写路径。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.model.response_path }}">?</span>
+            </span>
+            <input class="form-control" name="{{ item.slug }}__response_path" type="text" value="{{ item.response_path }}">
+          </label>
+
+          <div class="config-item-card config-editor-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">附加参数</span>
+                <span class="config-item-desc">这里放除 Temperature 之外的其他参数。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.model.extra_params }}">?</span>
+            </span>
+            <div class="config-editor-body" data-kv-field="extra_params_rows">
+              <div class="editor-list" data-kv-list>
+                {% for row in item.param_rows %}
+                <div class="editor-row" data-kv-row>
+                  <input class="form-control" type="text" value="{{ row.key }}" placeholder="Key" data-kv-key>
+                  <input class="form-control" type="text" value="{{ row.value }}" placeholder="Value" data-kv-value>
+                  <button class="btn-outline btn-icon-lite" type="button" data-remove-kv-row><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                {% endfor %}
+              </div>
+              <button class="btn-outline editor-add-button" type="button" data-add-kv-row>添加参数</button>
+            </div>
+          </div>
+
+          <div class="config-item-card config-editor-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">附加请求头</span>
+                <span class="config-item-desc">如果这个模型需要额外请求头，就在这里填写。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.model.extra_headers }}">?</span>
+            </span>
+            <div class="config-editor-body" data-kv-field="extra_headers_rows">
+              <div class="editor-list" data-kv-list>
+                {% for row in item.header_rows %}
+                <div class="editor-row" data-kv-row>
+                  <input class="form-control" type="text" value="{{ row.key }}" placeholder="Header" data-kv-key>
+                  <input class="form-control" type="text" value="{{ row.value }}" placeholder="Value" data-kv-value>
+                  <button class="btn-outline btn-icon-lite" type="button" data-remove-kv-row><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                {% endfor %}
+              </div>
+              <button class="btn-outline editor-add-button" type="button" data-add-kv-row>添加请求头</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    {% endfor %}
+  </form>
+</div>

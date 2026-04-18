@@ -1,0 +1,357 @@
+<div id="page-memory" class="page-section" data-advanced-page="memory" data-advanced-visible="false">
+  <form class="grid-container console-grid settings-form stacked-form multi-card-form memory-console-form" data-form-section="memory">
+    <section class="card mica-material col-12 config-section-card">
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">基础设置</h3>
+          <p class="card-desc">先决定助手会不会记住对话，以及多久整理一次。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid two-up">
+        <label class="config-item-card config-switch-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">启用状态</span>
+              <span class="config-item-desc">关掉后，助手不会再读写记忆。</span>
+            </span>
+            <span class="config-item-head-actions">
+              <span class="field-help" tabindex="0" data-help="{{ field_help.memory.enabled }}">?</span>
+              <span class="config-switch-indicator">
+                <input type="checkbox" name="enabled"{% if memory_form.enabled %} checked{% endif %}>
+                <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+              </span>
+            </span>
+          </span>
+        </label>
+
+        <label class="config-item-card config-switch-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">自动提取</span>
+              <span class="config-item-desc">打开后，助手会自动整理值得记住的内容。</span>
+            </span>
+            <span class="config-item-head-actions">
+              <span class="field-help" tabindex="0" data-help="{{ field_help.memory.auto_extract }}">?</span>
+              <span class="config-switch-indicator">
+                <input type="checkbox" name="auto_extract"{% if memory_form.auto_extract %} checked{% endif %}>
+                <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+              </span>
+            </span>
+          </span>
+        </label>
+
+        <div class="config-item-card strategy-picker-field">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">读取范围</span>
+              <span class="config-item-desc">决定回忆时只看自己，还是把共享记忆也带上。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.read_scope }}">?</span>
+          </span>
+          <input type="hidden" name="read_scope" id="memoryReadScopeInput" value="{{ memory_form.read_scope }}">
+          <button class="strategy-trigger" id="memoryScopeTrigger" type="button" aria-expanded="false" aria-controls="memoryScopeCard">
+            <span class="strategy-trigger-label" id="memoryScopeTriggerLabel">{% for option in memory_form.read_scope_options %}{% if option.value == memory_form.read_scope %}{{ option.label }}{% endif %}{% endfor %}</span>
+            <i class="fa-solid fa-chevron-down"></i>
+          </button>
+          <div class="strategy-card hidden" id="memoryScopeCard">
+            {% for option in memory_form.read_scope_options %}
+            <button class="strategy-option{% if option.value == memory_form.read_scope %} is-selected{% endif %}" type="button" data-scope-value="{{ option.value }}" data-scope-label="{{ option.label }}">
+              <span class="strategy-option-main">{{ option.label }}</span>
+              <span class="strategy-help" tabindex="0" data-help="{{ option.help }}">?</span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">提取轮次</span>
+              <span class="config-item-desc">每聊多少轮后，尝试整理一次新记忆。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.extract_every_n_turns }}">?</span>
+          </span>
+          <input class="form-control" name="extract_every_n_turns" type="number" min="1" value="{{ memory_form.extract_every_n_turns }}">
+        </label>
+      </div>
+    </section>
+
+    <section class="card mica-material col-12 config-section-card" data-advanced-field>
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">检索高级</h3>
+          <p class="card-desc">这些项主要影响记忆候选筛选、动态记忆去重和本地排序。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid three-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">BM25 候选数</span>
+              <span class="config-item-desc">本地粗筛阶段最多保留多少条候选记忆。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.bm25_top_k }}">?</span>
+          </span>
+          <input class="form-control" name="bm25_top_k" type="number" min="1" value="{{ memory_advanced_form.bm25_top_k }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">重排候选数</span>
+              <span class="config-item-desc">最终精排阶段最多保留多少条候选记忆。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.rerank_top_k }}">?</span>
+          </span>
+          <input class="form-control" name="rerank_top_k" type="number" min="1" value="{{ memory_advanced_form.rerank_top_k }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">预重排候选数</span>
+              <span class="config-item-desc">送进精排前，最多保留多少条预排序结果。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.pre_rerank_top_k }}">?</span>
+          </span>
+          <input class="form-control" name="pre_rerank_top_k" type="number" min="1" value="{{ memory_advanced_form.pre_rerank_top_k }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">动态记忆上限</span>
+              <span class="config-item-desc">最终提示词里最多保留多少条动态记忆。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.dynamic_memory_limit }}">?</span>
+          </span>
+          <input class="form-control" name="dynamic_memory_limit" type="number" min="1" value="{{ memory_advanced_form.dynamic_memory_limit }}">
+        </label>
+
+        <label class="config-item-card config-switch-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">动态记忆去重</span>
+              <span class="config-item-desc">相似内容过高的动态记忆会被自动合并。</span>
+            </span>
+            <span class="config-item-head-actions">
+              <span class="field-help" tabindex="0" data-help="{{ field_help.memory.dynamic_dedup_enabled }}">?</span>
+              <span class="config-switch-indicator">
+                <input type="checkbox" name="dynamic_dedup_enabled"{% if memory_advanced_form.dynamic_dedup_enabled %} checked{% endif %}>
+                <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+              </span>
+            </span>
+          </span>
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">去重阈值</span>
+              <span class="config-item-desc">动态记忆去重阈值，越高越严格。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.dynamic_dedup_similarity_threshold }}">?</span>
+          </span>
+          <input class="form-control" name="dynamic_dedup_similarity_threshold" type="number" min="0" max="1" step="0.01" value="{{ memory_advanced_form.dynamic_dedup_similarity_threshold }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">单条候选长度</span>
+              <span class="config-item-desc">单条候选记忆进入重排时允许占用的最大字符数。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.rerank_candidate_max_chars }}">?</span>
+          </span>
+          <input class="form-control" name="rerank_candidate_max_chars" type="number" min="20" value="{{ memory_advanced_form.rerank_candidate_max_chars }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">总提示词预算</span>
+              <span class="config-item-desc">重排提示词最多允许占用多少字符。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.rerank_total_prompt_budget }}">?</span>
+          </span>
+          <input class="form-control" name="rerank_total_prompt_budget" type="number" min="200" value="{{ memory_advanced_form.rerank_total_prompt_budget }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">BM25 权重</span>
+              <span class="config-item-desc">本地排序里 BM25 分数的权重。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.local_bm25_weight }}">?</span>
+          </span>
+          <input class="form-control" name="local_bm25_weight" type="number" min="0" step="0.01" value="{{ memory_advanced_form.local_bm25_weight }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">重要度权重</span>
+              <span class="config-item-desc">本地排序里记忆重要度的权重。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.local_importance_weight }}">?</span>
+          </span>
+          <input class="form-control" name="local_importance_weight" type="number" min="0" step="0.01" value="{{ memory_advanced_form.local_importance_weight }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">提及次数权重</span>
+              <span class="config-item-desc">本地排序里提及次数的权重。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.local_mention_weight }}">?</span>
+          </span>
+          <input class="form-control" name="local_mention_weight" type="number" min="0" step="0.01" value="{{ memory_advanced_form.local_mention_weight }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">新近程度权重</span>
+              <span class="config-item-desc">本地排序里新近程度的权重。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.local_recency_weight }}">?</span>
+          </span>
+          <input class="form-control" name="local_recency_weight" type="number" min="0" step="0.01" value="{{ memory_advanced_form.local_recency_weight }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">场景匹配权重</span>
+              <span class="config-item-desc">本地排序里场景匹配的权重。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.local_scene_weight }}">?</span>
+          </span>
+          <input class="form-control" name="local_scene_weight" type="number" min="0" step="0.01" value="{{ memory_advanced_form.local_scene_weight }}">
+        </label>
+      </div>
+    </section>
+
+    <section class="card mica-material col-6 config-section-card" data-advanced-field>
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">存储高级</h3>
+          <p class="card-desc">这里控制记忆文件存放位置。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid one-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">存储路径</span>
+              <span class="config-item-desc">所有记忆文件和索引都会保存在这个位置。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.storage_path }}">?</span>
+          </span>
+          <input class="form-control" name="storage_path" type="text" value="{{ memory_advanced_form.storage_path }}">
+        </label>
+      </div>
+    </section>
+
+    <section class="card mica-material col-6 config-section-card" data-advanced-field>
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">衰减高级</h3>
+          <p class="card-desc">这里决定普通记忆会不会随时间慢慢淡化。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid one-up">
+        <label class="config-item-card config-switch-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">衰减开关</span>
+              <span class="config-item-desc">打开后，不太重要的记忆会随时间慢慢变淡。</span>
+            </span>
+            <span class="config-item-head-actions">
+              <span class="field-help" tabindex="0" data-help="{{ field_help.memory.ordinary_decay_enabled }}">?</span>
+              <span class="config-switch-indicator">
+                <input type="checkbox" name="ordinary_decay_enabled"{% if memory_advanced_form.ordinary_decay_enabled %} checked{% endif %}>
+                <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+              </span>
+            </span>
+          </span>
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">半衰期</span>
+              <span class="config-item-desc">普通记忆大约多久会衰减一半。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.ordinary_half_life_days }}">?</span>
+          </span>
+          <input class="form-control" name="ordinary_half_life_days" type="number" min="0" step="0.1" value="{{ memory_advanced_form.ordinary_half_life_days }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">遗忘阈值</span>
+              <span class="config-item-desc">衰减到这个程度后，会被视为可以遗忘。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.ordinary_forget_threshold }}">?</span>
+          </span>
+          <input class="form-control" name="ordinary_forget_threshold" type="number" min="0" max="1" step="0.01" value="{{ memory_advanced_form.ordinary_forget_threshold }}">
+        </label>
+      </div>
+    </section>
+
+    <section class="card mica-material col-12 memory-board-card">
+      <div class="memory-board-head">
+        <div>
+          <h3 class="card-title">已保存的记忆</h3>
+          <p class="card-desc">这里可以查看、修改和删除已经记下来的内容。</p>
+        </div>
+      </div>
+      <div class="memory-board" id="memoryBoard">
+        {% for section in memory_sections %}
+        <section class="memory-section-block" data-memory-section="{{ section.key }}">
+          <div class="memory-section-head">
+            <h4>{{ section.title }}</h4>
+            <span class="memory-section-count">{{ section.items|length }}</span>
+          </div>
+          {% if section.items %}
+          <div class="memory-card-grid{% if section.key == 'important' %} memory-card-grid-important{% endif %}">
+            {% for item in section.items %}
+            <article class="memory-card mica-material-lite" data-memory-id="{{ item.id }}" data-memory-group="{{ section.key }}">
+              <div class="memory-card-head">
+                <div class="memory-card-meta-row">
+                  <span class="memory-chip is-kind">{{ item.kind_label }}</span>
+                  <span class="memory-chip">{{ item.owner_label }}</span>
+                  {% if item.shared %}<span class="memory-chip">共享</span>{% endif %}
+                </div>
+                <div class="memory-card-actions">
+                  <button class="btn-outline btn-icon-lite" type="button" data-memory-edit aria-label="编辑记忆"><i class="fa-solid fa-pen"></i></button>
+                  <button class="btn-outline btn-icon-lite" type="button" data-memory-delete aria-label="删除记忆"><i class="fa-solid fa-trash"></i></button>
+                </div>
+              </div>
+              <div class="memory-card-body">
+                <textarea class="form-textarea memory-card-editor" data-memory-content>{{ item.content }}</textarea>
+              </div>
+              <div class="memory-card-foot">
+                <span>{{ item.updated_label }}</span>
+                <span>{{ item.source_label }}</span>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="memory-empty">暂时还没有{{ section.title }}。</div>
+          {% endif %}
+        </section>
+        {% endfor %}
+      </div>
+    </section>
+  </form>
+</div>
