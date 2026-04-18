@@ -1,0 +1,30 @@
+﻿# WebSocket client
+websockets>=12.0
+
+# HTTP client
+aiohttp>=3.9.0
+
+# Async file operations (required by the memory module)
+aiofiles>=23.0.0
+
+# Chinese tokenization (used by memory module and BM25 retrieval)
+jieba>=0.42.1
+
+# BM25 retrieval (required by the memory module)
+rank-bm25>=0.2.2
+
+# OpenAI API client
+openai>=1.0.0
+
+# Image processing
+pillow>=10.0.0
+
+# Optional: faster JSON support
+# orjson>=3.9.0
+
+# Optional: local reranker model support, for example CrossEncoder
+# sentence-transformers>=2.2.0
+
+# WebUI
+django>=5.2,<6
+tomlkit>=0.13.2

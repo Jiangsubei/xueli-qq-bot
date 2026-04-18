@@ -1,0 +1,295 @@
+<div id="page-reply" class="page-section" data-advanced-page="assistant" data-advanced-visible="false">
+  <form class="grid-container console-grid settings-form stacked-form multi-card-form" data-form-section="assistant">
+    <section class="card mica-material col-6 config-section-card">
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">助手信息</h3>
+          <p class="card-desc">名字、性格和长期规则都放在这里。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid two-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">助手名称</span>
+              <span class="config-item-desc">这是页面和状态里显示的正式名字。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.name }}">?</span>
+          </span>
+          <input class="form-control" name="name" type="text" value="{{ assistant_form.name }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">助手别名</span>
+              <span class="config-item-desc">想让它更亲切一点时，可以填一个小名。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.alias }}">?</span>
+          </span>
+          <input class="form-control" name="alias" type="text" value="{{ assistant_form.alias }}">
+        </label>
+
+        <label class="config-item-card full-span compact-text-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">性格设定</span>
+              <span class="config-item-desc">描述它整体的性格和气质。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.personality }}">?</span>
+          </span>
+          <textarea class="form-control form-textarea" name="personality">{{ assistant_form.personality }}</textarea>
+        </label>
+
+        <label class="config-item-card full-span compact-text-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">行为约束</span>
+              <span class="config-item-desc">这里写它需要长期遵守的边界和规则。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.behavior }}">?</span>
+          </span>
+          <textarea class="form-control form-textarea" name="behavior">{{ assistant_advanced_form.behavior }}</textarea>
+        </label>
+      </div>
+    </section>
+
+    <section class="card mica-material col-6 config-section-card">
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">回复设置</h3>
+          <p class="card-desc">这里决定助手平时怎么说、怎么回。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid two-up">
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">上下文条数</span>
+              <span class="config-item-desc">单次回复前会参考多少条最近聊天。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.max_context_length }}">?</span>
+          </span>
+          <input class="form-control" name="max_context_length" type="number" min="1" value="{{ assistant_form.max_context_length }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">回复长度</span>
+              <span class="config-item-desc">限制单次回复不要太短或太长。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.max_message_length }}">?</span>
+          </span>
+          <input class="form-control" name="max_message_length" type="number" min="1" value="{{ assistant_form.max_message_length }}">
+        </label>
+
+        <label class="config-item-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">超时时间</span>
+              <span class="config-item-desc">模型太久没回时，多长时间后算超时。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.response_timeout }}">?</span>
+          </span>
+          <input class="form-control" name="response_timeout" type="number" min="1" value="{{ assistant_form.response_timeout }}">
+        </label>
+
+        <label class="config-item-card full-span compact-text-card">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">说话风格</span>
+              <span class="config-item-desc">约束它平时说话的语气和表达方式。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.dialogue_style }}">?</span>
+          </span>
+          <textarea class="form-control form-textarea" name="dialogue_style">{{ assistant_form.dialogue_style }}</textarea>
+        </label>
+      </div>
+
+      <div class="advanced-settings-block" data-advanced-field>
+        <div class="advanced-settings-head">
+          <h4>高级设置</h4>
+          <p>这些选项主要用于调试和细调回复行为。</p>
+        </div>
+
+        <div class="config-item-grid two-up">
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">回复间隔</span>
+                <span class="config-item-desc">连续回复时，两次输出之间至少间隔多久。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.rate_limit_interval }}">?</span>
+            </span>
+            <input class="form-control" name="rate_limit_interval" type="number" step="0.1" min="0" value="{{ assistant_advanced_form.rate_limit_interval }}">
+          </label>
+
+          <label class="config-item-card config-switch-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">完整提示词记录</span>
+                <span class="config-item-desc">打开后，会记录完整提示词，便于排查问题。</span>
+              </span>
+              <span class="config-item-head-actions">
+                <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.log_full_prompt }}">?</span>
+                <span class="config-switch-indicator">
+                  <input type="checkbox" name="log_full_prompt"{% if assistant_advanced_form.log_full_prompt %} checked{% endif %}>
+                  <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+                </span>
+              </span>
+            </span>
+          </label>
+
+          <label class="config-item-card config-switch-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">私聊引用回复</span>
+                <span class="config-item-desc">打开后，私聊回复会顺手引用原消息。</span>
+              </span>
+              <span class="config-item-head-actions">
+                <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.private_quote_reply_enabled }}">?</span>
+                <span class="config-switch-indicator">
+                  <input type="checkbox" name="private_quote_reply_enabled"{% if assistant_advanced_form.private_quote_reply_enabled %} checked{% endif %}>
+                  <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+                </span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mica-material col-12 config-section-card">
+      <div class="card-bar">
+        <div>
+          <h3 class="card-title">群聊设置</h3>
+          <p class="card-desc">这里决定助手在群里什么时候开口、怎么开口。</p>
+        </div>
+      </div>
+
+      <div class="config-item-grid three-up">
+        <div class="config-item-card strategy-picker-field full-span">
+          <span class="config-item-head">
+            <span class="config-item-title-stack">
+              <span class="config-item-title">回复策略</span>
+              <span class="config-item-desc">先决定它在群里更主动还是更安静。</span>
+            </span>
+            <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.group_strategy }}">?</span>
+          </span>
+          <input type="hidden" name="group_strategy" id="groupStrategyInput" value="{{ assistant_form.group_strategy }}">
+          <button class="strategy-trigger" id="strategyTrigger" type="button" aria-expanded="false" aria-controls="strategyCard">
+            <span class="strategy-trigger-label" id="strategyTriggerLabel">{% for option in assistant_form.group_strategy_options %}{% if option.value == assistant_form.group_strategy %}{{ option.label }}{% endif %}{% endfor %}</span>
+            <i class="fa-solid fa-chevron-down"></i>
+          </button>
+          <div class="strategy-card hidden" id="strategyCard">
+            {% for option in assistant_form.group_strategy_options %}
+            <button class="strategy-option{% if option.value == assistant_form.group_strategy %} is-selected{% endif %}" type="button" data-value="{{ option.value }}" data-label="{{ option.label }}">
+              <span class="strategy-option-main">{{ option.label }}</span>
+              <span class="strategy-help" tabindex="0" data-help="{{ option.help }}">?</span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="advanced-settings-block" data-advanced-field>
+        <div class="advanced-settings-head">
+          <h4>高级设置</h4>
+          <p>这些选项更偏群聊规划和复读调参。</p>
+        </div>
+
+        <div class="config-item-grid three-up">
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">请求间隔</span>
+                <span class="config-item-desc">群里连续判断时，两次请求之间会间隔多久。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.plan_request_interval }}">?</span>
+            </span>
+            <input class="form-control" name="plan_request_interval" type="number" min="0" value="{{ assistant_advanced_form.plan_request_interval }}">
+          </label>
+
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">最大并发</span>
+                <span class="config-item-desc">同时最多可以处理几个群聊规划请求。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.plan_request_max_parallel }}">?</span>
+            </span>
+            <input class="form-control" name="plan_request_max_parallel" type="number" min="1" value="{{ assistant_advanced_form.plan_request_max_parallel }}">
+          </label>
+
+          <label class="config-item-card config-switch-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">主动回复时 @ 用户</span>
+                <span class="config-item-desc">主动接话时，是否顺手 @ 当前发消息的人。</span>
+              </span>
+              <span class="config-item-head-actions">
+                <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.at_user_when_proactive_reply }}">?</span>
+                <span class="config-switch-indicator">
+                  <input type="checkbox" name="at_user_when_proactive_reply"{% if assistant_advanced_form.at_user_when_proactive_reply %} checked{% endif %}>
+                  <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+                </span>
+              </span>
+            </span>
+          </label>
+
+          <label class="config-item-card config-switch-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">复读开关</span>
+                <span class="config-item-desc">群里短时间重复内容时，助手会跟着复读一次。</span>
+              </span>
+              <span class="config-item-head-actions">
+                <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.repeat_echo_enabled }}">?</span>
+                <span class="config-switch-indicator">
+                  <input type="checkbox" name="repeat_echo_enabled"{% if assistant_advanced_form.repeat_echo_enabled %} checked{% endif %}>
+                  <span class="toggle-icon-shell" aria-hidden="true"><i class="fa-solid fa-minus toggle-icon-off"></i><i class="fa-solid fa-check toggle-icon-on"></i></span>
+                </span>
+              </span>
+            </span>
+          </label>
+
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">复读时间窗口</span>
+                <span class="config-item-desc">统计群里短时间重复内容时使用的时间窗口。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.repeat_echo_window_seconds }}">?</span>
+            </span>
+            <input class="form-control" name="repeat_echo_window_seconds" type="number" min="1" step="0.1" value="{{ assistant_advanced_form.repeat_echo_window_seconds }}">
+          </label>
+
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">最少重复次数</span>
+                <span class="config-item-desc">至少重复多少次后，才会触发一次复读。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.repeat_echo_min_count }}">?</span>
+            </span>
+            <input class="form-control" name="repeat_echo_min_count" type="number" min="2" value="{{ assistant_advanced_form.repeat_echo_min_count }}">
+          </label>
+
+          <label class="config-item-card">
+            <span class="config-item-head">
+              <span class="config-item-title-stack">
+                <span class="config-item-title">复读冷却</span>
+                <span class="config-item-desc">两次复读之间至少要间隔多久。</span>
+              </span>
+              <span class="field-help" tabindex="0" data-help="{{ field_help.assistant.repeat_echo_cooldown_seconds }}">?</span>
+            </span>
+            <input class="form-control" name="repeat_echo_cooldown_seconds" type="number" min="0" step="0.1" value="{{ assistant_advanced_form.repeat_echo_cooldown_seconds }}">
+          </label>
+        </div>
+      </div>
+    </section>
+  </form>
+</div>

@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Project specific
+.env
+*.log
+logs/
+*.db
+*.sqlite
+memories/
+.claude/settings.local.json
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+# Local runtime artifacts
+*.sqlite3
+tests/_tmp/
+
+# Local runtime and generated artifacts
+data/runtime/
+data/webui/avatar/
+src/webui/db.sqlite3
+src/webui/**/__pycache__/
+tmp_patch_test.txt
+
+# Tests should stay local
+tests/
+src/webui/console/tests/
+
+# Local temporary files
+tmp_xueli_向_MaiBot_学习点.md
+temp-repo/
+config1.json.bak
+.tmp_tests/
+data/
