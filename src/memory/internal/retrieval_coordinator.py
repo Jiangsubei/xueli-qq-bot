@@ -79,6 +79,12 @@ class MemoryRetrievalCoordinator:
             return float(result.rerank_score)
         return float(result.bm25_score or 0.0)
 
+    def _memory_patch_status(self, metadata: Optional[Dict[str, Any]]) -> str:
+        return str(dict(metadata or {}).get("patch_status") or "").strip().lower()
+
+    def _should_skip_memory(self, metadata: Optional[Dict[str, Any]]) -> bool:
+        return self._memory_patch_status(metadata) in {"superseded", "contextualized"}
+
     async def search_memories(
         self,
         user_id: str,
@@ -114,6 +120,8 @@ class MemoryRetrievalCoordinator:
         for result in aggregated:
             memory = getattr(result, "memory", None)
             if not memory:
+                continue
+            if self._should_skip_memory(getattr(memory, "metadata", {})):
                 continue
             if self.access_policy.is_accessible(
                 owner_user_id=str(memory.owner_user_id or user_id),
@@ -360,6 +368,8 @@ class MemoryRetrievalCoordinator:
                 top_k=limit,
             )
             for memory in matched:
+                if self._should_skip_memory(memory.metadata):
+                    continue
                 if not self.access_policy.is_accessible(
                     owner_user_id=str(memory.owner_user_id or owner_user_id),
                     metadata=memory.metadata,
@@ -415,6 +425,8 @@ class MemoryRetrievalCoordinator:
             )
             for memory in owner_memories:
                 owner = str(memory.owner_user_id or owner_user_id)
+                if self._should_skip_memory(memory.metadata):
+                    continue
                 if self.access_policy.is_accessible(
                     owner_user_id=owner,
                     metadata=memory.metadata,
@@ -526,6 +538,8 @@ class MemoryRetrievalCoordinator:
             owner_memories = await self.storage.get_user_memories(owner_user_id)
             for memory in owner_memories:
                 memory.owner_user_id = str(memory.owner_user_id or owner_user_id)
+                if self._should_skip_memory(memory.metadata):
+                    continue
                 if self.access_policy.is_accessible(
                     owner_user_id=memory.owner_user_id,
                     metadata=memory.metadata,
@@ -536,6 +550,8 @@ class MemoryRetrievalCoordinator:
                     denied += 1
 
         for memory in await self.storage.get_global_memories():
+            if self._should_skip_memory(memory.metadata):
+                continue
             if self.access_policy.is_accessible(
                 owner_user_id=str(memory.owner_user_id or ""),
                 metadata=memory.metadata,
@@ -621,6 +637,8 @@ class MemoryRetrievalCoordinator:
 
     def _should_skip_dynamic_memory(self, memory: Any, *, query: str) -> bool:
         metadata = dict(getattr(memory, "metadata", {}) or {})
+        if self._memory_patch_status(metadata) in {"superseded", "contextualized"}:
+            return True
         if str(metadata.get("memory_type", "") or "").strip().lower() == "important":
             return True
         content = str(getattr(memory, "content", "") or "").strip()

@@ -540,11 +540,147 @@ function numberOrZero(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatMemoryValue(value) {
+    if (value === null || value === undefined) return "";
+    return String(value).trim();
+}
+
+function formatMemoryNumber(value) {
+    if (value === null || value === undefined || value === "") return "";
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return String(value);
+    return parsed.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function formatTurnRange(start, end) {
+    const startTurn = Number(start);
+    const endTurn = Number(end);
+    if (!Number.isFinite(startTurn) || startTurn <= 0) return "";
+    if (!Number.isFinite(endTurn) || endTurn <= 0 || endTurn === startTurn) return `第 ${startTurn} 轮`;
+    return `第 ${startTurn}-${endTurn} 轮`;
+}
+
+function renderMemoryDetailRow(label, value) {
+    const text = formatMemoryValue(value);
+    if (!text) return "";
+    return `
+        <div class="memory-detail-item">
+            <span class="memory-detail-label">${escapeHtml(label)}</span>
+            <span class="memory-detail-value">${escapeHtml(text)}</span>
+        </div>
+    `;
+}
+
+function renderMemoryDetailSection(title, rows) {
+    const content = rows.filter(Boolean).join("");
+    if (!content) return "";
+    return `
+        <section class="memory-detail-section">
+            <div class="memory-detail-title">${escapeHtml(title)}</div>
+            <div class="memory-detail-grid">${content}</div>
+        </section>
+    `;
+}
+
+function renderMemoryTimeline(entries) {
+    const items = Array.isArray(entries) ? entries : [];
+    const content = items.map((entry) => {
+        if (!entry || typeof entry !== "object") return "";
+        if (entry.kind === "observation") {
+            const meta = [
+                formatMemoryValue(entry.recorded_at),
+                formatMemoryValue(entry.message_type),
+                formatTurnRange(entry.turn_start, entry.turn_end),
+                formatMemoryValue(entry.session_id) ? `会话 ${formatMemoryValue(entry.session_id)}` : "",
+                formatMemoryValue(entry.dialogue_key) ? `对话 ${formatMemoryValue(entry.dialogue_key)}` : "",
+                formatMemoryValue(entry.group_id) ? `群 ${formatMemoryValue(entry.group_id)}` : ""
+            ].filter(Boolean).join(" · ");
+            return `
+                <div class="memory-timeline-item">
+                    <div class="memory-timeline-kind">观察记录</div>
+                    <div class="memory-timeline-meta">${escapeHtml(meta || "来源未记录")}</div>
+                </div>
+            `;
+        }
+        if (entry.kind === "reflection") {
+            const meta = [
+                formatMemoryValue(entry.reflected_at),
+                formatMemoryValue(entry.conflict_type) ? `冲突 ${formatMemoryValue(entry.conflict_type)}` : "",
+                formatMemoryValue(entry.action) ? `动作 ${formatMemoryValue(entry.action)}` : "",
+                formatMemoryNumber(entry.confidence) ? `置信度 ${formatMemoryNumber(entry.confidence)}` : ""
+            ].filter(Boolean).join(" · ");
+            const body = [formatMemoryValue(entry.summary), formatMemoryValue(entry.reason)].filter(Boolean).join("\n");
+            return `
+                <div class="memory-timeline-item">
+                    <div class="memory-timeline-kind">反思结论</div>
+                    <div class="memory-timeline-meta">${escapeHtml(meta || "反思记录")}</div>
+                    ${body ? `<div class="memory-timeline-body">${escapeHtml(body)}</div>` : ""}
+                </div>
+            `;
+        }
+        return "";
+    }).filter(Boolean).join("");
+    if (!content) return "";
+    return `
+        <section class="memory-detail-section memory-timeline-section">
+            <div class="memory-detail-title">演化轨迹</div>
+            <div class="memory-timeline-list">${content}</div>
+        </section>
+    `;
+}
+
+function renderMemoryCardDetails(item) {
+    const summary = formatMemoryValue(item.summary);
+    const sourceSection = renderMemoryDetailSection("来源锚点", [
+        renderMemoryDetailRow("消息类型", item.source_message_type),
+        renderMemoryDetailRow("会话", item.source_session_id),
+        renderMemoryDetailRow("对话键", item.source_dialogue_key),
+        renderMemoryDetailRow("轮次", formatTurnRange(item.source_turn_start, item.source_turn_end)),
+        renderMemoryDetailRow("来源群", item.source_group_id),
+        renderMemoryDetailRow("消息 ID", Array.isArray(item.source_message_ids) ? item.source_message_ids.filter(Boolean).join(", ") : "")
+    ]);
+    const patchSection = renderMemoryDetailSection("冲突与补丁", [
+        renderMemoryDetailRow("补丁状态", item.patch_status),
+        renderMemoryDetailRow("补丁动作", item.patch_action),
+        renderMemoryDetailRow("冲突类型", item.patch_conflict_type),
+        renderMemoryDetailRow("目标记忆", Array.isArray(item.patch_target_memory_ids) ? item.patch_target_memory_ids.filter(Boolean).join(", ") : ""),
+        renderMemoryDetailRow("后继记忆", item.patch_successor_memory_id),
+        renderMemoryDetailRow("后继类型", item.patch_successor_memory_type),
+        renderMemoryDetailRow("置信度", formatMemoryNumber(item.patch_confidence)),
+        renderMemoryDetailRow("处理原因", item.patch_reason)
+    ]);
+    const reflection = item?.reflection && typeof item.reflection === "object" ? item.reflection : {};
+    const reflectionSection = renderMemoryDetailSection("反思结论", [
+        renderMemoryDetailRow("摘要", reflection.summary),
+        renderMemoryDetailRow("理由", reflection.reason),
+        renderMemoryDetailRow("证据", Array.isArray(reflection.evidence) ? reflection.evidence.map((entry) => {
+            if (!entry || typeof entry !== "object") return "";
+            return [formatMemoryValue(entry.kind), formatMemoryValue(entry.memory_id), formatMemoryValue(entry.content)].filter(Boolean).join(": ");
+        }).filter(Boolean).join(" | ") : ""),
+        renderMemoryDetailRow("置信度", formatMemoryNumber(reflection.confidence)),
+        renderMemoryDetailRow("反思时间", reflection.reflected_at)
+    ]);
+    return `
+        ${summary ? `<section class="memory-summary-block"><div class="memory-detail-title">摘要</div><div class="memory-summary-text">${escapeHtml(summary)}</div></section>` : ""}
+        ${sourceSection}
+        ${patchSection}
+        ${reflectionSection}
+        ${renderMemoryTimeline(item.evolution)}
+    `;
+}
+
 function collectSectionPayload(section) {
     const form = document.querySelector(`[data-form-section="${section}"]`);
     if (!form) return {};
     const formData = new FormData(form);
-    if (section === "network") return { ws_url: String(formData.get("ws_url") || "").trim(), http_url: String(formData.get("http_url") || "").trim() };
+    if (section === "network") {
+        return {
+            adapter: String(formData.get("adapter") || "napcat").trim(),
+            platform: String(formData.get("platform") || "").trim(),
+            ws_url: String(formData.get("ws_url") || "").trim(),
+            http_url: String(formData.get("http_url") || "").trim()
+        };
+    }
     if (section === "model") {
         const payload = { ai_service: {}, group_reply_decision: {}, vision_service: {}, memory_rerank: {}, memory_extraction: {} };
         for (const [name, value] of formData.entries()) {
@@ -1057,15 +1193,18 @@ function renderMemorySections(sections) {
             <article class="memory-card" data-memory-id="${escapeHtml(item.id)}" data-memory-kind="${escapeHtml(item.kind)}" data-memory-owner="${escapeHtml(item.owner_user_id || "")}">
                 <div class="memory-card-head">
                     <div class="memory-card-meta-row">
+                        <span class="memory-chip is-kind">${item.kind === "important" ? "重要" : "普通"}</span>
                         <span class="memory-chip ${item.is_shared ? "is-shared" : "is-private"}">${item.is_shared ? "共享" : "私有"}</span>
                         ${item.owner_user_id ? `<span class="memory-chip">用户 ${escapeHtml(item.owner_user_id)}</span>` : ""}
                         ${item.group_id ? `<span class="memory-chip">群 ${escapeHtml(item.group_id)}</span>` : ""}
+                        ${item.patch_status ? `<span class="memory-chip">补丁 ${escapeHtml(item.patch_status)}</span>` : ""}
                     </div>
                     <span class="memory-time">${escapeHtml(item.updated_at || item.created_at || "")}</span>
                 </div>
                 <div class="memory-card-body">
                     <p class="memory-card-text" data-memory-text>${escapeHtml(item.content)}</p>
                     <textarea class="form-control form-textarea memory-editor hidden" data-memory-editor>${escapeHtml(item.content)}</textarea>
+                    ${renderMemoryCardDetails(item)}
                 </div>
                 <div class="memory-card-actions">
                     <button class="btn-outline memory-action" type="button" data-memory-edit>编辑</button>

@@ -16,22 +16,33 @@ from src.core.platform_models import (
 )
 
 PayloadEmitter = Callable[[Dict[str, Any]], Awaitable[bool] | bool | None]
+LifecycleHook = Callable[[], Awaitable[None] | None]
 
 
 class ApiAdapter(PlatformAdapter):
     platform = "api"
     adapter_name = "openapi"
 
-    def __init__(self, *, emit: Optional[PayloadEmitter] = None) -> None:
+    def __init__(
+        self,
+        *,
+        emit: Optional[PayloadEmitter] = None,
+        on_connect: Optional[LifecycleHook] = None,
+        on_disconnect: Optional[LifecycleHook] = None,
+    ) -> None:
         self._emit = emit
+        self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._ready = True
         self.sent_payloads: list[Dict[str, Any]] = []
 
     async def run(self) -> None:
         self._ready = True
+        await self._run_hook(self._on_connect)
 
     async def disconnect(self) -> None:
         self._ready = False
+        await self._run_hook(self._on_disconnect)
 
     async def send(self, data: Dict[str, Any]) -> bool:
         payload = dict(data or {})
@@ -48,6 +59,13 @@ class ApiAdapter(PlatformAdapter):
 
     def is_ready(self) -> bool:
         return self._ready
+
+    async def _run_hook(self, hook: Optional[LifecycleHook]) -> None:
+        if hook is None:
+            return
+        result = hook()
+        if inspect.isawaitable(result):
+            await result
 
     def normalize_inbound_payload(self, payload: Dict[str, Any]) -> Optional[InboundEvent]:
         raw_payload = dict(payload or {})

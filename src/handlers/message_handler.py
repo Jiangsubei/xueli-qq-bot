@@ -24,9 +24,10 @@ from src.core.runtime_metrics import RuntimeMetrics
 from src.emoji.manager import EmojiManager
 from src.emoji.reply_service import EmojiReplyService
 from src.handlers.command_handler import CommandHandler
+from src.handlers.conversation_engagement import build_companionship_signals
+from src.handlers.conversation_plan_coordinator import ConversationPlanCoordinator
 from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
-from src.handlers.group_plan_coordinator import GroupPlanCoordinator
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
@@ -46,7 +47,7 @@ class MessageHandler:
         image_client: Optional[ImageClient] = None,
         vision_client: Optional[VisionClient] = None,
         memory_manager: Optional[Any] = None,
-        group_reply_planner: Optional[ConversationPlanner] = None,
+        conversation_planner: Optional[ConversationPlanner] = None,
         *,
         runtime_metrics: Optional[RuntimeMetrics] = None,
         status_provider: Optional[Any] = None,
@@ -72,14 +73,14 @@ class MessageHandler:
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
         )
-        self.group_reply_planner = group_reply_planner or ConversationPlanner(
+        self.conversation_planner = conversation_planner or ConversationPlanner(
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
         )
 
         self.session_manager = ConversationSessionManager()
-        self.group_plan_coordinator = GroupPlanCoordinator(
-            planner=self.group_reply_planner,
+        self.conversation_plan_coordinator = ConversationPlanCoordinator(
+            planner=self.conversation_planner,
             session_manager=self.session_manager,
             runtime_metrics=self.runtime_metrics,
             group_reply_config=self.app_config.group_reply,
@@ -369,7 +370,7 @@ class MessageHandler:
             self._group_repeat_cooldowns.pop(key, None)
 
     def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
-        return self.group_plan_coordinator.format_group_window_context(reply_context)
+        return self.conversation_plan_coordinator.format_group_window_context(reply_context)
 
     def _build_rule_plan(
         self,
@@ -377,8 +378,22 @@ class MessageHandler:
         reason: str,
         source: str = "rule",
         reply_context: Optional[Dict[str, Any]] = None,
+        event: Optional[MessageEvent] = None,
     ) -> MessageHandlingPlan:
-        return MessageHandlingPlan(action=action.value, reason=reason, source=source, reply_context=reply_context)
+        prompt_plan = None
+        if event is not None and action == MessagePlanAction.REPLY:
+            prompt_plan = self.conversation_planner.prompt_planner.default_prompt_plan(
+                event=event,
+                action=action.value,
+                context=None,
+            )
+        return MessageHandlingPlan(
+            action=action.value,
+            reason=reason,
+            source=source,
+            reply_context=reply_context,
+            prompt_plan=prompt_plan,
+        )
 
     def _group_planner_available(self) -> bool:
         return is_group_reply_decision_configured(self.app_config)
@@ -437,7 +452,7 @@ class MessageHandler:
         return display_text
 
     async def _plan_group_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
-        return await self.group_plan_coordinator.plan_group_message(
+        return await self.conversation_plan_coordinator.plan_group_message(
             event=event,
             user_message=self.extract_user_message(event),
             trace_id=trace_id,
@@ -508,7 +523,7 @@ class MessageHandler:
             temporal_context=temporal_context,
             pending_items=pending_items,
         )
-        plan = await self.group_reply_planner.plan(
+        plan = await self.conversation_planner.plan(
             event=event,
             user_message=merged_user_message,
             recent_messages=[],
@@ -520,6 +535,9 @@ class MessageHandler:
         if plan.should_reply:
             reply_context.setdefault("reply_mode", "private")
             reply_context["merged_user_message"] = merged_user_message
+            engagement_mode = str(getattr(getattr(plan, "prompt_plan", None), "engagement_mode", "") or "").strip()
+            if engagement_mode:
+                reply_context["engagement_mode"] = engagement_mode
         return MessageHandlingPlan(
             action=plan.action,
             reason=plan.reason,
@@ -530,7 +548,7 @@ class MessageHandler:
         )
 
     async def _build_group_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
-        return await self.group_plan_coordinator.build_direct_reply_context(
+        return await self.conversation_plan_coordinator.build_direct_reply_context(
             event=event,
             user_message=self.extract_user_message(event),
             reply_mode="at",
@@ -556,6 +574,7 @@ class MessageHandler:
                 "群里短时间内连续出现了相同消息，复读一次",
                 source="repeat_echo",
                 reply_context={"direct_reply_text": repeat_echo_text, "reply_mode": "repeat_echo"},
+                event=event,
             )
 
         planner_available = self._group_planner_available()
@@ -569,11 +588,13 @@ class MessageHandler:
                         MessagePlanAction.REPLY,
                         "群聊仅在被 @ 时回复，当前消息命中 @",
                         reply_context=reply_context,
+                        event=event,
                     )
                 return self._build_rule_plan(
                     MessagePlanAction.REPLY,
                     "未配置群聊判断模型，当前仅在被 @ 时回复",
                     reply_context=reply_context,
+                    event=event,
                 )
             if planner_available and self.app_config.group_reply.only_reply_when_at:
                 return self._build_rule_plan(MessagePlanAction.IGNORE, "群聊仅在被 @ 时回复，跳过未 @ 消息")
@@ -585,6 +606,7 @@ class MessageHandler:
                 MessagePlanAction.REPLY,
                 "群聊消息显式 @ 了助手，直接回复",
                 reply_context=reply_context,
+                event=event,
             )
 
         return await self._plan_group_message(event, trace_id=trace_id)
@@ -656,6 +678,11 @@ class MessageHandler:
         text = str(user_message or "").strip()
         normalized = re.sub(r"\s+", "", text).lower()
         pending = list(pending_items or [])
+        previous_role = ""
+        if conversation.messages:
+            previous_role = str(conversation.messages[-1].get("role") or "").strip().lower()
+            if previous_role not in {"user", "assistant"}:
+                previous_role = ""
         return {
             "batch_count": max(1, len(pending)),
             "merged_from_multiple_inputs": len(pending) > 1,
@@ -665,6 +692,14 @@ class MessageHandler:
             "ends_like_incomplete": bool(text.endswith(("...", "..", "。。。", "然后", "就是"))),
             "recent_gap_bucket": str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
             "conversation_turn_count": len(conversation.messages),
+            **build_companionship_signals(
+                text,
+                current_user_id=event.user_id,
+                previous_speaker_role=previous_role,
+                previous_user_id=event.user_id,
+                recent_gap_bucket=str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
+                recent_history_count=len(conversation.messages),
+            ),
         }
 
     async def _push_private_pending_input(
@@ -793,7 +828,7 @@ class MessageHandler:
     async def record_group_reply_sent(self, event: MessageEvent, message: str) -> None:
         if event.message_type != MessageType.GROUP.value:
             return
-        await self.group_plan_coordinator.record_assistant_reply(event.group_id, message)
+        await self.conversation_plan_coordinator.record_assistant_reply(event.group_id, message)
 
     def _get_help_text(self) -> str:
         return self.command_handler.get_help_text()
@@ -1045,8 +1080,8 @@ class MessageHandler:
         return count
 
     async def close(self) -> None:
-        await self.group_plan_coordinator.close()
-        await self._close_resource(self.group_reply_planner)
+        await self.conversation_plan_coordinator.close()
+        await self._close_resource(self.conversation_planner)
         await self._close_resource(self.emoji_manager)
         await self._close_resource(self.vision_client)
         await self._close_resource(self.image_client)

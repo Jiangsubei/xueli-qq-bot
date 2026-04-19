@@ -501,7 +501,7 @@ class ReplyPipeline:
             payload = await self.host.memory_manager.search_memories_with_context(
                 user_id=str(event.user_id),
                 query=user_message,
-                top_k=5,
+                top_k=self._memory_top_k(prompt_plan),
                 include_conversations=self._layer_enabled(prompt_plan, "enable_recent_context", default=True),
                 include_sections=include_sections,
                 section_intensity=section_intensity,
@@ -742,6 +742,74 @@ class ReplyPipeline:
             return default
         return bool(getattr(prompt_plan.policy, attr, default))
 
+    def _context_budget(self, prompt_plan: Optional[PromptPlan]) -> str:
+        if not prompt_plan:
+            return "normal"
+        value = str(getattr(prompt_plan, "context_budget", "normal") or "normal").strip().lower()
+        return value if value in {"low", "normal", "high"} else "normal"
+
+    def _memory_top_k(self, prompt_plan: Optional[PromptPlan]) -> int:
+        return {
+            "low": 3,
+            "normal": 5,
+            "high": 7,
+        }.get(self._context_budget(prompt_plan), 5)
+
+    def _history_limit(self, prompt_plan: Optional[PromptPlan]) -> int:
+        base = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
+        if base <= 0:
+            return 0
+        budget = self._context_budget(prompt_plan)
+        if budget == "low":
+            return min(base, 3)
+        if budget == "high":
+            return max(base, min(base + 2, 12))
+        return base
+
+    def _build_continuity_guidance_prompt(self, prompt_plan: Optional[PromptPlan]) -> str:
+        mode = str(getattr(prompt_plan, "continuity_mode", "direct_continue") or "direct_continue").strip().lower() if prompt_plan else "direct_continue"
+        guidance = {
+            "direct_continue": "这次回复更适合直接顺着当前语境接下去。",
+            "resume_recent_topic": "这次回复更适合承接最近刚聊过的话题，但不要把旧内容展开得太重。",
+            "resume_old_topic": "这次回复更适合带一点重新接上旧话题的承接感，可以自然回忆之前聊到的重点。",
+            "memory_query": "这次回复更像是在围绕记忆或旧信息作答，优先保证事实和上下文对应正确。",
+            "casual_chat": "这次回复更像是轻松闲聊，优先自然、轻盈，不要过度分析。",
+            "clarification": "这次回复更像是在澄清或修正理解，优先准确，不要急着延展话题。",
+        }.get(mode, "")
+        return f"连续性策略：{guidance}" if guidance else ""
+
+    def _build_engagement_mode_prompt(self, prompt_plan: Optional[PromptPlan]) -> str:
+        mode = str(getattr(prompt_plan, "engagement_mode", "neutral") or "neutral").strip().lower() if prompt_plan else "neutral"
+        guidance = {
+            "neutral": "",
+            "gentle_care": "陪伴方式：优先做轻柔关怀，先接住状态和情绪，再决定要不要补建议，不要突然上价值。",
+            "topic_continue": "陪伴方式：优先顺着刚刚的话题自然往下接，延续上下文，不要生硬跳题。",
+            "light_presence": "陪伴方式：轻轻接一句保持存在感即可，不要把接话写成抢话。",
+        }.get(mode, "")
+        return guidance
+
+    def _build_reply_style_prompt(self, prompt_plan: Optional[PromptPlan]) -> str:
+        style = str(getattr(prompt_plan, "reply_style", "normal") or "normal").strip().lower() if prompt_plan else "normal"
+        guidance = {
+            "concise": "回复风格：偏简洁，能一句说清就不要展开太多。",
+            "normal": "回复风格：自然均衡，既要有回应感，也不要写得太满。",
+            "deep": "回复风格：可以适度深入，补足理解、情绪承接和自然延伸，但不要写成长篇说教。",
+        }.get(style, "")
+        return guidance
+
+    def _build_context_budget_prompt(self, prompt_plan: Optional[PromptPlan]) -> str:
+        budget = self._context_budget(prompt_plan)
+        guidance = {
+            "low": "上下文预算：低，优先围绕当前消息和最必要信息回复。",
+            "normal": "上下文预算：正常，可以参考最近上下文和必要记忆。",
+            "high": "上下文预算：高，可以更充分结合近期上下文、会话恢复和相关记忆来组织回复。",
+        }.get(budget, "")
+        return guidance
+
+    def _build_prompt_plan_notes_prompt(self, prompt_plan: Optional[PromptPlan]) -> str:
+        notes = str(getattr(prompt_plan, "notes", "") or "").strip() if prompt_plan else ""
+        return f"补充提示：{notes}" if notes else ""
+
     def _build_temporal_context_prompt(self, temporal_context: Optional[TemporalContext], prompt_plan: Optional[PromptPlan]) -> str:
         if not self._layer_enabled(prompt_plan, "enable_temporal_context", default=True):
             return ""
@@ -829,6 +897,11 @@ class ReplyPipeline:
             self.host._build_system_prompt(),
             self._build_session_context_prompt(event),
             self._build_reply_context_prompt(event=event, plan=plan),
+            self._build_continuity_guidance_prompt(prompt_plan),
+            self._build_engagement_mode_prompt(prompt_plan),
+            self._build_reply_style_prompt(prompt_plan),
+            self._build_context_budget_prompt(prompt_plan),
+            self._build_prompt_plan_notes_prompt(prompt_plan),
             self._build_temporal_context_prompt(temporal_context, prompt_plan),
             self._build_history_context_prompt(event, recent_history_text, plan)
             if self._layer_enabled(prompt_plan, "enable_recent_context", default=True)
@@ -886,7 +959,7 @@ class ReplyPipeline:
         conversation: Conversation,
         plan: Optional[MessageHandlingPlan],
     ) -> str:
-        max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
+        max_length = self._history_limit(getattr(plan, "prompt_plan", None) if plan else None)
         if max_length <= 0:
             return ""
         rendered: List[str] = []
@@ -925,7 +998,7 @@ class ReplyPipeline:
         if not plan or not getattr(plan, "reply_context", None):
             return []
         window_messages = list((plan.reply_context or {}).get("window_messages") or [])
-        max_length = max(0, int(self.host.app_config.bot_behavior.max_context_length or 0))
+        max_length = self._history_limit(getattr(plan, "prompt_plan", None) if plan else None)
         if max_length <= 0:
             return []
         rendered: List[str] = []

@@ -113,6 +113,9 @@ class PersonFactService:
         content = str(memory.content or "").strip()
         if len(content) < 3:
             return False
+        patch_status = str(dict(memory.metadata or {}).get("patch_status") or "").strip().lower()
+        if patch_status in {"superseded", "contextualized"}:
+            return False
         metadata = self.access_policy.normalize_memory_record(
             content=content,
             owner_user_id=str(memory.owner_user_id or ""),

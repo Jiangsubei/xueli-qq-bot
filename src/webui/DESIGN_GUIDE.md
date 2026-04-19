@@ -113,6 +113,7 @@
 - 网络设置页优先读写 `adapter_connection`，允许兼容旧 `napcat` section 的迁移读取。
 - 头像使用真实上传接口和真实文件存储。
 - `重启服务` 是真实功能，含义固定为：只重启 bot 后端，不重启 Django WebUI，页面保持在线。
+- `views.py` 应优先依赖 `runtime_service / config_service / memory_service / avatar_service` 这些 facade，而不是继续把所有导入都直接指向 `services.py`。
 
 ## 不要做的事
 
@@ -137,6 +138,10 @@
 - `src/webui/console/static/console/css/console.css`
 - `src/webui/console/static/console/js/console.js`
 - `src/webui/console/services.py`
+- `src/webui/console/runtime_service.py`
+- `src/webui/console/config_service.py`
+- `src/webui/console/memory_service.py`
+- `src/webui/console/avatar_service.py`
 
 ## 改动流程
 

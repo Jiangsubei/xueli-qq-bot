@@ -75,6 +75,8 @@ MEMORY_SCOPE_OPTIONS = [
 ]
 FIELD_HELP = {
     "network": {
+        "adapter": "选择当前接入的 adapter，例如 napcat 或 api/openapi。",
+        "platform": "填写这个 adapter 对外暴露的平台标识，例如 qq、api 或你的自定义平台名。",
         "ws_url": "填写平台 adapter 接收事件的 WebSocket 地址。",
         "http_url": "填写平台 adapter 主动调用使用的 HTTP 地址。",
     },
@@ -444,6 +446,8 @@ def _build_runtime_payload(app_config, snapshot_state: Dict[str, Any]) -> Dict[s
         "online": available and lifecycle_state not in {"restarting", "starting", "error"},
         "online_label": online_label,
         "assistant_name": str(assistant.get("name") or app_config.assistant_profile.name),
+        "adapter_name": str(getattr(app_config.adapter_connection, "adapter", "napcat") or "napcat"),
+        "adapter_platform": str(getattr(app_config.adapter_connection, "platform", "qq") or "qq"),
         "adapter_connection": "\u5df2\u8fde\u63a5" if connected else "\u672a\u8fde\u63a5",
         "vision_status": _vision_status_label(vision_status),
         "memory_status": "\u5df2\u5f00\u542f" if memory_enabled else "\u672a\u5f00\u542f",
@@ -554,6 +558,36 @@ def _serialize_memory_item(item: MemoryItem | ImportantMemoryItem, *, kind: str,
     group_id = str(scope.get("group_id") or metadata.get("group_id") or metadata.get("source_group_id") or "")
     group = "important" if kind == "important" else _memory_group(metadata)
     updated_at = str(getattr(item, "updated_at", "") or getattr(item, "created_at", "") or "")
+    reflection = dict(metadata.get("reflection") or {})
+    source_observations = list(metadata.get("source_observations") or []) if isinstance(metadata.get("source_observations"), list) else []
+    evolution = []
+    for observation in source_observations:
+        if not isinstance(observation, dict):
+            continue
+        evolution.append(
+            {
+                "kind": "observation",
+                "session_id": str(observation.get("session_id") or ""),
+                "dialogue_key": str(observation.get("dialogue_key") or ""),
+                "turn_start": _safe_int(observation.get("turn_start"), 0),
+                "turn_end": _safe_int(observation.get("turn_end"), 0),
+                "message_type": str(observation.get("message_type") or ""),
+                "group_id": str(observation.get("group_id") or ""),
+                "recorded_at": str(observation.get("recorded_at") or ""),
+            }
+        )
+    if reflection:
+        evolution.append(
+            {
+                "kind": "reflection",
+                "conflict_type": str(reflection.get("conflict_type") or ""),
+                "action": str(reflection.get("action") or ""),
+                "summary": str(reflection.get("summary") or ""),
+                "reason": str(reflection.get("reason") or ""),
+                "confidence": reflection.get("confidence"),
+                "reflected_at": str(reflection.get("reflected_at") or metadata.get("patch_updated_at") or ""),
+            }
+        )
     return {
         "id": str(getattr(item, "id", "") or ""),
         "kind": kind,
@@ -571,6 +605,25 @@ def _serialize_memory_item(item: MemoryItem | ImportantMemoryItem, *, kind: str,
         "rerank_score": getattr(item, "rerank_score", None),
         "combined_score": getattr(item, "combined_score", None),
         "ranking_stage": getattr(item, "ranking_stage", None),
+        "summary": str(metadata.get("summary") or metadata.get("patch_final_summary") or "").strip(),
+        "source_message_type": str(metadata.get("source_message_type") or ""),
+        "source_session_id": str(metadata.get("source_session_id") or ""),
+        "source_dialogue_key": str(metadata.get("source_dialogue_key") or ""),
+        "source_turn_start": _safe_int(metadata.get("source_turn_start"), 0),
+        "source_turn_end": _safe_int(metadata.get("source_turn_end"), 0),
+        "source_group_id": str(metadata.get("source_group_id") or metadata.get("group_id") or ""),
+        "source_message_ids": list(metadata.get("source_message_ids") or []) if isinstance(metadata.get("source_message_ids"), list) else [],
+        "patch_status": str(metadata.get("patch_status") or ""),
+        "patch_action": str(metadata.get("patch_action") or ""),
+        "patch_conflict_type": str(metadata.get("patch_conflict_type") or ""),
+        "patch_reason": str(metadata.get("patch_reason") or ""),
+        "patch_confidence": metadata.get("patch_confidence"),
+        "patch_target_memory_ids": list(metadata.get("patch_target_memory_ids") or []) if isinstance(metadata.get("patch_target_memory_ids"), list) else [],
+        "patch_successor_memory_id": str(metadata.get("patch_successor_memory_id") or ""),
+        "patch_successor_memory_type": str(metadata.get("patch_successor_memory_type") or ""),
+        "reflection": reflection,
+        "source_observations": source_observations,
+        "evolution": evolution,
     }
 
 
@@ -817,6 +870,8 @@ def build_dashboard_context() -> Dict[str, Any]:
         "assistant_avatar_url": assistant_avatar_url,
         "field_help": FIELD_HELP,
         "network_form": {
+            "adapter": getattr(app_config.adapter_connection, "adapter", "napcat"),
+            "platform": getattr(app_config.adapter_connection, "platform", "qq"),
             "ws_url": app_config.adapter_connection.ws_url,
             "http_url": app_config.adapter_connection.http_url,
         },
@@ -1198,6 +1253,14 @@ def _write_validated_config(raw_data: Dict[str, Any]) -> None:
 def save_network_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     _, raw = _load_config_document()
     adapter_connection = dict(raw.get("adapter_connection") or raw.get("napcat") or {})
+    adapter_name = str(payload.get("adapter") or adapter_connection.get("adapter") or "napcat").strip().lower() or "napcat"
+    platform = str(
+        payload.get("platform")
+        or adapter_connection.get("platform")
+        or ("api" if adapter_name in {"api", "openapi"} else "qq")
+    ).strip() or "qq"
+    adapter_connection["adapter"] = adapter_name
+    adapter_connection["platform"] = platform
     adapter_connection["ws_url"] = str(payload.get("ws_url") or "").strip()
     adapter_connection["http_url"] = str(payload.get("http_url") or "").strip()
     raw["adapter_connection"] = adapter_connection

@@ -17,6 +17,8 @@ _DEFAULT_EMOTION_LABELS = ["开心", "喜欢", "惊讶", "无语", "委屈", "�
 
 @dataclass(frozen=True)
 class AdapterConnectionConfig:
+    adapter: str = "napcat"
+    platform: str = "qq"
     ws_url: str = "ws://0.0.0.0:8095"
     http_url: str = "http://127.0.0.1:6700"
 
@@ -208,8 +210,12 @@ class Config:
     _MAPPING = {
         "NAPCAT_WS_URL": ("adapter_connection", "ws_url"),
         "NAPCAT_HTTP_URL": ("adapter_connection", "http_url"),
+        "ADAPTER_NAME": ("adapter_connection", "adapter"),
+        "ADAPTER_PLATFORM": ("adapter_connection", "platform"),
         "ADAPTER_CONNECTION_WS_URL": ("adapter_connection", "ws_url"),
         "ADAPTER_CONNECTION_HTTP_URL": ("adapter_connection", "http_url"),
+        "ADAPTER_CONNECTION_ADAPTER": ("adapter_connection", "adapter"),
+        "ADAPTER_CONNECTION_PLATFORM": ("adapter_connection", "platform"),
         "OPENAI_API_BASE": ("ai_service", "api_base"),
         "OPENAI_API_KEY": ("ai_service", "api_key"),
         "OPENAI_MODEL": ("ai_service", "model"),
@@ -479,6 +485,8 @@ class Config:
     def _build_adapter_connection_config(self) -> AdapterConnectionConfig:
         section = self._get_adapter_connection_section()
         return AdapterConnectionConfig(
+            adapter=self._literal_string(section, "adapter_connection", "adapter", allowed={"napcat", "api", "openapi"}, default="napcat"),
+            platform=self._optional_string(section, "adapter_connection", "platform", default="qq") or "qq",
             ws_url=self._require_string(section, "adapter_connection", "ws_url", default="ws://0.0.0.0:8095"),
             http_url=self._require_string(section, "adapter_connection", "http_url", default="http://127.0.0.1:6700"),
         )

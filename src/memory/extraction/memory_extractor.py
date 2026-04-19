@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -19,6 +20,9 @@ class ExtractionConfig:
     extract_every_n_turns: int = 3
     max_dialogue_length: int = 10
     min_memory_quality: float = 0.7
+    reflection_enabled: bool = True
+    reflection_candidate_limit: int = 3
+    reflection_min_topic_overlap: float = 0.45
     system_prompt: str = (
         "你现在的任务，是从一段用户和助手之间的对话里，整理出值得记住的、关于用户的信息。\n"
         "你会同时看到用户发言和助手发言，但你需要注意：助手发言只用于帮助你理解上下文，不能直接当成记忆来源。"
@@ -43,6 +47,19 @@ class ExtractionConfig:
         "重要记忆：[IMPORTANT][Tn] 用户123: 记忆内容\n"
         "重要记忆：[IMPORTANT][Tn-Tm] 用户123: 记忆内容"
     )
+    reflection_system_prompt: str = (
+        "你是一个冷静的记忆反思器。你的任务不是生成新记忆，而是判断一条新记忆与旧记忆之间是否存在真正冲突。\n"
+        "你必须严格基于提供的证据判断，不要脑补。\n"
+        "如果只是时间变化、阶段性状态、场景限制、表达修正，也要明确指出，不要简单视为长期事实反转。\n"
+        "你必须输出一个 JSON 对象，不要输出任何额外说明。\n"
+        "JSON 字段要求：\n"
+        "has_conflict: boolean，是否存在需要记录的记忆冲突或修补关系\n"
+        "conflict_type: string，可选值为 none / preference_change / temporary_state / scope_specific / factual_correction / ambiguous\n"
+        "action: string，可选值为 keep_both / keep_both_prefer_recent / prefer_new / prefer_existing / merge_context\n"
+        "summary: string，给后续提示词使用的中性总结；如果没有冲突则为空字符串\n"
+        "reason: string，说明你的判断依据\n"
+        "confidence: number，0 到 1 之间\n"
+    )
 
 
 @dataclass
@@ -59,6 +76,18 @@ class LLMExtractionResponse:
     content: str
     provider: str = ""
     model: str = ""
+
+
+@dataclass
+class MemoryReflectionResult:
+    has_conflict: bool = False
+    conflict_type: str = "none"
+    action: str = "keep_both"
+    summary: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+    targets: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class MemoryExtractor:
@@ -80,6 +109,46 @@ class MemoryExtractor:
         self._session_owner: Dict[str, str] = {}
         self._session_dialogue_key: Dict[str, str] = {}
         self._session_extracted_upto: Dict[str, int] = {}
+
+        self._reflection_negative_cues = (
+            "不喜欢",
+            "讨厌",
+            "不想",
+            "不要",
+            "不喝",
+            "不吃",
+            "不再",
+            "不愿意",
+            "拒绝",
+            "别再",
+            "不能接受",
+            "没兴趣",
+        )
+        self._reflection_stance_terms = (
+            "喜欢",
+            "讨厌",
+            "不喜欢",
+            "不想",
+            "想",
+            "想要",
+            "不要",
+            "愿意",
+            "不愿意",
+            "爱",
+            "不爱",
+            "偏好",
+            "习惯",
+            "最近",
+            "现在",
+            "目前",
+            "今天",
+            "这几天",
+            "暂时",
+            "先",
+            "喝",
+            "吃",
+            "用",
+        )
 
     def add_dialogue_turn(
         self,
@@ -179,6 +248,7 @@ class MemoryExtractor:
 
         allowed_turn_ids = {int(turn["turn_id"]) for turn in visible_turns}
         related_dialogue = self._build_related_dialogue_snapshot(visible_turns)
+        existing_records = await self._load_existing_memory_records(user_id)
         saved_memories: List[MemoryItem] = []
         important_count = 0
         ordinary_count = 0
@@ -211,6 +281,18 @@ class MemoryExtractor:
                 anchor_turns=anchor_turns,
                 related_dialogue=related_dialogue,
             )
+            reflection = await self._reflect_on_memory_conflict(
+                user_id=user_id,
+                item=item,
+                anchor_turns=anchor_turns,
+                existing_records=existing_records,
+            )
+            if reflection and reflection.has_conflict:
+                metadata = self._merge_reflection_into_metadata(
+                    metadata=metadata,
+                    reflection=reflection,
+                    conflict_candidates=reflection.evidence,
+                )
             memory_type = "important" if item.is_important else "ordinary"
             importance = 5 if item.is_important else max(1, min(int(item.importance), 5))
 
@@ -228,13 +310,23 @@ class MemoryExtractor:
             )
             if mem:
                 saved_memories.append(mem)
+                if not self._is_suppressed_memory(mem.metadata):
+                    existing_records.append(
+                        {
+                            "id": mem.id,
+                            "kind": memory_type,
+                            "content": mem.content,
+                            "metadata": dict(mem.metadata or {}),
+                        }
+                    )
                 if item.is_important:
                     important_count += 1
                 else:
                     ordinary_count += 1
 
+            important_memory = None
             if item.is_important:
-                await self._sync_important_memory(
+                important_memory = await self._sync_important_memory(
                     user_id=user_id,
                     content=item.content,
                     source="extraction",
@@ -242,12 +334,22 @@ class MemoryExtractor:
                     metadata=metadata,
                 )
             elif mem and self._should_promote_to_important(mem):
-                await self._sync_important_memory(
+                important_memory = await self._sync_important_memory(
                     user_id=user_id,
                     content=mem.content,
                     source="promoted_from_ordinary",
                     priority=4,
                     metadata=metadata,
+                )
+
+            if reflection and mem:
+                successor_memory_id = str((important_memory.id if important_memory and item.is_important else mem.id) or "")
+                successor_memory_type = "important" if important_memory and item.is_important else memory_type
+                await self._apply_patch_merge(
+                    user_id=user_id,
+                    successor_memory_id=successor_memory_id,
+                    successor_memory_type=successor_memory_type,
+                    reflection=reflection,
                 )
 
         if saved_memories:
@@ -544,6 +646,429 @@ class MemoryExtractor:
             return None
         return start, end
 
+    async def _load_existing_memory_records(self, user_id: str) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        ordinary_memories = await self.memory_store.get_user_memories(user_id)
+        for memory in ordinary_memories:
+            if self._is_suppressed_memory(memory.metadata):
+                continue
+            records.append(
+                {
+                    "id": memory.id,
+                    "kind": "ordinary",
+                    "content": memory.content,
+                    "metadata": dict(memory.metadata or {}),
+                }
+            )
+
+        if self.important_memory_store:
+            important_memories = await self.important_memory_store.get_memories(user_id, min_priority=1)
+            for memory in important_memories:
+                if self._is_suppressed_memory(memory.metadata):
+                    continue
+                records.append(
+                    {
+                        "id": memory.id,
+                        "kind": "important",
+                        "content": memory.content,
+                        "metadata": dict(memory.metadata or {}),
+                    }
+                )
+        return records
+
+    async def _reflect_on_memory_conflict(
+        self,
+        *,
+        user_id: str,
+        item: ExtractedMemory,
+        anchor_turns: List[Dict[str, Any]],
+        existing_records: List[Dict[str, Any]],
+    ) -> Optional[MemoryReflectionResult]:
+        if not self.config.reflection_enabled or not existing_records:
+            return None
+
+        candidates = self._find_conflict_candidates(item.content, existing_records)
+        if not candidates:
+            return None
+
+        evidence = self._build_reflection_evidence(anchor_turns=anchor_turns, candidates=candidates)
+        response = await self._call_llm_for_reflection(
+            user_id=user_id,
+            new_memory=item.content,
+            anchor_turns=anchor_turns,
+            candidates=candidates,
+        )
+        reflection = self._parse_reflection_response(response.content)
+        if reflection is None or not reflection.has_conflict:
+            return None
+        reflection.evidence = evidence
+        reflection.targets = [
+            {
+                "memory_id": str(item.get("id") or ""),
+                "memory_type": str(item.get("kind") or "ordinary"),
+                "content": str(item.get("content") or ""),
+            }
+            for item in candidates
+        ]
+        return reflection
+
+    def _find_conflict_candidates(self, content: str, existing_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        scored_candidates: List[Dict[str, Any]] = []
+        for record in existing_records:
+            existing_content = str(record.get("content") or "").strip()
+            if not existing_content:
+                continue
+            score = self._estimate_conflict_score(content, existing_content)
+            if score <= 0:
+                continue
+            scored_candidates.append(
+                {
+                    "score": score,
+                    "id": str(record.get("id") or ""),
+                    "kind": str(record.get("kind") or "ordinary"),
+                    "content": existing_content,
+                    "metadata": dict(record.get("metadata") or {}),
+                }
+            )
+        scored_candidates.sort(key=lambda item: (item.get("score", 0.0), item.get("id", "")), reverse=True)
+        return scored_candidates[: max(1, int(self.config.reflection_candidate_limit or 3))]
+
+    def _estimate_conflict_score(self, left: str, right: str) -> float:
+        normalized_left = self._normalize_reflection_text(left)
+        normalized_right = self._normalize_reflection_text(right)
+        if not normalized_left or not normalized_right or normalized_left == normalized_right:
+            return 0.0
+
+        topic_left = self._strip_stance_terms(normalized_left)
+        topic_right = self._strip_stance_terms(normalized_right)
+        overlap = self._topic_overlap(topic_left, topic_right)
+        if overlap < float(self.config.reflection_min_topic_overlap or 0.45):
+            return 0.0
+
+        left_negative = self._has_negative_stance(normalized_left)
+        right_negative = self._has_negative_stance(normalized_right)
+        if left_negative == right_negative:
+            return 0.0
+
+        temporal_bonus = 0.0
+        if any(marker in normalized_left or marker in normalized_right for marker in ("最近", "现在", "目前", "今天", "这几天", "暂时")):
+            temporal_bonus = 0.1
+        return min(1.0, overlap + 0.25 + temporal_bonus)
+
+    def _normalize_reflection_text(self, text: str) -> str:
+        return re.sub(r"\s+", "", str(text or "").strip().lower())
+
+    def _strip_stance_terms(self, text: str) -> str:
+        normalized = str(text or "")
+        for term in self._reflection_stance_terms:
+            normalized = normalized.replace(term, "")
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]", "", normalized)
+        return normalized
+
+    def _topic_overlap(self, left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        left_chars = set(left)
+        right_chars = set(right)
+        if not left_chars or not right_chars:
+            return 0.0
+        return len(left_chars & right_chars) / min(len(left_chars), len(right_chars))
+
+    def _has_negative_stance(self, text: str) -> bool:
+        normalized = str(text or "")
+        return any(cue in normalized for cue in self._reflection_negative_cues)
+
+    def _build_reflection_evidence(
+        self,
+        *,
+        anchor_turns: List[Dict[str, Any]],
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        evidence: List[Dict[str, Any]] = []
+        turn_start = int(anchor_turns[0].get("turn_id", 0) or 0)
+        turn_end = int(anchor_turns[-1].get("turn_id", 0) or 0)
+        user_quotes = [str(turn.get("user", "") or "").strip() for turn in anchor_turns if str(turn.get("user", "") or "").strip()]
+        evidence.append(
+            {
+                "kind": "new_memory",
+                "turn_range": f"T{turn_start}" if turn_start == turn_end else f"T{turn_start}-T{turn_end}",
+                "source_session_id": str(anchor_turns[-1].get("session_id", "") or ""),
+                "source_group_id": str(anchor_turns[-1].get("source_group_id", "") or ""),
+                "quote": " / ".join(user_quotes[:3]),
+            }
+        )
+        for candidate in candidates:
+            metadata = dict(candidate.get("metadata") or {})
+            evidence.append(
+                {
+                    "kind": "existing_memory",
+                    "memory_id": str(candidate.get("id") or ""),
+                    "memory_type": str(candidate.get("kind") or "ordinary"),
+                    "content": str(candidate.get("content") or ""),
+                    "source_session_id": str(metadata.get("source_session_id") or ""),
+                    "source_turn_start": int(metadata.get("source_turn_start", 0) or 0),
+                    "source_turn_end": int(metadata.get("source_turn_end", 0) or 0),
+                    "source_group_id": str(metadata.get("source_group_id", metadata.get("group_id", "")) or ""),
+                }
+            )
+        return evidence
+
+    async def _call_llm_for_reflection(
+        self,
+        *,
+        user_id: str,
+        new_memory: str,
+        anchor_turns: List[Dict[str, Any]],
+        candidates: List[Dict[str, Any]],
+    ) -> LLMExtractionResponse:
+        anchor_lines = []
+        for turn in anchor_turns:
+            turn_id = int(turn.get("turn_id", 0) or 0)
+            user_text = str(turn.get("user", "") or "").strip()
+            if user_text:
+                anchor_lines.append(f"T{turn_id}: 用户{user_id}: {user_text}")
+        candidate_lines = []
+        for index, candidate in enumerate(candidates, 1):
+            metadata = dict(candidate.get("metadata") or {})
+            source_anchor = ""
+            source_turn_start = int(metadata.get("source_turn_start", 0) or 0)
+            source_turn_end = int(metadata.get("source_turn_end", 0) or 0)
+            if source_turn_start > 0 and source_turn_end > 0:
+                source_anchor = f" T{source_turn_start}" if source_turn_start == source_turn_end else f" T{source_turn_start}-T{source_turn_end}"
+            candidate_lines.append(
+                f"{index}. id={candidate.get('id', '')}; kind={candidate.get('kind', 'ordinary')}; content={candidate.get('content', '')}; source_session={metadata.get('source_session_id', '')}; anchor={source_anchor.strip()}"
+            )
+
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"用户 {user_id} 刚提取出一条新记忆，请判断它和旧记忆是否形成需要记录的冲突或修补关系。\n\n"
+                    f"新记忆：{new_memory}\n"
+                    f"新记忆证据：\n" + "\n".join(anchor_lines) + "\n\n"
+                    f"候选旧记忆：\n" + "\n".join(candidate_lines)
+                ),
+            }
+        ]
+        response = await self.llm_callback(self.config.reflection_system_prompt, messages)
+        return self._normalize_llm_response(response)
+
+    def _parse_reflection_response(self, content: str) -> Optional[MemoryReflectionResult]:
+        payload = self._extract_json_object(content)
+        if not payload:
+            return None
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+
+        has_conflict = bool(data.get("has_conflict", False))
+        confidence_value = data.get("confidence", 0.0)
+        try:
+            confidence = max(0.0, min(float(confidence_value), 1.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return MemoryReflectionResult(
+            has_conflict=has_conflict,
+            conflict_type=str(data.get("conflict_type") or "none").strip() or "none",
+            action=str(data.get("action") or "keep_both").strip() or "keep_both",
+            summary=str(data.get("summary") or "").strip(),
+            reason=str(data.get("reason") or "").strip(),
+            confidence=confidence,
+        )
+
+    def _extract_json_object(self, content: str) -> str:
+        text = str(content or "").strip()
+        if not text:
+            return ""
+        if text.startswith("{") and text.endswith("}"):
+            return text
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        return match.group(0).strip() if match else ""
+
+    def _merge_reflection_into_metadata(
+        self,
+        *,
+        metadata: Dict[str, Any],
+        reflection: MemoryReflectionResult,
+        conflict_candidates: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        merged = dict(metadata or {})
+        merged["summary"] = reflection.summary or merged.get("summary", "")
+        merged["patch_status"] = self._resolve_new_memory_patch_status(reflection)
+        merged["patch_action"] = reflection.action
+        merged["patch_conflict_type"] = reflection.conflict_type
+        merged["patch_reason"] = reflection.reason
+        merged["patch_confidence"] = reflection.confidence
+        merged["patch_final_summary"] = reflection.summary
+        merged["patch_target_memory_ids"] = [
+            str(item.get("memory_id") or "")
+            for item in conflict_candidates
+            if str(item.get("memory_id") or "")
+        ]
+        merged["reflection"] = {
+            "has_conflict": True,
+            "conflict_type": reflection.conflict_type,
+            "action": reflection.action,
+            "summary": reflection.summary,
+            "reason": reflection.reason,
+            "confidence": reflection.confidence,
+            "evidence": conflict_candidates,
+            "reflected_at": datetime.now().isoformat(),
+        }
+        return merged
+
+    def _is_suppressed_memory(self, metadata: Optional[Dict[str, Any]]) -> bool:
+        prepared = dict(metadata or {})
+        return str(prepared.get("patch_status") or "").strip().lower() in {"superseded", "contextualized"}
+
+    def _resolve_new_memory_patch_status(self, reflection: MemoryReflectionResult) -> str:
+        action = str(reflection.action or "keep_both").strip().lower()
+        if action == "prefer_existing":
+            return "superseded"
+        if action in {"prefer_new", "keep_both_prefer_recent", "merge_context"}:
+            return "active_patch"
+        return "conflict_reflected"
+
+    def _resolve_existing_memory_patch_status(self, reflection: MemoryReflectionResult) -> str:
+        action = str(reflection.action or "keep_both").strip().lower()
+        if action in {"prefer_new", "keep_both_prefer_recent"}:
+            return "superseded"
+        if action == "merge_context":
+            return "contextualized"
+        return "active"
+
+    async def _apply_patch_merge(
+        self,
+        *,
+        user_id: str,
+        successor_memory_id: str,
+        successor_memory_type: str,
+        reflection: Optional[MemoryReflectionResult],
+    ) -> None:
+        if reflection is None or not reflection.has_conflict or not successor_memory_id:
+            return
+
+        target_status = self._resolve_existing_memory_patch_status(reflection)
+        if target_status == "active":
+            return
+
+        ordinary_ids = [
+            str(item.get("memory_id") or "")
+            for item in reflection.targets
+            if str(item.get("memory_type") or "ordinary").strip().lower() != "important"
+            and str(item.get("memory_id") or "")
+        ]
+        important_ids = [
+            str(item.get("memory_id") or "")
+            for item in reflection.targets
+            if str(item.get("memory_type") or "").strip().lower() == "important"
+            and str(item.get("memory_id") or "")
+        ]
+
+        if ordinary_ids:
+            await self._apply_patch_merge_to_ordinary_memories(
+                user_id=user_id,
+                memory_ids=ordinary_ids,
+                target_status=target_status,
+                successor_memory_id=successor_memory_id,
+                successor_memory_type=successor_memory_type,
+                reflection=reflection,
+            )
+        if important_ids:
+            await self._apply_patch_merge_to_important_memories(
+                user_id=user_id,
+                memory_ids=important_ids,
+                target_status=target_status,
+                successor_memory_id=successor_memory_id,
+                successor_memory_type=successor_memory_type,
+                reflection=reflection,
+            )
+
+    async def _apply_patch_merge_to_ordinary_memories(
+        self,
+        *,
+        user_id: str,
+        memory_ids: List[str],
+        target_status: str,
+        successor_memory_id: str,
+        successor_memory_type: str,
+        reflection: MemoryReflectionResult,
+    ) -> None:
+        memories = await self.memory_store.get_user_memories(user_id)
+        if not memories:
+            return
+        changed = False
+        for memory in memories:
+            if memory.id not in memory_ids:
+                continue
+            changed = self._update_existing_memory_patch_metadata(
+                memory=memory,
+                target_status=target_status,
+                successor_memory_id=successor_memory_id,
+                successor_memory_type=successor_memory_type,
+                reflection=reflection,
+            ) or changed
+        if changed:
+            await self.memory_store.replace_user_memories(user_id, memories)
+
+    async def _apply_patch_merge_to_important_memories(
+        self,
+        *,
+        user_id: str,
+        memory_ids: List[str],
+        target_status: str,
+        successor_memory_id: str,
+        successor_memory_type: str,
+        reflection: MemoryReflectionResult,
+    ) -> None:
+        if not self.important_memory_store:
+            return
+        memories = await self.important_memory_store.get_memories(user_id, min_priority=1)
+        if not memories:
+            return
+        changed = False
+        for memory in memories:
+            if str(memory.id or "") not in memory_ids:
+                continue
+            changed = self._update_existing_memory_patch_metadata(
+                memory=memory,
+                target_status=target_status,
+                successor_memory_id=successor_memory_id,
+                successor_memory_type=successor_memory_type,
+                reflection=reflection,
+            ) or changed
+        if changed:
+            await self.important_memory_store.replace_memories(user_id, memories)
+
+    def _update_existing_memory_patch_metadata(
+        self,
+        *,
+        memory: Any,
+        target_status: str,
+        successor_memory_id: str,
+        successor_memory_type: str,
+        reflection: MemoryReflectionResult,
+    ) -> bool:
+        metadata = dict(getattr(memory, "metadata", {}) or {})
+        previous_status = str(metadata.get("patch_status") or "").strip().lower()
+        if previous_status == "superseded":
+            return False
+        metadata["patch_status"] = target_status
+        metadata["patch_relation"] = f"{target_status}_by_newer_memory"
+        metadata["patch_successor_memory_id"] = successor_memory_id
+        metadata["patch_successor_memory_type"] = successor_memory_type
+        metadata["patch_conflict_type"] = reflection.conflict_type
+        metadata["patch_action"] = reflection.action
+        metadata["patch_reason"] = reflection.reason
+        metadata["patch_confidence"] = reflection.confidence
+        metadata["patch_final_summary"] = reflection.summary
+        metadata["patch_updated_at"] = datetime.now().isoformat()
+        setattr(memory, "metadata", metadata)
+        if hasattr(memory, "updated_at"):
+            memory.updated_at = datetime.now().isoformat()
+        return True
+
     def _should_promote_to_important(self, mem: MemoryItem) -> bool:
         metadata = dict(mem.metadata or {})
         memory_type = str(metadata.get("memory_type", "")).lower()
@@ -565,11 +1090,11 @@ class MemoryExtractor:
         source: str,
         priority: int,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[Any]:
         if not self.important_memory_store:
-            return
+            return None
         try:
-            await self.important_memory_store.add_memory(
+            return await self.important_memory_store.add_memory(
                 user_id=user_id,
                 content=content,
                 source=source,
@@ -578,6 +1103,7 @@ class MemoryExtractor:
             )
         except Exception as exc:
             logger.warning("同步重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            return None
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         message = str(exc).lower()

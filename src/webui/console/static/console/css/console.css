@@ -2275,12 +2275,87 @@ body::before {
 
 .memory-card-body {
     min-height: 120px;
+    display: grid;
+    gap: 14px;
 }
 
 .memory-card-text {
     white-space: pre-wrap;
     line-height: 1.7;
     color: var(--text-main);
+}
+
+.memory-summary-block,
+.memory-detail-section {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 16px;
+    background: rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.06);
+    border: 1px solid rgba(var(--theme-r), var(--theme-g), var(--theme-b), 0.1);
+}
+
+[data-theme="dark"] .memory-summary-block,
+[data-theme="dark"] .memory-detail-section {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.07);
+}
+
+.memory-detail-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.memory-summary-text,
+.memory-timeline-body {
+    white-space: pre-wrap;
+    line-height: 1.65;
+    color: var(--text-main);
+}
+
+.memory-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.memory-detail-item,
+.memory-timeline-item {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+[data-theme="dark"] .memory-detail-item,
+[data-theme="dark"] .memory-timeline-item {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.06);
+}
+
+.memory-detail-label,
+.memory-timeline-kind {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.memory-detail-value,
+.memory-timeline-meta {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-main);
+    word-break: break-word;
+}
+
+.memory-timeline-list {
+    display: grid;
+    gap: 10px;
 }
 
 .memory-editor {
@@ -2398,6 +2473,10 @@ body::before {
 @media (max-width: 900px) {
     .memory-card-grid,
     .memory-card-grid-important {
+        grid-template-columns: 1fr;
+    }
+
+    .memory-detail-grid {
         grid-template-columns: 1fr;
     }
 }

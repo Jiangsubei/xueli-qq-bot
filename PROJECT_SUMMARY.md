@@ -50,11 +50,10 @@
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
 - `src/handlers/conversation_planner.py`
+- `src/handlers/conversation_engagement.py`
 - `src/handlers/prompt_planner.py`
 - `src/handlers/temporal_context.py`
-- `src/handlers/group_reply_planner.py`
 - `src/handlers/conversation_plan_coordinator.py`
-- `src/handlers/group_plan_coordinator.py`
 
 当前已实现：
 
@@ -66,6 +65,7 @@
 - session / execution key 平台限定化
 - 私聊和群聊统一走 `ConversationPlanner`
 - planner 先决定 `reply / wait / ignore`，再产出 `PromptPlan`
+- `PromptPlan` 已增加 `engagement_mode`，用于表达轻关怀、延续话题和轻量存在感
 - `ReplyPipeline` 按 `PromptPlan` 动态编译 prompt layer
 - `new_session_prompt` 已被 `temporal_context` 替代
 
@@ -143,6 +143,12 @@
 - 支持 `reply / wait / ignore`
 - 增加短窗口 batching，避免用户连发时被逐条抢答
 
+新增的主动陪伴策略：
+
+- `conversation_engagement.py` 负责从消息文本和最近上下文里提取陪伴信号
+- `planning_signals` 会进入 planner 和 `PromptPlanner`
+- `ReplyPipeline` 会消费 `PromptPlan.engagement_mode`，而不是只依赖一个粗粒度 proactive 标记
+
 新增的时间策略：
 
 - 统一使用 `temporal_context`
@@ -213,11 +219,10 @@
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
 - `src/handlers/conversation_planner.py`
+- `src/handlers/conversation_engagement.py`
 - `src/handlers/prompt_planner.py`
 - `src/handlers/temporal_context.py`
-- `src/handlers/group_reply_planner.py`
 - `src/handlers/conversation_plan_coordinator.py`
-- `src/handlers/group_plan_coordinator.py`
 
 ### 记忆
 - `src/memory/memory_manager.py`
@@ -237,8 +242,10 @@
 - unified conversation planner 已介入私聊和群聊
 - memory prompt 已显式分成事实 / 会话恢复 / 精准召回 / 动态记忆几层
 - prompt layer 已开始由 `PromptPlan` 驱动
+- 主动陪伴已经进入结构化 `engagement_mode` 阶段
 - `temporal_context` 与 private batching 已有 focused tests 覆盖
 - 会话摘要、人物事实、精准召回、多因子遗忘已有 focused tests 覆盖
+- 已新增 `runtime -> planner -> memory -> reply -> WebUI serializer` 高层闭环测试
 
 ## 当前测试面
 
@@ -257,7 +264,9 @@
 - private planning / batching
 - temporal context
 - prompt planner
+- planner companionship signals
 - model invocation router timeout behavior
+- runtime conversation flow integration
 - adapter connection config migration
 - network settings migration
 - runtime supervisor lifecycle
@@ -270,5 +279,7 @@
 
 - WebUI 展示 API runtime 状态
 - 文档继续清理历史遗留表述
+- 继续拆分 WebUI `services.py` 大文件
+- 在完整依赖环境下补跑更大范围测试
 - 如接入更多平台，继续沿现有 adapter 边界扩展
 - 如需继续做 memory 主线，下一步更适合落在人物事实抽取质量和 recall ranking 精细化

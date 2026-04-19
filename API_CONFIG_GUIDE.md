@@ -104,8 +104,9 @@ response_path = "output.choices.0.message.content"
 
 1. `vision_service.enabled = true`
 2. `vision_service.api_base` 非空
-3. `vision_service.api_key` 非空
-4. `vision_service.model` 非空
+3. `vision_service.model` 非空
+
+说明：`vision_service.api_key` 可以为空，是否必需取决于你接入的服务提供方。
 
 示例：
 
@@ -124,14 +125,11 @@ response_path = "choices.0.message.content"
 
 ## 群聊判断模型配置
 
-群聊判断配置位于 `group_reply_decision`。
+统一会话规划模型配置位于 `group_reply_decision`。
 
-如果 `group_reply_decision.api_base/api_key/model` 没有完整填写，代码会自动回退到 `ai_service`。
+只有当 `group_reply_decision.api_base` 和 `group_reply_decision.model` 完整时，`ConversationPlanner` 才会作为群聊规划模型启用。
 
-适合以下场景：
-
-- 用主模型兼任群聊判断
-- 单独给群聊判断指定更轻量模型
+如果未完整配置，不会自动回退到 `ai_service` 充当 planner，而是退回规则路径：群聊通常只在被 `@` 时回复，或使用规则型兜底行为。
 
 ## 记忆提取模型配置
 
@@ -155,10 +153,9 @@ response_path = "choices.0.message.content"
 
 记忆重排配置位于 `memory_rerank`。
 
-只有当以下字段都完整时，才视为已配置：
+只有当以下字段完整时，才视为已配置：
 
 - `memory_rerank.api_base`
-- `memory_rerank.api_key`
 - `memory_rerank.model`
 
 未完整配置时，记忆重排视为未启用。
@@ -167,8 +164,10 @@ response_path = "choices.0.message.content"
 
 启动前至少确认以下字段：
 
-- `napcat.ws_url`
-- `napcat.http_url`
+- `adapter_connection.adapter`
+- `adapter_connection.platform`
+- `adapter_connection.ws_url`
+- `adapter_connection.http_url`
 - `ai_service.api_base`
 - `ai_service.api_key`
 - `ai_service.model`
@@ -177,7 +176,6 @@ response_path = "choices.0.message.content"
 
 - `vision_service.enabled`
 - `vision_service.api_base`
-- `vision_service.api_key`
 - `vision_service.model`
 
 如启用记忆提取，还要确认：
@@ -202,7 +200,7 @@ response_path = "choices.0.message.content"
 检查：
 
 - `vision_service.enabled` 是否为 `true`
-- 三个关键字段是否都已填写
+- `vision_service.api_base` 和 `vision_service.model` 是否都已填写
 
 ### 记忆提取没有单独走提取模型
 
@@ -213,3 +211,12 @@ response_path = "choices.0.message.content"
 - `memory.extraction_model`
 
 如果为空，就会自动回退到 `ai_service`。
+
+### 群聊规划模型没有生效
+
+检查：
+
+- `group_reply_decision.api_base`
+- `group_reply_decision.model`
+
+如果未完整配置，群聊不会启用统一 planner 模型，而会退回规则路径。

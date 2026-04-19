@@ -10,6 +10,7 @@
 
 - 私聊与群聊回复
 - 统一会话规划、复读触发与图片理解
+- 结构化主动陪伴与 `engagement_mode` 驱动的回复编排
 - 长期记忆提取、检索与写入
 - 会话摘要恢复、旧对话精准召回、人物事实分层
 - PromptPlan 驱动的动态 prompt layer 编译
@@ -98,6 +99,8 @@ tests/                      自动化测试
 
 ```toml
 [adapter_connection]
+adapter = "napcat"
+platform = "qq"
 ws_url = "ws://127.0.0.1:8095"
 http_url = "http://127.0.0.1:6700"
 
@@ -209,11 +212,10 @@ python main.py
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
 - `src/handlers/conversation_planner.py`
+- `src/handlers/conversation_engagement.py`
+- `src/handlers/conversation_plan_coordinator.py`
 - `src/handlers/prompt_planner.py`
 - `src/handlers/temporal_context.py`
-- `src/handlers/group_reply_planner.py`
-- `src/handlers/conversation_plan_coordinator.py`
-- `src/handlers/group_plan_coordinator.py`
 
 ### 记忆系统
 
@@ -258,6 +260,7 @@ python main.py
 - 支持 `reply / wait / ignore`
 - 支持短窗口 batching，把连续碎片输入合并后再规划
 - 显式“等一下 / 我补充”类信号会直接触发强 hold
+- 群聊与私聊都会把陪伴信号整理成 `planning_signals`，由 `PromptPlan.engagement_mode` 决定更适合轻关怀、延续话题还是轻量存在感
 
 ## 模型调用路由
 
@@ -289,15 +292,18 @@ python main.py
 - 把 NapCat transport 移到了 adapter 边界
 - 把私聊和群聊统一到同一条 conversation planner 主链
 - 把 prompt 控制权从静态拼接推进到 planner 产出的 `PromptPlan`
+- 把主动陪伴从粗粒度 proactive 标记推进到结构化 `engagement_mode`
 - 移除了 `new_session_prompt`，改用 `temporal_context`
 - 把记忆上下文拆成了人物事实 / 会话恢复 / 精准召回 / 动态记忆几层
 - 给普通记忆补上了更稳的多因子遗忘逻辑
 - 给模型调用路由补上了 per-purpose timeout policy
+- 给 runtime 到 WebUI serializer 的高层闭环补上了集成测试
 
 仍然值得继续做的主要是：
 
-- WebUI 进一步展示 API runtime 状态
-- 文档继续去掉历史遗留的 QQ-only 说法
+- 继续拆分 `src/webui/console/services.py`
+- 继续收紧 `MessageEvent` 和 `InboundEvent` 的边界
+- 在完整依赖环境下补跑更大范围测试
 - 如果未来接更多平台，再继续扩大 adapter 覆盖面
 
 ## 测试
@@ -307,7 +313,7 @@ python main.py
 常用运行方式：
 
 ```bash
-venv\Scripts\python.exe -m unittest tests.test_platform_models tests.test_platform_normalizers tests.test_napcat_adapter tests.test_api_adapter tests.test_api_runtime tests.test_api_ingress_bridge tests.test_bot_api_ingress tests.test_bot_adapter_send_path tests.test_dispatcher_inbound_wiring tests.test_message_handler_inbound_event tests.test_downstream_inbound_helpers tests.test_group_reply_planner_context_preference tests.test_private_planning tests.test_temporal_context tests.test_prompt_planner tests.test_conversation_planner tests.test_model_invocation_router tests.test_reply_pipeline_prompt_plan tests.test_reply_pipeline_memory_layer_policy tests.test_config_adapter_connection tests.test_console_network_settings tests.test_runtime_supervisor tests.test_session_restore_service tests.test_memory_session_restore_context tests.test_reply_pipeline_session_restore tests.test_conversation_recall_service tests.test_person_fact_service tests.test_memory_forgetting
+venv\Scripts\python.exe -m unittest tests.test_platform_models tests.test_platform_normalizers tests.test_napcat_adapter tests.test_api_adapter tests.test_api_runtime tests.test_api_ingress_bridge tests.test_bot_api_ingress tests.test_bot_adapter_send_path tests.test_dispatcher_inbound_wiring tests.test_message_handler_inbound_event tests.test_downstream_inbound_helpers tests.test_conversation_planner_context_preference tests.test_private_planning tests.test_temporal_context tests.test_prompt_planner tests.test_conversation_planner tests.test_conversation_planner_prompt_signals tests.test_model_invocation_router tests.test_reply_pipeline_prompt_plan tests.test_reply_pipeline_memory_layer_policy tests.test_config_adapter_connection tests.test_console_network_settings tests.test_runtime_supervisor tests.test_session_restore_service tests.test_memory_session_restore_context tests.test_reply_pipeline_session_restore tests.test_conversation_recall_service tests.test_person_fact_service tests.test_memory_forgetting tests.test_runtime_conversation_flow_integration
 ```
 
 ## 额外说明

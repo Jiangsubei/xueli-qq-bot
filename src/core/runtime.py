@@ -108,8 +108,8 @@ class BotRuntime:
         self.memory_manager = runtime.memory_manager
         self.dispatcher.configure_inbound_event_attacher(
             getattr(self.adapter, "attach_inbound_event", None),
-            platform=getattr(self.adapter, "platform", "qq"),
-            adapter_name=getattr(self.adapter, "adapter_name", "unknown"),
+            platform=self._default_session_platform(),
+            adapter_name=self._default_adapter_name(),
         )
         self._event_loop = asyncio.get_running_loop()
         register_runtime(bot=self, memory_manager=self.memory_manager, loop=self._event_loop)
@@ -578,6 +578,28 @@ class BotRuntime:
         if platform:
             self._adapters_by_platform[platform] = adapter
 
+    def _default_adapter_name(self) -> str:
+        adapter = self.adapter or self.connection
+        adapter_name = str(getattr(adapter, "adapter_name", "") or "").strip()
+        if adapter_name:
+            return adapter_name
+        config = getattr(self, "config", None)
+        app_config = getattr(config, "app", None)
+        adapter_connection = getattr(app_config, "adapter_connection", None)
+        adapter_name = str(getattr(adapter_connection, "adapter", "") or "").strip()
+        return adapter_name or "unknown"
+
+    def _default_session_platform(self) -> str:
+        adapter = self.adapter or self.connection
+        platform = str(getattr(adapter, "platform", "") or "").strip()
+        if platform:
+            return platform
+        config = getattr(self, "config", None)
+        app_config = getattr(config, "app", None)
+        adapter_connection = getattr(app_config, "adapter_connection", None)
+        platform = str(getattr(adapter_connection, "platform", "") or "").strip()
+        return platform or "qq"
+
     def _get_adapter_for_session(self, session: SessionRef):
         adapter = None
         platform = str(session.platform or "").strip()
@@ -606,22 +628,20 @@ class BotRuntime:
             return session
         return self._fallback_group_reply_session(target, user_id=at_user)
 
-    @staticmethod
-    def _fallback_private_reply_session(user_id: Any) -> SessionRef:
+    def _fallback_private_reply_session(self, user_id: Any) -> SessionRef:
         resolved_user_id = str(user_id or "")
         return SessionRef(
-            platform="qq",
+            platform=self._default_session_platform(),
             scope="private",
             conversation_id=f"private:{resolved_user_id}",
             user_id=resolved_user_id,
         )
 
-    @staticmethod
-    def _fallback_group_reply_session(group_id: Any, *, user_id: Any = "") -> SessionRef:
+    def _fallback_group_reply_session(self, group_id: Any, *, user_id: Any = "") -> SessionRef:
         resolved_group_id = str(group_id or "")
         resolved_user_id = str(user_id or "")
         return SessionRef(
-            platform="qq",
+            platform=self._default_session_platform(),
             scope="group",
             conversation_id=f"group:{resolved_group_id}:{resolved_user_id or 0}",
             channel_id=resolved_group_id,

@@ -10,11 +10,11 @@ The goal is not to become a heavyweight all-in-one bot platform. The goal is to 
 
 ## Current Priorities
 
-1. Keep the core small and readable.
-2. Remove implicit QQ-only assumptions from the core.
-3. Standardize inbound events and outbound actions.
-4. Treat API access as another adapter, not a separate business path.
-5. Add only the minimum runtime and test structure needed to keep the system reliable.
+1. Keep the runtime core small and readable.
+2. Continue tightening the boundary between standard platform models and legacy OneBot models.
+3. Preserve the unified conversation planning pipeline for both private and group chat.
+4. Keep `PromptPlan` as the contract between planning and reply generation.
+5. Strengthen higher-level integration tests before adding new large concepts.
 
 ## Non-Goals For Now
 
@@ -39,10 +39,12 @@ If the answer is no, the code probably belongs in an adapter boundary instead of
 2. Introduce platform-agnostic models alongside existing OneBot models.
 3. Migrate internal logic gradually instead of rewriting everything.
 4. Prefer small compatibility-preserving changes.
+5. Prefer converging on neutral names like `conversation_*` instead of leaving `group_*` compatibility layers around.
 
-## First Active Workstream
+## Current Architecture Notes
 
-1. Add platform-agnostic event and action models.
-2. Add a OneBot-to-standard-event normalizer.
-3. Start routing internal session identity through the standard model.
-4. Back it with focused tests.
+1. `BotRuntime` is the runtime facade and `MessageHandler` is the high-level orchestration layer.
+2. `ConversationPlanner` decides `reply / wait / ignore` and can emit a structured `PromptPlan`.
+3. `ReplyPipeline` acts more like a prompt compiler than a static prompt builder.
+4. Adapters are created through `src/adapters/registry.py`, so API access is a first-class adapter path.
+5. Current follow-up work should favor naming convergence, service extraction, and integration coverage over broad new feature branches.

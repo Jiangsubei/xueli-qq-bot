@@ -350,6 +350,7 @@ class PromptPlan:
     """Structured prompt policy produced after action planning."""
 
     continuity_mode: str = "direct_continue"
+    engagement_mode: str = "neutral"
     temporal_mode: str = "light"
     reply_style: str = "normal"
     context_budget: str = "normal"

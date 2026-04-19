@@ -5,23 +5,17 @@ from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
-from .context import build_dashboard_context
-from .services import (
-    build_memory_items_payload,
-    build_recall_payload,
-    build_runtime_api_payload,
-    delete_memory_item,
-    get_assistant_avatar_file,
+from .avatar_service import get_assistant_avatar_file, save_assistant_avatar
+from .config_service import (
     handle_save_error,
-    restart_backend_runtime,
-    save_assistant_avatar,
     save_assistant_settings,
     save_emoji_settings,
     save_memory_settings,
     save_model_settings,
     save_network_settings,
-    update_memory_item,
 )
+from .memory_service import build_memory_items_payload, delete_memory_item, update_memory_item
+from .runtime_service import build_dashboard_context, build_recall_payload, build_runtime_api_payload, restart_backend_runtime
 
 
 def _parse_json_body(request):

@@ -60,7 +60,7 @@ class BotBootstrapper:
         try:
             message_handler = MessageHandler(
                 memory_manager=memory_manager,
-                group_reply_planner=ConversationPlanner(
+                conversation_planner=ConversationPlanner(
                     app_config=app_config,
                     model_invocation_router=model_invocation_router,
                 ),
@@ -308,10 +308,16 @@ class BotBootstrapper:
         on_connect: Callable[[], Awaitable[None]],
         on_disconnect: Callable[[], Awaitable[None]],
     ) -> PlatformAdapter:
+        adapter_config = self.config.app.adapter_connection
+        adapter_name = str(getattr(adapter_config, "adapter", "napcat") or "napcat").strip().lower() or "napcat"
+        if adapter_name in {"api", "openapi"}:
+            logger.info("准备启动 adapter：%s（平台=%s）", adapter_name, getattr(adapter_config, "platform", "api") or "api")
+            return create_adapter(adapter_name, on_connect=on_connect, on_disconnect=on_disconnect)
+
         host, port = self._parse_ws_endpoint()
-        logger.info("准备启动 adapter：napcat ws://%s:%s", host, port)
+        logger.info("准备启动 adapter：%s ws://%s:%s", adapter_name, host, port)
         return create_adapter(
-            "napcat",
+            adapter_name,
             host=host,
             port=port,
             on_message=on_message,

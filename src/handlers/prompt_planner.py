@@ -15,6 +15,7 @@ class PromptPlanner:
         return (
             '{"action":"reply|wait|ignore","reason":"简短理由","prompt_plan":{'
             '"continuity_mode":"direct_continue|resume_recent_topic|resume_old_topic|memory_query|casual_chat|clarification",'
+            '"engagement_mode":"neutral|gentle_care|topic_continue|light_presence",'
             '"temporal_mode":"off|light|explicit",'
             '"reply_style":"concise|normal|deep",'
             '"context_budget":"low|normal|high",'
@@ -63,6 +64,11 @@ class PromptPlanner:
                 raw_plan.get("continuity_mode"),
                 allowed={"direct_continue", "resume_recent_topic", "resume_old_topic", "memory_query", "casual_chat", "clarification"},
                 default=default_plan.continuity_mode,
+            ),
+            engagement_mode=self._normalize_choice(
+                raw_plan.get("engagement_mode"),
+                allowed={"neutral", "gentle_care", "topic_continue", "light_presence"},
+                default=default_plan.engagement_mode,
             ),
             temporal_mode=self._normalize_choice(
                 raw_plan.get("temporal_mode"),
@@ -120,9 +126,29 @@ class PromptPlanner:
             temporal_mode = "off"
 
         should_reply = action == MessagePlanAction.REPLY.value
+        engagement_mode = self._default_engagement_mode(context=context, chat_mode=chat_mode, continuity_hint=continuity_hint, should_reply=should_reply)
         restore_intensity = "high" if continuity_hint == "old_topic_resume" else ("normal" if continuity_hint == "resume_after_break" else "off")
         recall_intensity = "normal" if continuity_hint == "old_topic_resume" else "off"
         dynamic_intensity = "normal" if should_reply else "off"
+        reply_style = "normal"
+        context_budget = "normal"
+        if continuity_hint == "old_topic_resume":
+            reply_style = "deep"
+            context_budget = "high"
+        elif continuity_hint == "resume_after_break":
+            reply_style = "normal"
+            context_budget = "high"
+        elif chat_mode == "group":
+            reply_style = "concise"
+        if engagement_mode == "gentle_care":
+            reply_style = "normal" if chat_mode == "group" else "deep"
+            context_budget = "high" if continuity_hint in {"resume_after_break", "old_topic_resume"} else "normal"
+        elif engagement_mode == "topic_continue":
+            if continuity_mode == "casual_chat":
+                continuity_mode = "resume_recent_topic"
+            reply_style = "normal"
+        elif engagement_mode == "light_presence" and chat_mode == "group" and reply_style == "normal":
+            reply_style = "concise"
         policy = PromptLayerPolicy(
             enable_temporal_context=should_reply and temporal_mode != "off",
             enable_recent_context=should_reply,
@@ -134,14 +160,45 @@ class PromptPlanner:
         )
         return PromptPlan(
             continuity_mode=continuity_mode,
+            engagement_mode=engagement_mode,
             temporal_mode=temporal_mode,
-            reply_style="normal",
-            context_budget="high" if continuity_hint == "old_topic_resume" else "normal",
+            reply_style=reply_style,
+            context_budget=context_budget,
             restore_intensity=restore_intensity,
             recall_intensity=recall_intensity,
             dynamic_intensity=dynamic_intensity,
             policy=policy,
+            notes=self._default_notes_for_engagement(engagement_mode),
         )
+
+    def _default_engagement_mode(
+        self,
+        *,
+        context: Optional[MessageContext],
+        chat_mode: str,
+        continuity_hint: str,
+        should_reply: bool,
+    ) -> str:
+        if not should_reply:
+            return "neutral"
+        signals = dict(getattr(context, "planning_signals", {}) or {}) if context else {}
+        if bool(signals.get("care_cue_detected")):
+            return "gentle_care"
+        if bool(signals.get("continuation_cue_detected")) or bool(signals.get("follow_up_after_assistant")):
+            return "topic_continue"
+        if chat_mode == "group" and continuity_hint in {"strong_continuation", "soft_continuation"}:
+            return "light_presence"
+        return "neutral"
+
+    def _default_notes_for_engagement(self, engagement_mode: str) -> str:
+        mode = str(engagement_mode or "neutral").strip().lower()
+        if mode == "gentle_care":
+            return "先轻轻接住对方的状态，再决定是否给建议；避免盘问或说教。"
+        if mode == "topic_continue":
+            return "优先顺着刚才的话题自然往下接，先承接再延展，不要突然换题。"
+        if mode == "light_presence":
+            return "保持轻盈存在感，接一句就够时不要写得太满。"
+        return ""
 
     def _normalize_choice(self, value: Any, *, allowed: set[str], default: str) -> str:
         text = str(value or "").strip().lower()
