@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from src.core.models import Conversation
+from src.core.models import Conversation, PromptPlan, TemporalContext
 
 
 @dataclass
@@ -16,6 +16,11 @@ class MessageContext:
     user_message: str = ""
     current_sender_label: str = ""
     is_first_turn: bool = False
+    current_event_time: float = 0.0
+    previous_message_time: float = 0.0
+    conversation_last_time: float = 0.0
+    previous_session_time: float = 0.0
+    temporal_context: TemporalContext = field(default_factory=TemporalContext)
     window_messages: List[Dict[str, Any]] = field(default_factory=list)
     recent_history_text: str = ""
     base64_images: List[str] = field(default_factory=list)
@@ -28,4 +33,6 @@ class MessageContext:
     related_history_messages: List[Dict[str, Any]] = field(default_factory=list)
     reply_context: Dict[str, Any] = field(default_factory=dict)
     direct_reply_text: str = ""
+    planning_signals: Dict[str, Any] = field(default_factory=dict)
+    prompt_plan: Optional[PromptPlan] = None
     conversation: Optional[Conversation] = None

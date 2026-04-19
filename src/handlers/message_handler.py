@@ -24,11 +24,12 @@ from src.core.runtime_metrics import RuntimeMetrics
 from src.emoji.manager import EmojiManager
 from src.emoji.reply_service import EmojiReplyService
 from src.handlers.command_handler import CommandHandler
+from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.group_plan_coordinator import GroupPlanCoordinator
 from src.handlers.message_context import MessageContext
-from src.handlers.group_reply_planner import GroupReplyPlanner
 from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
+from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 from src.services.ai_client import AIClient, AIResponse
 from src.services.image_client import ImageClient
 from src.services.vision_client import VisionClient
@@ -45,7 +46,7 @@ class MessageHandler:
         image_client: Optional[ImageClient] = None,
         vision_client: Optional[VisionClient] = None,
         memory_manager: Optional[Any] = None,
-        group_reply_planner: Optional[GroupReplyPlanner] = None,
+        group_reply_planner: Optional[ConversationPlanner] = None,
         *,
         runtime_metrics: Optional[RuntimeMetrics] = None,
         status_provider: Optional[Any] = None,
@@ -71,7 +72,7 @@ class MessageHandler:
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
         )
-        self.group_reply_planner = group_reply_planner or GroupReplyPlanner(
+        self.group_reply_planner = group_reply_planner or ConversationPlanner(
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
         )
@@ -106,6 +107,11 @@ class MessageHandler:
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
         self.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
+        self.private_batch_lock = asyncio.Lock()
+        self.private_batch_versions: Dict[str, int] = defaultdict(int)
+        self.private_pending_inputs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self.private_batch_window_seconds = float(getattr(self.app_config.bot_behavior, "private_batch_window_seconds", 1.2) or 0.0)
+        self.group_repeat_lock = asyncio.Lock()
         self._group_repeat_history: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
         self._group_repeat_cooldowns: Dict[tuple[int, str], float] = {}
 
@@ -323,7 +329,44 @@ class MessageHandler:
 
     def _clean_expired_conversations(self) -> None:
         self.session_manager.clean_expired()
+        self._cleanup_private_batch_state()
+        self._cleanup_group_repeat_state()
         self._sync_active_conversations_metric()
+
+    def _cleanup_private_batch_state(self) -> None:
+        active_keys = set(getattr(self.session_manager, "_conversations", {}).keys())
+        now = time.time()
+        stale_after = max(30.0, self.private_batch_window_seconds * 8)
+        stale_keys: List[str] = []
+        for key, items in list(self.private_pending_inputs.items()):
+            if key not in active_keys:
+                stale_keys.append(key)
+                continue
+            latest_time = max((float(item.get("inserted_at", 0.0) or 0.0) for item in items), default=0.0)
+            if latest_time > 0 and now - latest_time > stale_after:
+                stale_keys.append(key)
+        for key in stale_keys:
+            self.private_pending_inputs.pop(key, None)
+            self.private_batch_versions.pop(key, None)
+
+    def _cleanup_group_repeat_state(self) -> None:
+        now = time.time()
+        max_window = max(20.0, float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0))
+        history_cutoff = max_window * 3
+        stale_groups: List[int] = []
+        for group_id, history in self._group_repeat_history.items():
+            while history and now - float(history[0].get("time", 0.0) or 0.0) > history_cutoff:
+                history.popleft()
+            if not history:
+                stale_groups.append(group_id)
+        for group_id in stale_groups:
+            self._group_repeat_history.pop(group_id, None)
+
+        stale_cooldowns = [
+            key for key, until in self._group_repeat_cooldowns.items() if float(until or 0.0) <= now
+        ]
+        for key in stale_cooldowns:
+            self._group_repeat_cooldowns.pop(key, None)
 
     def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
         return self.group_plan_coordinator.format_group_window_context(reply_context)
@@ -355,37 +398,38 @@ class MessageHandler:
             return False
         return 2 <= len(normalized) <= 20
 
-    def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
+    async def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
         display_text = self._normalize_repeat_echo_text(self.extract_user_message(event))
         if not self._is_repeat_echo_candidate(event, display_text):
             return None
 
-        now = time.time()
-        group_id = int(event.group_id or 0)
-        key = display_text.casefold()
-        window_seconds = float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0)
-        min_count = max(2, int(self.app_config.group_reply.repeat_echo_min_count or 2))
-        cooldown_seconds = max(0.0, float(self.app_config.group_reply.repeat_echo_cooldown_seconds or 0.0))
+        async with self.group_repeat_lock:
+            now = time.time()
+            group_id = int(event.group_id or 0)
+            key = display_text.casefold()
+            window_seconds = float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0)
+            min_count = max(2, int(self.app_config.group_reply.repeat_echo_min_count or 2))
+            cooldown_seconds = max(0.0, float(self.app_config.group_reply.repeat_echo_cooldown_seconds or 0.0))
 
-        history = self._group_repeat_history[group_id]
-        while history and now - float(history[0]["time"]) > window_seconds:
-            history.popleft()
+            history = self._group_repeat_history[group_id]
+            while history and now - float(history[0]["time"]) > window_seconds:
+                history.popleft()
 
-        same_entries = [item for item in history if item.get("key") == key]
-        unique_users = {int(item.get("user_id", 0)) for item in same_entries}
-        unique_users.add(int(event.user_id))
+            same_entries = [item for item in history if item.get("key") == key]
+            unique_users = {int(item.get("user_id", 0)) for item in same_entries}
+            unique_users.add(int(event.user_id))
 
-        history.append({"time": now, "key": key, "user_id": int(event.user_id)})
+            history.append({"time": now, "key": key, "user_id": int(event.user_id)})
 
-        cooldown_key = (group_id, key)
-        cooldown_until = float(self._group_repeat_cooldowns.get(cooldown_key, 0.0) or 0.0)
-        if cooldown_until > now:
-            return None
+            cooldown_key = (group_id, key)
+            cooldown_until = float(self._group_repeat_cooldowns.get(cooldown_key, 0.0) or 0.0)
+            if cooldown_until > now:
+                return None
 
-        if len(unique_users) < min_count:
-            return None
+            if len(unique_users) < min_count:
+                return None
 
-        self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
+            self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
         if self.runtime_metrics:
             self.runtime_metrics.record_group_repeat_echo()
         if not bool(getattr(self.app_config.bot_behavior, "log_full_prompt", False)):
@@ -397,6 +441,92 @@ class MessageHandler:
             event=event,
             user_message=self.extract_user_message(event),
             trace_id=trace_id,
+        )
+
+    async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
+        conversation_key = self._get_conversation_key(event)
+        conversation = self._get_conversation(conversation_key)
+        user_message = self.extract_user_message(event)
+        temporal_context = self._build_temporal_context(
+            event=event,
+            conversation=conversation,
+            reply_context=None,
+        )
+        context = MessageContext(
+            trace_id=trace_id,
+            execution_key=get_execution_key(event),
+            conversation_key=conversation_key,
+            user_message=user_message,
+            current_sender_label=self._format_identity_label(event.user_id, self._get_sender_display_name(event)),
+            is_first_turn=len(conversation.messages) == 0,
+            current_event_time=temporal_context.current_event_time,
+            previous_message_time=temporal_context.previous_message_time,
+            conversation_last_time=temporal_context.conversation_last_time,
+            previous_session_time=temporal_context.previous_session_time,
+            temporal_context=temporal_context,
+            recent_history_text=self.reply_pipeline._build_recent_history_text(
+                event=event,
+                conversation=conversation,
+                plan=None,
+            ),
+            planning_signals=self._build_private_planning_signals(
+                event=event,
+                user_message=user_message,
+                conversation=conversation,
+                temporal_context=temporal_context,
+            ),
+            conversation=conversation,
+        )
+        current_version = await self._push_private_pending_input(
+            conversation_key=conversation_key,
+            event=event,
+            user_message=user_message,
+        )
+        hold_reason = self._private_hold_reason(event, user_message)
+        if hold_reason:
+            return MessageHandlingPlan(
+                action=MessagePlanAction.WAIT.value,
+                reason=hold_reason,
+                source="rule",
+                reply_context={"trace_id": trace_id} if trace_id else {},
+            )
+        await asyncio.sleep(self.private_batch_window_seconds)
+        if await self._has_newer_private_input(conversation_key, current_version):
+            return MessageHandlingPlan(
+                action=MessagePlanAction.WAIT.value,
+                reason="用户仍在短时间内连续补充，先等待本轮私聊输入稳定",
+                source="rule",
+                reply_context={"trace_id": trace_id} if trace_id else {},
+            )
+        pending_items = await self._consume_private_pending_input(conversation_key)
+        merged_user_message = self._merge_private_pending_input(pending_items, user_message)
+        context.user_message = merged_user_message
+        context.planning_signals = self._build_private_planning_signals(
+            event=event,
+            user_message=merged_user_message,
+            conversation=conversation,
+            temporal_context=temporal_context,
+            pending_items=pending_items,
+        )
+        plan = await self.group_reply_planner.plan(
+            event=event,
+            user_message=merged_user_message,
+            recent_messages=[],
+            context=context,
+        )
+        reply_context = dict(plan.reply_context or {})
+        if trace_id:
+            reply_context["trace_id"] = trace_id
+        if plan.should_reply:
+            reply_context.setdefault("reply_mode", "private")
+            reply_context["merged_user_message"] = merged_user_message
+        return MessageHandlingPlan(
+            action=plan.action,
+            reason=plan.reason,
+            source=plan.source,
+            raw_decision=plan.raw_decision,
+            reply_context=reply_context,
+            prompt_plan=plan.prompt_plan,
         )
 
     async def _build_group_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
@@ -415,11 +545,11 @@ class MessageHandler:
         if event.user_id == event.self_id:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "机器人自己的消息，跳过处理")
         if event.message_type == MessageType.PRIVATE.value:
-            return self._build_rule_plan(MessagePlanAction.REPLY, "私聊消息默认直接回复")
+            return await self._plan_private_message(event, trace_id=trace_id)
         if event.message_type != MessageType.GROUP.value:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "当前仅处理私聊和群聊消息")
 
-        repeat_echo_text = self._check_repeat_echo_trigger(event)
+        repeat_echo_text = await self._check_repeat_echo_trigger(event)
         if repeat_echo_text:
             return self._build_rule_plan(
                 MessagePlanAction.REPLY,
@@ -475,6 +605,113 @@ class MessageHandler:
             text = self.at_pattern.sub("", text)
             text = text.replace(f"@{self._get_assistant_name()}", "")
         return text.strip()
+
+    def _build_temporal_context(
+        self,
+        *,
+        event: MessageEvent,
+        conversation: Conversation,
+        reply_context: Optional[Dict[str, Any]] = None,
+    ):
+        current_event_time = normalize_event_time(getattr(event, "time", 0.0)) or time.time()
+        window_messages = list((reply_context or {}).get("window_messages") or [])
+        previous_message_time = 0.0
+        history_event_times: List[float] = []
+
+        if window_messages:
+            history_event_times = [float(normalize_event_time(item.get("event_time", 0.0)) or 0.0) for item in window_messages]
+            previous_items = [item for item in window_messages if not bool(item.get("is_latest"))]
+            if previous_items:
+                previous_message_time = float(normalize_event_time(previous_items[-1].get("event_time", 0.0)) or 0.0)
+
+        if previous_message_time <= 0 and conversation.messages:
+            previous_message_time = float(conversation.last_update or 0.0)
+
+        return build_temporal_context(
+            current_event_time=current_event_time,
+            chat_mode=str(getattr(event, "message_type", "private") or "private"),
+            previous_message_time=previous_message_time,
+            conversation_last_time=previous_message_time,
+            history_event_times=history_event_times,
+        )
+
+    def _private_hold_reason(self, event: MessageEvent, user_message: str) -> str:
+        text = str(user_message or "").strip()
+        normalized = re.sub(r"\s+", "", text).lower()
+        if any(token in normalized for token in ["等等", "等下", "稍等", "先别回", "我补充", "我再发", "还没说完"]):
+            return "用户明显还在继续补充，私聊先等待下一条消息"
+        if self._has_image_input(event) and not normalized:
+            return "私聊当前只有图片，先等待用户补充文字或更多上下文"
+        return ""
+
+    def _build_private_planning_signals(
+        self,
+        *,
+        event: MessageEvent,
+        user_message: str,
+        conversation: Conversation,
+        temporal_context: Any,
+        pending_items: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        text = str(user_message or "").strip()
+        normalized = re.sub(r"\s+", "", text).lower()
+        pending = list(pending_items or [])
+        return {
+            "batch_count": max(1, len(pending)),
+            "merged_from_multiple_inputs": len(pending) > 1,
+            "explicit_hold_signal": bool(self._private_hold_reason(event, user_message)),
+            "has_image_without_text": bool(self._has_image_input(event) and not normalized),
+            "looks_fragmented": bool(len(normalized) <= 6 and normalized in {"那个", "就是", "然后", "还有", "等会", "继续", "在吗"}),
+            "ends_like_incomplete": bool(text.endswith(("...", "..", "。。。", "然后", "就是"))),
+            "recent_gap_bucket": str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
+            "conversation_turn_count": len(conversation.messages),
+        }
+
+    async def _push_private_pending_input(
+        self,
+        *,
+        conversation_key: str,
+        event: MessageEvent,
+        user_message: str,
+    ) -> int:
+        async with self.private_batch_lock:
+            self.private_batch_versions[conversation_key] += 1
+            version = self.private_batch_versions[conversation_key]
+            self.private_pending_inputs[conversation_key].append(
+                {
+                    "version": version,
+                    "message_id": str(getattr(event, "message_id", "") or ""),
+                    "event_time": normalize_event_time(getattr(event, "time", 0.0)) or time.time(),
+                    "inserted_at": time.time(),
+                    "text": str(user_message or "").strip(),
+                    "has_image": self._has_image_input(event),
+                }
+            )
+            return version
+
+    async def _has_newer_private_input(self, conversation_key: str, version: int) -> bool:
+        async with self.private_batch_lock:
+            return int(self.private_batch_versions.get(conversation_key, 0) or 0) > int(version)
+
+    async def _consume_private_pending_input(self, conversation_key: str) -> List[Dict[str, Any]]:
+        async with self.private_batch_lock:
+            items = list(self.private_pending_inputs.pop(conversation_key, []))
+            return items
+
+    def _merge_private_pending_input(self, items: List[Dict[str, Any]], fallback_text: str) -> str:
+        lines: List[str] = []
+        for item in items:
+            text = str(item.get("text") or "").strip()
+            if text:
+                lines.append(text)
+        if not lines:
+            return str(fallback_text or "").strip()
+        merged: List[str] = []
+        for text in lines:
+            if merged and merged[-1] == text:
+                continue
+            merged.append(text)
+        return "\n".join(merged)
 
     async def download_images(self, event: MessageEvent) -> List[str]:
         image_segments = event.get_image_segments()
@@ -583,11 +820,13 @@ class MessageHandler:
         event: MessageEvent,
         user_message: str,
         conversation: Conversation,
+        plan: Optional[MessageHandlingPlan] = None,
     ) -> tuple[str, str, str, str, str, List[Dict[str, Any]], bool]:
         return await self.reply_pipeline.load_memory_context(
             event=event,
             user_message=user_message,
             conversation=conversation,
+            prompt_plan=getattr(plan, "prompt_plan", None) if plan else None,
         )
 
     def _build_response_system_prompt(
@@ -641,7 +880,8 @@ class MessageHandler:
             if direct_reply_text:
                 return ReplyResult(text=direct_reply_text, source=plan.source or "rule")
 
-        user_message = self.extract_user_message(event)
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        user_message = str(reply_context.get("merged_user_message") or self.extract_user_message(event)).strip()
         command_result = self.check_command(user_message, event)
         if command_result is not None:
             return ReplyResult(text=command_result, source="command")
@@ -666,16 +906,21 @@ class MessageHandler:
         trace_id: str = "",
         include_memory: bool = True,
     ) -> MessageContext:
-        user_message = self.extract_user_message(event)
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        user_message = str(reply_context.get("merged_user_message") or self.extract_user_message(event)).strip()
         execution_key = get_execution_key(event)
         conversation_key = self._get_conversation_key(event)
         conversation = self._get_conversation(conversation_key)
-        reply_context = dict(getattr(plan, "reply_context", None) or {})
         window_messages = list(reply_context.get("window_messages") or [])
         recent_history_text = self.reply_pipeline._build_recent_history_text(
             event=event,
             conversation=conversation,
             plan=plan,
+        )
+        temporal_context = self._build_temporal_context(
+            event=event,
+            conversation=conversation,
+            reply_context=reply_context,
         )
         is_first_turn = len(conversation.messages) == 0
         person_fact_context = ""
@@ -697,6 +942,7 @@ class MessageHandler:
                 event=event,
                 user_message=user_message,
                 conversation=conversation,
+                plan=plan,
             )
 
         base64_images: List[str] = []
@@ -723,6 +969,11 @@ class MessageHandler:
             user_message=user_message,
             current_sender_label=self._format_identity_label(event.user_id, self._get_sender_display_name(event)),
             is_first_turn=is_first_turn,
+            current_event_time=temporal_context.current_event_time,
+            previous_message_time=temporal_context.previous_message_time,
+            conversation_last_time=temporal_context.conversation_last_time,
+            previous_session_time=temporal_context.previous_session_time,
+            temporal_context=temporal_context,
             window_messages=window_messages,
             recent_history_text=recent_history_text,
             base64_images=base64_images,
@@ -735,6 +986,7 @@ class MessageHandler:
             related_history_messages=related_history_messages,
             reply_context=reply_context,
             direct_reply_text=str(reply_context.get("direct_reply_text") or "").strip(),
+            prompt_plan=getattr(plan, "prompt_plan", None) if plan else None,
             conversation=conversation,
         )
 

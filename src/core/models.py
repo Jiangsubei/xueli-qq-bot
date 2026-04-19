@@ -314,6 +314,53 @@ class MessagePlanAction(Enum):
 
 
 @dataclass
+class TemporalContext:
+    """Time-gap signals used by planning and prompt compilation."""
+
+    current_event_time: float = 0.0
+    previous_message_time: float = 0.0
+    conversation_last_time: float = 0.0
+    previous_session_time: float = 0.0
+    recent_gap_seconds: Optional[float] = None
+    conversation_gap_seconds: Optional[float] = None
+    session_gap_seconds: Optional[float] = None
+    history_span_seconds: Optional[float] = None
+    recent_gap_bucket: str = "unknown"
+    conversation_gap_bucket: str = "unknown"
+    session_gap_bucket: str = "unknown"
+    continuity_hint: str = "unknown"
+    summary_text: str = ""
+
+
+@dataclass
+class PromptLayerPolicy:
+    """Planner-controlled switches for prompt layer compilation."""
+
+    enable_temporal_context: bool = True
+    enable_recent_context: bool = True
+    enable_person_facts: bool = True
+    enable_session_restore: bool = True
+    enable_precise_recall: bool = True
+    enable_dynamic_memory: bool = True
+    enable_reply_scope: bool = True
+
+
+@dataclass
+class PromptPlan:
+    """Structured prompt policy produced after action planning."""
+
+    continuity_mode: str = "direct_continue"
+    temporal_mode: str = "light"
+    reply_style: str = "normal"
+    context_budget: str = "normal"
+    restore_intensity: str = "off"
+    recall_intensity: str = "off"
+    dynamic_intensity: str = "normal"
+    policy: PromptLayerPolicy = field(default_factory=PromptLayerPolicy)
+    notes: str = ""
+
+
+@dataclass
 class MessageHandlingPlan:
     """消息处理计划"""
 
@@ -322,6 +369,7 @@ class MessageHandlingPlan:
     source: str = "rule"
     raw_decision: Optional[Dict[str, Any]] = None
     reply_context: Optional[Dict[str, Any]] = None
+    prompt_plan: Optional[PromptPlan] = None
 
     @property
     def should_reply(self) -> bool:

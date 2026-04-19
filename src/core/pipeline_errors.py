@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,8 @@ class PipelineExecutionError(MessagePipelineError):
 def classify_pipeline_error(exc: Exception) -> str:
     if isinstance(exc, MessagePipelineError):
         return exc.category
+    if isinstance(exc, asyncio.TimeoutError):
+        return "model_request_error"
     if isinstance(exc, AIAPIError):
         return "model_request_error"
     if isinstance(exc, json.JSONDecodeError):

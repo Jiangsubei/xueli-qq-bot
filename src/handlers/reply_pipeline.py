@@ -11,7 +11,7 @@ from src.core.config import AppConfig
 from src.core.message_trace import format_trace_log
 from src.core.model_invocation_router import ModelInvocationType
 from src.core.pipeline_errors import classify_pipeline_error
-from src.core.models import Conversation, MessageEvent, MessageHandlingPlan, MessageType
+from src.core.models import Conversation, MessageEvent, MessageHandlingPlan, MessageType, PromptPlan, TemporalContext
 from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers.message_context import MessageContext
 from src.services.ai_client import AIAPIError, AIResponse
@@ -128,8 +128,11 @@ class ReplyPipeline:
             original_user_message=original_user_message,
             vision_analysis=vision_analysis,
         )
+        prompt_plan = getattr(message_context, "prompt_plan", None) or getattr(plan, "prompt_plan", None)
         system_prompt = self.build_response_system_prompt(
             event=event,
+            temporal_context=getattr(message_context, "temporal_context", None),
+            prompt_plan=prompt_plan,
             person_fact_context=person_fact_context,
             persistent_memory_context=persistent_memory_context,
             session_restore_context=session_restore_context,
@@ -194,6 +197,9 @@ class ReplyPipeline:
                 len(response.content),
             )
             return ReplyResult(text=response.content, source=source)
+        except asyncio.TimeoutError:
+            logger.error("回复生成失败：%s category=model_request_error 错误=模型响应超时", trace_log)
+            return ReplyResult(text="AI 服务响应超时，请稍后再试。", source="fallback")
         except AIAPIError as exc:
             logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
             return ReplyResult(text=f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}", source="fallback")
@@ -460,27 +466,45 @@ class ReplyPipeline:
         event: MessageEvent,
         user_message: str,
         conversation: Conversation,
+        prompt_plan: Optional[PromptPlan] = None,
     ) -> Tuple[str, str, str, str, str, List[Dict[str, Any]], bool]:
         if not self.host.memory_manager:
             return "", "", "", "", "", [], len(conversation.messages) == 0
 
         is_first_turn = len(conversation.messages) == 0
         access_context = self._build_memory_access_context(event)
-        person_fact_context = await self._load_person_fact_context(
-            user_id=str(event.user_id),
-            access_context=access_context,
-        )
+        person_fact_context = ""
+        if self._layer_enabled(prompt_plan, "enable_person_facts", default=True):
+            person_fact_context = await self._load_person_fact_context(
+                user_id=str(event.user_id),
+                access_context=access_context,
+            )
         persistent_memory_context = await self._load_persistent_memory_context(
             user_id=str(event.user_id),
             access_context=access_context,
         )
+        include_sections = {
+            "session_restore": self._layer_enabled(prompt_plan, "enable_session_restore", default=True),
+            "precise_recall": self._layer_enabled(prompt_plan, "enable_precise_recall", default=True),
+            "dynamic": self._layer_enabled(prompt_plan, "enable_dynamic_memory", default=True),
+        }
+        section_intensity = {
+            "session_restore": str(getattr(prompt_plan, "restore_intensity", "normal") or "normal"),
+            "precise_recall": str(getattr(prompt_plan, "recall_intensity", "normal") or "normal"),
+            "dynamic": str(getattr(prompt_plan, "dynamic_intensity", "normal") or "normal"),
+        }
+        for key, enabled in include_sections.items():
+            if not enabled:
+                section_intensity[key] = "off"
 
         try:
             payload = await self.host.memory_manager.search_memories_with_context(
                 user_id=str(event.user_id),
                 query=user_message,
                 top_k=5,
-                include_conversations=True,
+                include_conversations=self._layer_enabled(prompt_plan, "enable_recent_context", default=True),
+                include_sections=include_sections,
+                section_intensity=section_intensity,
                 read_scope=self._get_memory_read_scope(),
                 access_context=access_context,
             )
@@ -494,6 +518,14 @@ class ReplyPipeline:
         session_restore_entries = payload.get("session_restore", []) if isinstance(payload, dict) else []
         precise_recall_entries = payload.get("precise_recall", []) if isinstance(payload, dict) else []
         history_messages = payload.get("history_messages", []) if isinstance(payload, dict) else []
+        if not include_sections["session_restore"]:
+            session_restore_entries = []
+        if not include_sections["precise_recall"]:
+            precise_recall_entries = []
+        if not include_sections["dynamic"]:
+            memories = []
+        if not self._layer_enabled(prompt_plan, "enable_recent_context", default=True):
+            history_messages = []
         session_restore_context = self._format_memory_context(self._collect_memory_lines(session_restore_entries))
         precise_recall_context = self._format_memory_context(self._collect_memory_lines(precise_recall_entries))
         dynamic_memory_context = self._format_memory_context(
@@ -705,19 +737,30 @@ class ReplyPipeline:
             )
         return ""
 
-    def _build_new_session_prompt(self, event: Optional[MessageEvent], is_first_turn: bool) -> str:
-        if not is_first_turn or event is None:
+    def _layer_enabled(self, prompt_plan: Optional[PromptPlan], attr: str, default: bool = True) -> bool:
+        if not prompt_plan or not getattr(prompt_plan, "policy", None):
+            return default
+        return bool(getattr(prompt_plan.policy, attr, default))
+
+    def _build_temporal_context_prompt(self, temporal_context: Optional[TemporalContext], prompt_plan: Optional[PromptPlan]) -> str:
+        if not self._layer_enabled(prompt_plan, "enable_temporal_context", default=True):
             return ""
-        session_type = str(getattr(event, "message_type", "") or "").strip().lower()
-        if session_type == MessageType.GROUP.value:
+        summary = str(getattr(temporal_context, "summary_text", "") or "").strip()
+        if not summary:
+            return ""
+        mode = str(getattr(prompt_plan, "temporal_mode", "light") or "light").strip().lower() if prompt_plan else "light"
+        if mode == "off":
+            return ""
+        if mode == "explicit":
+            recent_bucket = str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown")
+            continuity_hint = str(getattr(temporal_context, "continuity_hint", "unknown") or "unknown")
             return (
-                "这是新的一轮对话。你现在还没有和这个用户在当前会话里展开新的上下文，"
-                "请优先基于当前消息、这条消息之前的几轮群聊记录、人物事实、上一轮会话恢复摘要、旧对话精准定位、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
+                "这是当前消息和已有上下文之间的时间连续性信息：\n"
+                f"- {summary}\n"
+                f"- 最近时间跨度分层：{recent_bucket}\n"
+                f"- 连续性判断倾向：{continuity_hint}"
             )
-        return (
-            "这是新的一轮对话。你现在还没有和用户在当前会话里展开新的上下文，"
-            "请优先基于当前消息、人物事实、上一轮会话恢复摘要、旧对话精准定位、你需要注意的关键信息，以及与当前消息关联的记忆来理解用户现在想说什么。"
-        )
+        return "这是当前消息和已有上下文之间的时间连续性信息：\n- " + summary
 
     def _build_current_message_prompt(self, event: Optional[MessageEvent], current_message: str) -> str:
         message = str(current_message or "").strip()
@@ -778,21 +821,35 @@ class ReplyPipeline:
         plan: Optional[MessageHandlingPlan] = None,
         recent_history_text: str = "",
         current_message: str = "",
+        temporal_context: Optional[TemporalContext] = None,
+        prompt_plan: Optional[PromptPlan] = None,
     ) -> str:
         parts = [
             self.host._build_assistant_identity_prompt(),
             self.host._build_system_prompt(),
             self._build_session_context_prompt(event),
             self._build_reply_context_prompt(event=event, plan=plan),
-            self._build_new_session_prompt(event, is_first_turn),
-            self._build_history_context_prompt(event, recent_history_text, plan),
-            self._build_person_fact_prompt(person_fact_context),
-            self._build_session_restore_prompt(session_restore_context),
-            self._build_precise_recall_prompt(precise_recall_context),
+            self._build_temporal_context_prompt(temporal_context, prompt_plan),
+            self._build_history_context_prompt(event, recent_history_text, plan)
+            if self._layer_enabled(prompt_plan, "enable_recent_context", default=True)
+            else "",
+            self._build_person_fact_prompt(person_fact_context)
+            if self._layer_enabled(prompt_plan, "enable_person_facts", default=True)
+            else "",
+            self._build_session_restore_prompt(session_restore_context)
+            if self._layer_enabled(prompt_plan, "enable_session_restore", default=True)
+            else "",
+            self._build_precise_recall_prompt(precise_recall_context)
+            if self._layer_enabled(prompt_plan, "enable_precise_recall", default=True)
+            else "",
             self._build_current_message_prompt(event, current_message),
             self._build_persistent_memory_prompt(persistent_memory_context),
-            self._build_dynamic_memory_prompt(dynamic_memory_context),
-            self._build_reply_scope_prompt(event),
+            self._build_dynamic_memory_prompt(dynamic_memory_context)
+            if self._layer_enabled(prompt_plan, "enable_dynamic_memory", default=True)
+            else "",
+            self._build_reply_scope_prompt(event)
+            if self._layer_enabled(prompt_plan, "enable_reply_scope", default=True)
+            else "",
         ]
         return "\n\n".join(part for part in parts if str(part or "").strip())
 

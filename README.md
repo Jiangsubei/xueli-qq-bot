@@ -9,9 +9,11 @@
 ## 当前能力
 
 - 私聊与群聊回复
-- 群聊规划、复读触发与图片理解
+- 统一会话规划、复读触发与图片理解
 - 长期记忆提取、检索与写入
 - 会话摘要恢复、旧对话精准召回、人物事实分层
+- PromptPlan 驱动的动态 prompt layer 编译
+- 私聊短窗口 batching 与 `reply / wait / ignore`
 - 本地 WebUI 控制台
 - NapCat adapter
 - API adapter
@@ -51,6 +53,22 @@ tests/                      自动化测试
 3. `BotRuntime.ingest_adapter_payload(...)` / `ingest_inbound_event(...)`
 4. `EventDispatcher` 分发
 5. `MessageHandler` / planner / reply pipeline 处理
+
+### 统一规划与回复编译
+
+当前的消息处理链不再区分“群聊有 planner，私聊直接回复”这种旧路径，而是统一变成：
+
+1. `MessageHandler` 先整理消息事实、窗口上下文、图片信息、时间跨度和 planning signals
+2. `ConversationPlanner` 先决定当前动作是 `reply`、`wait` 还是 `ignore`
+3. 如果动作是 `reply`，planner 继续产出 `PromptPlan`
+4. `ReplyPipeline` 按 `PromptPlan` 动态编译 prompt layer，再调用主回复模型
+5. memory retrieval 也按 `PromptPlan` 按需加载对应层，而不是固定把所有记忆都塞进 prompt
+
+这里的关键边界是：
+
+- 代码负责收集事实信号与执行动作
+- planner 负责动作判断和 prompt layer 规划
+- `new_session_prompt` 已移除，改由 `temporal_context` 提供时间连续性事实
 
 ### 出站
 
@@ -105,8 +123,9 @@ response_path = "choices.0.message.content"
 - `adapter_connection`：事件 adapter 的连接地址
 - `ai_service`：主模型
 - `vision_service`：识图模型
-- `group_reply`：群聊策略
-- `group_reply_decision`：群聊判断模型
+- `group_reply`：群聊侧的节流、兴趣回复与复读策略
+- `group_reply_decision`：统一会话规划模型
+- `bot_behavior.private_batch_window_seconds`：私聊短窗口合批时长
 - `memory`：长期记忆
 - `memory_rerank`：记忆重排
 
@@ -189,7 +208,11 @@ python main.py
 
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
+- `src/handlers/conversation_planner.py`
+- `src/handlers/prompt_planner.py`
+- `src/handlers/temporal_context.py`
 - `src/handlers/group_reply_planner.py`
+- `src/handlers/conversation_plan_coordinator.py`
 - `src/handlers/group_plan_coordinator.py`
 
 ### 记忆系统
@@ -215,6 +238,44 @@ python main.py
 - 会话关闭后会自动生成摘要并持久化到 conversation metadata
 - 重要记忆会同步沉淀为结构化人物事实
 - 普通记忆遗忘不再只看单一半衰期，还会结合提及次数、观察锚点和近期强化时间
+- 哪些层启用、启用多强，现在由 `PromptPlan` 控制
+- retrieval 侧会按 layer policy 和 intensity 决定是否查询 `session_restore / precise_recall / dynamic_memory / recent_history`
+
+## 时间与私聊策略
+
+当前不再使用 `new_session_prompt` 这类静态结论，而是统一使用 `temporal_context`：
+
+- 最近消息时间分层
+- 当前会话时间分层
+- 上一轮会话时间分层
+- continuity hint
+
+这些都是 planner 的事实输入，不是代码替模型做出的结论。
+
+私聊路径也已经改成统一 planner：
+
+- 私聊不再默认必回复
+- 支持 `reply / wait / ignore`
+- 支持短窗口 batching，把连续碎片输入合并后再规划
+- 显式“等一下 / 我补充”类信号会直接触发强 hold
+
+## 模型调用路由
+
+`src/core/model_invocation_router.py` 现在统一管理不同用途的模型调用队列与超时策略：
+
+- `GROUP_PLAN`
+- `REPLY_GENERATION`
+- `EMOJI_REPLY_DECISION`
+- `VISION_ANALYSIS`
+- `VISION_STICKER_EMOTION`
+- `MEMORY_EXTRACTION`
+- `MEMORY_RERANK`
+
+当前策略是：
+
+- 快决策任务使用更短的 purpose timeout
+- 回复生成、视觉分析、记忆提取继承主超时预算
+- 记忆重排可按自己的较短 timeout 显式覆盖
 
 ## 当前状态说明
 
@@ -226,8 +287,12 @@ python main.py
 - 让回复动作能按 session.platform 选择正确 adapter
 - 把运行类命名切到中性的 `BotRuntime`
 - 把 NapCat transport 移到了 adapter 边界
+- 把私聊和群聊统一到同一条 conversation planner 主链
+- 把 prompt 控制权从静态拼接推进到 planner 产出的 `PromptPlan`
+- 移除了 `new_session_prompt`，改用 `temporal_context`
 - 把记忆上下文拆成了人物事实 / 会话恢复 / 精准召回 / 动态记忆几层
 - 给普通记忆补上了更稳的多因子遗忘逻辑
+- 给模型调用路由补上了 per-purpose timeout policy
 
 仍然值得继续做的主要是：
 
@@ -242,7 +307,7 @@ python main.py
 常用运行方式：
 
 ```bash
-venv\Scripts\python.exe -m unittest tests.test_platform_models tests.test_platform_normalizers tests.test_napcat_adapter tests.test_api_adapter tests.test_api_runtime tests.test_api_ingress_bridge tests.test_bot_api_ingress tests.test_bot_adapter_send_path tests.test_dispatcher_inbound_wiring tests.test_message_handler_inbound_event tests.test_downstream_inbound_helpers tests.test_group_reply_planner_context_preference tests.test_config_adapter_connection tests.test_console_network_settings tests.test_runtime_supervisor tests.test_session_restore_service tests.test_memory_session_restore_context tests.test_reply_pipeline_session_restore tests.test_conversation_recall_service tests.test_person_fact_service tests.test_memory_forgetting
+venv\Scripts\python.exe -m unittest tests.test_platform_models tests.test_platform_normalizers tests.test_napcat_adapter tests.test_api_adapter tests.test_api_runtime tests.test_api_ingress_bridge tests.test_bot_api_ingress tests.test_bot_adapter_send_path tests.test_dispatcher_inbound_wiring tests.test_message_handler_inbound_event tests.test_downstream_inbound_helpers tests.test_group_reply_planner_context_preference tests.test_private_planning tests.test_temporal_context tests.test_prompt_planner tests.test_conversation_planner tests.test_model_invocation_router tests.test_reply_pipeline_prompt_plan tests.test_reply_pipeline_memory_layer_policy tests.test_config_adapter_connection tests.test_console_network_settings tests.test_runtime_supervisor tests.test_session_restore_service tests.test_memory_session_restore_context tests.test_reply_pipeline_session_restore tests.test_conversation_recall_service tests.test_person_fact_service tests.test_memory_forgetting
 ```
 
 ## 额外说明

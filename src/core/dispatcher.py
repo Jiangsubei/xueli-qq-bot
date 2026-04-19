@@ -51,11 +51,16 @@ class EventDispatcher:
         }
         self.preprocessors: list = []
         self.postprocessors: list = []
+        self._stats_lock = asyncio.Lock()
         self.stats = {
             "total_events": 0,
             "handled_events": 0,
             "skipped_events": 0,
         }
+
+    async def _inc_stat(self, key: str) -> None:
+        async with self._stats_lock:
+            self.stats[key] = int(self.stats.get(key, 0) or 0) + 1
 
     def register_preprocessor(self, func: Callable[[EventContext], None]):
         """注册预处理器。"""
@@ -122,7 +127,7 @@ class EventDispatcher:
 
     async def dispatch(self, raw_data: Dict[str, Any]):
         """分发事件。"""
-        self.stats["total_events"] += 1
+        await self._inc_stat("total_events")
         event = OneBotEvent.from_dict(raw_data)
         await self._dispatch_event(event, raw_data=raw_data)
 
@@ -134,7 +139,7 @@ class EventDispatcher:
         self_id: Any = "",
     ):
         event = build_message_event_from_inbound(inbound_event, self_id=self_id, raw_data=raw_data)
-        self.stats["total_events"] += 1
+        await self._inc_stat("total_events")
         await self._dispatch_event(event, raw_data=dict(event.raw_data or {}), inbound_event=inbound_event)
 
     def get_stats(self) -> Dict[str, int]:
@@ -180,7 +185,7 @@ class EventDispatcher:
                 )
 
         if not ctx.should_handle:
-            self.stats["skipped_events"] += 1
+            await self._inc_stat("skipped_events")
             logger.debug("事件已跳过: 原因=%s", ctx.skip_reason or "未说明")
             return
 
@@ -227,4 +232,4 @@ class EventDispatcher:
                     e,
                 )
 
-        self.stats["handled_events"] += 1
+        await self._inc_stat("handled_events")

@@ -271,6 +271,8 @@ class MemoryManager:
         query: str,
         top_k: int = 5,
         include_conversations: bool = True,
+        include_sections: Optional[Dict[str, bool]] = None,
+        section_intensity: Optional[Dict[str, str]] = None,
         read_scope: Optional[str] = None,
         message_type: str = "private",
         group_id: Optional[str] = None,
@@ -281,6 +283,8 @@ class MemoryManager:
             query=query,
             top_k=top_k,
             include_conversations=include_conversations,
+            include_sections=include_sections,
+            section_intensity=section_intensity,
             read_scope=read_scope,
             access_context=self._resolve_memory_access_context(
                 user_id=user_id,
@@ -296,6 +300,8 @@ class MemoryManager:
         *,
         user_id: str,
         query: str,
+        include_sections: Optional[Dict[str, bool]] = None,
+        section_intensity: Optional[Dict[str, str]] = None,
         read_scope: Optional[str] = None,
         message_type: str = "private",
         group_id: Optional[str] = None,
@@ -304,6 +310,8 @@ class MemoryManager:
         return await self.retrieval_coordinator.build_prompt_context(
             user_id=user_id,
             query=query,
+            include_sections=include_sections,
+            section_intensity=section_intensity,
             read_scope=read_scope,
             access_context=self._resolve_memory_access_context(
                 user_id=user_id,

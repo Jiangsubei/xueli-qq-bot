@@ -64,6 +64,7 @@ class BotBehaviorConfig:
     rate_limit_interval: float = 1.0
     log_full_prompt: bool = False
     private_quote_reply_enabled: bool = False
+    private_batch_window_seconds: float = 1.2
 
 
 @dataclass(frozen=True)
@@ -253,6 +254,7 @@ class Config:
         "RATE_LIMIT_INTERVAL": ("bot_behavior", "rate_limit_interval"),
         "LOG_FULL_PROMPT": ("bot_behavior", "log_full_prompt"),
         "PRIVATE_QUOTE_REPLY_ENABLED": ("bot_behavior", "private_quote_reply_enabled"),
+        "PRIVATE_BATCH_WINDOW_SECONDS": ("bot_behavior", "private_batch_window_seconds"),
         "ASSISTANT_NAME": ("assistant_profile", "name"),
         "ASSISTANT_ALIAS": ("assistant_profile", "alias"),
         "PERSONALITY": ("personality", "content"),
@@ -534,6 +536,7 @@ class Config:
             rate_limit_interval=self._bounded_float(section, "bot_behavior", "rate_limit_interval", default=1.0, minimum=0.0),
             log_full_prompt=self._bool_value(section, "bot_behavior", "log_full_prompt", default=False),
             private_quote_reply_enabled=self._bool_value(section, "bot_behavior", "private_quote_reply_enabled", default=False),
+            private_batch_window_seconds=self._bounded_float(section, "bot_behavior", "private_batch_window_seconds", default=1.2, minimum=0.0),
         )
 
     def _build_assistant_profile_config(self) -> AssistantProfileConfig:

@@ -49,7 +49,11 @@
 - `src/core/dispatcher.py`
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
+- `src/handlers/conversation_planner.py`
+- `src/handlers/prompt_planner.py`
+- `src/handlers/temporal_context.py`
 - `src/handlers/group_reply_planner.py`
+- `src/handlers/conversation_plan_coordinator.py`
 - `src/handlers/group_plan_coordinator.py`
 
 当前已实现：
@@ -60,6 +64,10 @@
 - 回复动作按 `session.platform` 选择对应 adapter
 - mention / quote 优先读取 attached `InboundEvent`
 - session / execution key 平台限定化
+- 私聊和群聊统一走 `ConversationPlanner`
+- planner 先决定 `reply / wait / ignore`，再产出 `PromptPlan`
+- `ReplyPipeline` 按 `PromptPlan` 动态编译 prompt layer
+- `new_session_prompt` 已被 `temporal_context` 替代
 
 ## 当前配置方式
 
@@ -84,8 +92,16 @@
 3. `src/core/bootstrap.py` 组装默认 runtime 组件
 4. `src/core/runtime.py` 管理 bot 运行时
 5. `src/adapters/napcat` 或 `src/adapters/api` 提供入站/出站 adapter 能力
-6. `src/handlers/` 执行消息处理、规划、回复、视觉、记忆逻辑
+6. `src/handlers/` 执行消息处理、统一规划、prompt 编译、回复、视觉、记忆逻辑
 7. `src/webui/` 提供本地控制台
+
+更具体的顺序现在是：
+
+1. `MessageHandler` 收集 recent window、图片理解结果、temporal context、planning signals
+2. `ConversationPlanner` 判断动作并返回 `PromptPlan`
+3. `ReplyPipeline` 按 layer policy 编译回复 prompt
+4. `MemoryManager` / retrieval coordinator 按 `PromptPlan` 决定启用哪些 memory layer 和 intensity
+5. 回复模型生成最终回答，后续可再触发表情跟进
 
 ## 当前记忆系统状态
 
@@ -104,6 +120,50 @@
 - 精准召回层：围绕当前 query 的首次提及和最近提及定位
 - 持续关键信息层：重要但不适合归到人物事实里的长期信息
 - 动态普通记忆层：和当前消息临时相关的普通记忆
+
+当前变化点是：
+
+- 这些层不再默认全部启用
+- 是否启用、启用多强由 `PromptPlan` 决定
+- retrieval 已支持 `include_sections` 和 `section_intensity`
+- `recent_history` 也已进入可规划层，而不是永远固定注入
+
+## 当前 planner / prompt 架构状态
+
+已经明确的边界是：
+
+- 代码负责提供事实信号，不替模型下结论
+- planner prompt 尽量中性，只描述观察到的时间跨度、图片、recent context 和 planning signals
+- 模型先做 action planning，再做 prompt planning
+- `ReplyPipeline` 更像 prompt compiler，而不是静态 prompt 拼接器
+
+新增的私聊策略：
+
+- 私聊不再默认必回复
+- 支持 `reply / wait / ignore`
+- 增加短窗口 batching，避免用户连发时被逐条抢答
+
+新增的时间策略：
+
+- 统一使用 `temporal_context`
+- 区分 private / group 的时间分桶阈值
+- 用 continuity hint 表达连续性事实，而不是代码直接宣告“这是新会话”
+
+## 当前模型调用路由状态
+
+- `src/core/model_invocation_router.py`
+
+当前模型调用已经按 purpose 进入独立 FIFO worker，并补上了标准化 timeout policy：
+
+- `GROUP_PLAN`
+- `REPLY_GENERATION`
+- `EMOJI_REPLY_DECISION`
+- `VISION_ANALYSIS`
+- `VISION_STICKER_EMOTION`
+- `MEMORY_EXTRACTION`
+- `MEMORY_RERANK`
+
+其中快决策类任务默认更短，回复生成和主链路任务继承主超时预算，记忆重排支持显式较短超时覆盖。
 
 ### 当前写入与遗忘逻辑
 
@@ -152,7 +212,11 @@
 ### 处理链
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
+- `src/handlers/conversation_planner.py`
+- `src/handlers/prompt_planner.py`
+- `src/handlers/temporal_context.py`
 - `src/handlers/group_reply_planner.py`
+- `src/handlers/conversation_plan_coordinator.py`
 - `src/handlers/group_plan_coordinator.py`
 
 ### 记忆
@@ -170,7 +234,10 @@
 - 回复已不再默认回退到 QQ session
 - WebUI 表层命名已开始去 QQ 默认化
 - runtime / adapter / config 迁移已有 focused tests 覆盖
+- unified conversation planner 已介入私聊和群聊
 - memory prompt 已显式分成事实 / 会话恢复 / 精准召回 / 动态记忆几层
+- prompt layer 已开始由 `PromptPlan` 驱动
+- `temporal_context` 与 private batching 已有 focused tests 覆盖
 - 会话摘要、人物事实、精准召回、多因子遗忘已有 focused tests 覆盖
 
 ## 当前测试面
@@ -187,6 +254,10 @@
 - message handler inbound preference
 - downstream helper preference
 - planner context preference
+- private planning / batching
+- temporal context
+- prompt planner
+- model invocation router timeout behavior
 - adapter connection config migration
 - network settings migration
 - runtime supervisor lifecycle

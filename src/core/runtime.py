@@ -60,7 +60,10 @@ class BotRuntime:
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
         self._message_pipeline = SessionMessagePipeline(on_state_change=self._on_pipeline_state_change)
-        self._model_router = ModelInvocationRouter(on_state_change=self._on_model_router_state_change)
+        self._model_router = ModelInvocationRouter(
+            base_timeout_seconds=max(1, int(self.config.app.bot_behavior.response_timeout or 60)),
+            on_state_change=self._on_model_router_state_change,
+        )
         self._connection_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._handlers_registered = False
@@ -186,6 +189,9 @@ class BotRuntime:
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
         plan = None
+        app_config = getattr(self.message_handler, "app_config", None)
+        bot_behavior = getattr(app_config, "bot_behavior", None)
+        response_timeout = int(getattr(bot_behavior, "response_timeout", 60) or 60)
         session_key_getter = getattr(self.message_handler, "_get_conversation_key", None)
         session_key = session_key_getter(event) if callable(session_key_getter) else get_execution_key(event)
         message_id = getattr(event, "message_id", 0)
@@ -194,7 +200,10 @@ class BotRuntime:
         try:
             logger.info("开始处理消息：%s", trace_log)
             logger.info("开始规划：%s", trace_log)
-            plan = await self.message_handler.plan_message(event, trace_id=trace_id)
+            plan = await asyncio.wait_for(
+                self.message_handler.plan_message(event, trace_id=trace_id),
+                timeout=max(1, response_timeout),
+            )
             logger.info("规划结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
             self._log_plan_preview(plan, trace_log)
             if self._should_log_message_summary():
@@ -215,7 +224,10 @@ class BotRuntime:
             )
             await self.message_handler.check_rate_limit(target_id)
             logger.info("开始生成回复：%s", trace_log)
-            reply_result = await self.message_handler.get_ai_response(event, plan=plan, trace_id=trace_id)
+            reply_result = await asyncio.wait_for(
+                self.message_handler.get_ai_response(event, plan=plan, trace_id=trace_id),
+                timeout=max(1, response_timeout),
+            )
             if not reply_result or not reply_result.text:
                 logger.info("回复为空，跳过发送：%s", trace_log)
                 return
@@ -228,6 +240,15 @@ class BotRuntime:
                 await self.message_handler.record_group_reply_sent(event, reply_result.text)
                 await self._send_emoji_follow_up_if_needed(event, reply_result, plan, trace_id=trace_id)
             logger.info("消息处理结束：%s", trace_log)
+        except asyncio.TimeoutError:
+            logger.error("处理消息事件超时：%s timeout=%ss", trace_log, response_timeout)
+            self.runtime_metrics.record_error(message_error=True)
+            self._sync_status_cache()
+            if plan is not None and plan.should_reply:
+                try:
+                    await self._send_response(event, "抱歉，这次处理超时了，请稍后再试。", trace_id=trace_id)
+                except Exception as fallback_exc:
+                    logger.error("发送超时兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
         except Exception as exc:
             category = classify_pipeline_error(exc)
             logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)

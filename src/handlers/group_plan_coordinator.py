@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
 
@@ -10,9 +11,10 @@ from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.runtime_metrics import RuntimeMetrics
+from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.message_context import MessageContext
-from src.handlers.group_reply_planner import GroupReplyPlanner
+from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ class GroupPlanCoordinator:
 
     def __init__(
         self,
-        planner: GroupReplyPlanner,
+        planner: ConversationPlanner,
         session_manager: ConversationSessionManager,
         *,
         runtime_metrics: Optional[RuntimeMetrics] = None,
@@ -124,6 +126,7 @@ class GroupPlanCoordinator:
             planner_text = "[空]"
 
         return {
+            "event_time": self._event_time(event),
             "text": planner_text,
             "display_text": display_text,
             "text_content": clean_text,
@@ -188,6 +191,15 @@ class GroupPlanCoordinator:
         window_messages = self._compose_window_messages(history_items, current_message)
         execution_key = get_execution_key(event)
         conversation_key = self.session_manager.get_key(event)
+        previous_message_time = self._message_event_time(history_items[-1]) if history_items else 0.0
+        history_event_times = [item.get("event_time", 0.0) for item in window_messages]
+        temporal_context = build_temporal_context(
+            current_event_time=current_message.get("event_time", 0.0),
+            chat_mode="group",
+            previous_message_time=previous_message_time,
+            conversation_last_time=previous_message_time,
+            history_event_times=history_event_times,
+        )
         reply_context = self._merge_reply_context(
             self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
@@ -204,6 +216,10 @@ class GroupPlanCoordinator:
             user_message=str(current_message.get("text_content") or user_message or "").strip(),
             current_sender_label=self._format_window_speaker(current_message).replace("用户 ", "", 1),
             is_first_turn=False,
+            current_event_time=float(current_message.get("event_time", 0.0) or 0.0),
+            previous_message_time=float(previous_message_time or 0.0),
+            conversation_last_time=float(previous_message_time or 0.0),
+            temporal_context=temporal_context,
             window_messages=window_messages,
             recent_history_text=self._build_recent_history_text(window_messages),
             vision_analysis={
@@ -286,6 +302,7 @@ class GroupPlanCoordinator:
             "user_id": "",
             "speaker_role": "assistant",
             "speaker_name": config.get_assistant_name(),
+            "event_time": time.time(),
             "text": text,
             "display_text": text,
             "text_content": text,
@@ -329,6 +346,12 @@ class GroupPlanCoordinator:
 
     def _append_group_history(self, group_id: str, item: Dict[str, Any]) -> None:
         self._history_deque(group_id).append(dict(item))
+
+    def _event_time(self, event: MessageEvent) -> float:
+        return normalize_event_time(getattr(event, "time", 0.0)) or time.time()
+
+    def _message_event_time(self, item: Optional[Dict[str, Any]]) -> float:
+        return normalize_event_time((item or {}).get("event_time", 0.0))
 
     def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
         count = self._get_context_window_size()

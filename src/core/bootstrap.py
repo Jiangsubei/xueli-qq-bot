@@ -18,7 +18,7 @@ from src.core.config import (
 from src.core.lifecycle import close_resource
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.runtime_metrics import RuntimeMetrics
-from src.handlers.group_reply_planner import GroupReplyPlanner
+from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.message_handler import MessageHandler
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class BotBootstrapper:
         try:
             message_handler = MessageHandler(
                 memory_manager=memory_manager,
-                group_reply_planner=GroupReplyPlanner(
+                group_reply_planner=ConversationPlanner(
                     app_config=app_config,
                     model_invocation_router=model_invocation_router,
                 ),

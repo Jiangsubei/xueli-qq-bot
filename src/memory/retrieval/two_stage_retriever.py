@@ -136,12 +136,13 @@ class APIReranker(BaseReranker):
         self.endpoint = str(endpoint or "").rstrip("/")
         self.candidate_max_chars = max(MIN_RERANK_CANDIDATE_MAX_CHARS, int(candidate_max_chars or 160))
         self.total_prompt_budget = max(MIN_RERANK_TOTAL_PROMPT_BUDGET, int(total_prompt_budget or 2400))
+        self.timeout = max(0.001, float(timeout or 5.0))
         self._model_invocation_router = model_invocation_router
         self._client = AIClient(
             api_base=self.endpoint,
             api_key=api_key,
             model=model,
-            timeout=max(1, int(timeout)),
+            timeout=max(1, int(self.timeout)),
             extra_params=extra_params or {},
             extra_headers=extra_headers or {},
             response_path=response_path or "choices.0.message.content",
@@ -255,6 +256,7 @@ class APIReranker(BaseReranker):
                     session_key="",
                     message_id="",
                     label="记忆重排",
+                    timeout_seconds=self.timeout,
                     runner=run_chat,
                 )
             else:

@@ -154,12 +154,16 @@ class MemoryRetrievalCoordinator:
         query: str,
         top_k: int = 5,
         include_conversations: bool = True,
+        include_sections: Optional[Dict[str, bool]] = None,
+        section_intensity: Optional[Dict[str, str]] = None,
         read_scope: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
         prompt_context = await self.build_prompt_context(
             user_id=user_id,
             query=query,
+            include_sections=include_sections,
+            section_intensity=section_intensity,
             read_scope=read_scope,
             access_context=access_context,
         )
@@ -183,9 +187,23 @@ class MemoryRetrievalCoordinator:
         *,
         user_id: str,
         query: str,
+        include_sections: Optional[Dict[str, bool]] = None,
+        section_intensity: Optional[Dict[str, str]] = None,
         read_scope: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
+        section_policy = {
+            "session_restore": True,
+            "precise_recall": True,
+            "dynamic": True,
+            **(include_sections or {}),
+        }
+        section_intensity = {
+            "session_restore": "normal",
+            "precise_recall": "normal",
+            "dynamic": "normal",
+            **(section_intensity or {}),
+        }
         context = self._resolve_access_context(
             user_id=user_id,
             read_scope=read_scope,
@@ -199,15 +217,19 @@ class MemoryRetrievalCoordinator:
             access_context=context,
         )
         ordinary_memories = await self._load_accessible_ordinary_memories(context)
-        session_restore = await self._build_session_restore_entries(
-            user_id=str(user_id),
-            context=context,
-        )
-        precise_recall = await self._build_precise_recall_entries(
-            user_id=str(user_id),
-            query=query,
-            context=context,
-        )
+        session_restore = []
+        if section_policy.get("session_restore", True):
+            session_restore = await self._build_session_restore_entries(
+                user_id=str(user_id),
+                context=context,
+            )
+        precise_recall = []
+        if section_policy.get("precise_recall", True):
+            precise_recall = await self._build_precise_recall_entries(
+                user_id=str(user_id),
+                query=query,
+                context=context,
+            )
 
         user_important = [
             self._memory_to_prompt_entry(memory, section="user_important", requester_user_id=str(user_id))
@@ -230,15 +252,17 @@ class MemoryRetrievalCoordinator:
             )
             == "shared"
         ]
-        dynamic_memories = (
-            await self._build_dynamic_memory_entries(
-                query=query,
-                user_id=str(user_id),
-                context=context,
-                important_memories=important_memories,
-                ordinary_memories=ordinary_memories,
-            )
-        )[: max(1, int(self.prompt_budgets["dynamic"] / 80))]
+        dynamic_memories: List[Dict[str, Any]] = []
+        if section_policy.get("dynamic", True):
+            dynamic_memories = (
+                await self._build_dynamic_memory_entries(
+                    query=query,
+                    user_id=str(user_id),
+                    context=context,
+                    important_memories=important_memories,
+                    ordinary_memories=ordinary_memories,
+                )
+            )[: max(1, int(self.prompt_budgets["dynamic"] / 80))]
 
         user_important = self.access_policy.dedupe_entries(user_important)
         addressing = self.access_policy.dedupe_entries(addressing)
@@ -251,9 +275,9 @@ class MemoryRetrievalCoordinator:
             "user_important": self._trim_entries(user_important, self.prompt_budgets["user_important"]),
             "addressing": self._trim_entries(addressing, self.prompt_budgets["addressing"]),
             "shared": self._trim_entries(shared_memories, self.prompt_budgets["shared"]),
-            "session_restore": self._trim_entries(session_restore, self.prompt_budgets["session_restore"]),
-            "precise_recall": self._trim_entries(precise_recall, self.prompt_budgets["precise_recall"]),
-            "dynamic": self._trim_entries(dynamic_memories, self.prompt_budgets["dynamic"]),
+            "session_restore": self._trim_entries(session_restore, self._budget_for_intensity("session_restore", section_intensity["session_restore"])),
+            "precise_recall": self._trim_entries(precise_recall, self._budget_for_intensity("precise_recall", section_intensity["precise_recall"])),
+            "dynamic": self._trim_entries(dynamic_memories, self._budget_for_intensity("dynamic", section_intensity["dynamic"])),
         }
 
         scene_hits = len(sections["addressing"]) + len(sections["shared"])
@@ -271,6 +295,17 @@ class MemoryRetrievalCoordinator:
             "precise_recall": sections["precise_recall"],
             "dynamic_memories": sections["dynamic"],
         }
+
+    def _budget_for_intensity(self, section: str, intensity: str) -> int:
+        base = int(self.prompt_budgets.get(section, 0) or 0)
+        level = str(intensity or "normal").strip().lower()
+        multiplier = {
+            "off": 0.0,
+            "light": 0.6,
+            "normal": 1.0,
+            "high": 1.4,
+        }.get(level, 1.0)
+        return max(0, int(base * multiplier))
 
     async def _build_session_restore_entries(
         self,
