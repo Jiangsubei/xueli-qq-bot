@@ -5,6 +5,7 @@ from .views import (
     dashboard,
     dashboard_data,
     delete_memory,
+    emoji_media,
     memory_items,
     recall_data,
     restart_runtime,
@@ -32,4 +33,5 @@ urlpatterns = [
     path("api/config/memory/", save_memory, name="save-memory-settings"),
     path("api/avatar/", upload_avatar, name="assistant-avatar-upload"),
     path("media/avatar/current/", assistant_avatar, name="assistant-avatar"),
+    path("media/emoji/<str:emoji_id>/", emoji_media, name="emoji-media"),
 ]

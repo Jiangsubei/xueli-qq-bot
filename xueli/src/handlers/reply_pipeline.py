@@ -210,11 +210,10 @@ class ReplyPipeline:
             return ReplyResult(text=normalized_text, segments=normalized_segments, source=source)
         except asyncio.TimeoutError:
             logger.error("回复生成失败：%s category=model_request_error 错误=模型响应超时", trace_log)
-            return ReplyResult(text="AI 服务响应超时，请稍后再试。", segments=["AI 服务响应超时，请稍后再试。"], source="fallback")
+            return ReplyResult(text="", segments=[], source="error_suppressed")
         except AIAPIError as exc:
             logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
-            fallback_text = f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}"
-            return ReplyResult(text=fallback_text, segments=[fallback_text], source="fallback")
+            return ReplyResult(text="", segments=[], source="error_suppressed")
         except Exception as exc:
             logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
             return ReplyResult(text="处理消息时出错，请稍后再试。", segments=["处理消息时出错，请稍后再试。"], source="fallback")

@@ -321,6 +321,56 @@ def _load_emoji_stats(app_config) -> Dict[str, int]:
     }
 
 
+def _resolve_emoji_image_path(storage_path: Path, image_path: str) -> Path | None:
+    relative = str(image_path or "").strip()
+    if not relative:
+        return None
+    path = Path(relative)
+    resolved = path.resolve() if path.is_absolute() else (storage_path / path).resolve()
+    try:
+        resolved.relative_to(storage_path.resolve())
+    except ValueError:
+        return None
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def _load_emoji_gallery(app_config) -> List[Dict[str, Any]]:
+    storage_path = _resolve_storage_path(app_config.emoji.storage_path)
+    index_path = storage_path / "index.json"
+    data = _load_json_file(index_path, {"items": {}})
+    raw_items = data.get("items") or {}
+    if not isinstance(raw_items, dict):
+        return []
+
+    def _sort_key(item: Dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(item.get("last_seen_at") or item.get("first_seen_at") or ""),
+            str(item.get("emoji_id") or ""),
+        )
+
+    gallery: List[Dict[str, Any]] = []
+    for emoji_id, payload in sorted(raw_items.items(), key=lambda entry: _sort_key(entry[1]), reverse=True):
+        item = payload if isinstance(payload, dict) else {}
+        resolved = _resolve_emoji_image_path(storage_path, item.get("image_path", ""))
+        if not resolved:
+            continue
+        stamp = int(resolved.stat().st_mtime_ns)
+        gallery.append(
+            {
+                "emoji_id": str(item.get("emoji_id") or emoji_id),
+                "description": str(item.get("description") or "").strip(),
+                "emotion_status": str(item.get("emotion_status") or "unknown").strip() or "unknown",
+                "primary_emotion": str(item.get("primary_emotion") or "").strip(),
+                "usage_count": _safe_int(item.get("usage_count")),
+                "disabled": bool(item.get("disabled", False)),
+                "image_url": f"{reverse('emoji-media', args=[emoji_id])}?v={stamp}",
+            }
+        )
+    return gallery
+
+
 def _format_snapshot_label(snapshot_at_text: str) -> str:
     if not snapshot_at_text:
         return "--"
@@ -349,6 +399,25 @@ def _avatar_url(avatar_path: str) -> str | None:
         return None
     stamp = int(path.stat().st_mtime_ns)
     return f"{reverse('assistant-avatar')}?v={stamp}"
+
+
+def get_emoji_file(emoji_id: str) -> Dict[str, Any]:
+    config_obj = load_config()
+    storage_path = _resolve_storage_path(config_obj.app.emoji.storage_path)
+    data = _load_json_file(storage_path / "index.json", {"items": {}})
+    items = data.get("items") or {}
+    item = items.get(emoji_id) if isinstance(items, dict) else None
+    if not isinstance(item, dict):
+        return {"exists": False}
+    resolved = _resolve_emoji_image_path(storage_path, item.get("image_path", ""))
+    if not resolved:
+        return {"exists": False}
+    content_type, _ = mimetypes.guess_type(str(resolved))
+    return {
+        "exists": True,
+        "path": resolved,
+        "content_type": content_type or "application/octet-stream",
+    }
 
 
 def load_runtime_snapshot() -> Dict[str, Any]:
@@ -830,6 +899,7 @@ def build_dashboard_context() -> Dict[str, Any]:
     runtime = _build_runtime_payload(app_config, snapshot_state)
     vision_status = get_vision_service_status(app_config)
     emoji_stats = _load_emoji_stats(app_config)
+    emoji_gallery = _load_emoji_gallery(app_config)
     group_client = {
         "api_base": app_config.group_reply_decision.api_base,
         "api_key": app_config.group_reply_decision.api_key,
@@ -1061,6 +1131,7 @@ def build_dashboard_context() -> Dict[str, Any]:
             "total": str(emoji_stats.get("emoji_total", 0)),
             "pending": str(emoji_stats.get("emoji_pending_classification", 0)),
         },
+        "emoji_gallery": emoji_gallery,
         "memory_sections": build_memory_items_payload()["sections"],
         "client_config": _build_client_config(),
         "runtime_payload": build_runtime_api_payload(),

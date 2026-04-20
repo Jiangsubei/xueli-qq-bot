@@ -191,11 +191,40 @@
         </div>
       </div>
       <div class="emoji-library-body">
+        {% if emoji_gallery %}
+        <div class="emoji-gallery-grid">
+          {% for item in emoji_gallery %}
+          <article class="emoji-gallery-card{% if item.disabled %} is-disabled{% endif %}">
+            <div class="emoji-gallery-preview">
+              <img src="{{ item.image_url }}" alt="{{ item.description|default:'表情预览' }}">
+            </div>
+            <div class="emoji-gallery-meta">
+              <div class="emoji-gallery-topline">
+                <span class="emoji-chip">{{ item.primary_emotion|default:"未分类" }}</span>
+                <span class="emoji-chip muted">{{ item.emotion_status }}</span>
+              </div>
+              <p class="emoji-gallery-desc">
+                {% if item.description %}
+                {{ item.description }}
+                {% else %}
+                还没有写描述，先把这张表情收好了。
+                {% endif %}
+              </p>
+              <div class="emoji-gallery-foot">
+                <span>ID: {{ item.emoji_id }}</span>
+                <span>使用 {{ item.usage_count }} 次</span>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
         <div class="emoji-gallery-placeholder">
           <div class="emoji-gallery-icon"><i class="fa-regular fa-images"></i></div>
-          <h4>表情库正在接入</h4>
-          <p>后面这里会展示真实表情、筛选和预览。</p>
+          <h4>暂时还没有可展示的表情</h4>
+          <p>打开自动收集后，助手收进来的表情会直接出现在这里。</p>
         </div>
+        {% endif %}
       </div>
     </section>
   </form>

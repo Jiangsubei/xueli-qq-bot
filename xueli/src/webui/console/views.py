@@ -16,6 +16,7 @@ from .config_service import (
 )
 from .memory_service import build_memory_items_payload, delete_memory_item, update_memory_item
 from .runtime_service import build_dashboard_context, build_recall_payload, build_runtime_api_payload, restart_backend_runtime
+from .services import get_emoji_file
 
 
 def _parse_json_body(request):
@@ -141,4 +142,12 @@ def assistant_avatar(request):
     payload = get_assistant_avatar_file()
     if not payload.get("exists"):
         return HttpResponse(status=204)
+    return FileResponse(payload["path"].open("rb"), content_type=payload["content_type"])
+
+
+@require_GET
+def emoji_media(request, emoji_id: str):
+    payload = get_emoji_file(emoji_id)
+    if not payload.get("exists"):
+        return HttpResponse(status=404)
     return FileResponse(payload["path"].open("rb"), content_type=payload["content_type"])

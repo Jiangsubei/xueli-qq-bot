@@ -34,12 +34,26 @@ class DashboardViewTests(SimpleTestCase):
         self.avatar_root = self.temp_dir / 'avatar'
         self.emoji_root = self.temp_dir / 'emojis'
         self.emoji_root.mkdir(parents=True, exist_ok=True)
+        (self.emoji_root / 'images').mkdir(parents=True, exist_ok=True)
+        (self.emoji_root / 'images' / 'emoji-a.gif').write_bytes(
+            bytes([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00,
+                   0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B])
+        )
         (self.emoji_root / 'index.json').write_text(
             json.dumps(
                 {
                     'version': 2,
                     'items': {
-                        'emoji-a': {'emotion_status': 'pending', 'disabled': False},
+                        'emoji-a': {
+                            'emoji_id': 'emoji-a',
+                            'image_path': 'images/emoji-a.gif',
+                            'description': '歪头看你',
+                            'emotion_status': 'pending',
+                            'primary_emotion': '好奇',
+                            'usage_count': 3,
+                            'disabled': False,
+                        },
                         'emoji-b': {'emotion_status': 'classified', 'disabled': False},
                         'emoji-c': {'emotion_status': 'pending', 'disabled': True},
                     },
@@ -172,6 +186,26 @@ class DashboardViewTests(SimpleTestCase):
         self.assertEqual(payload['runtime']['active_tasks'], '2')
         self.assertEqual(payload['runtime']['emoji_total'], '3')
         self.assertEqual(payload['runtime']['emoji_pending'], '1')
+
+    def test_dashboard_context_contains_real_emoji_gallery_items(self):
+        context = build_dashboard_context()
+        self.assertEqual(len(context['emoji_gallery']), 1)
+        item = context['emoji_gallery'][0]
+        self.assertEqual(item['emoji_id'], 'emoji-a')
+        self.assertEqual(item['description'], '歪头看你')
+        self.assertIn(reverse('emoji-media', args=['emoji-a']), item['image_url'])
+
+    def test_dashboard_renders_real_emoji_gallery_and_serves_media(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('歪头看你', content)
+        self.assertIn(reverse('emoji-media', args=['emoji-a']), content)
+
+        image_response = self.client.get(reverse('emoji-media', args=['emoji-a']))
+        self.assertEqual(image_response.status_code, 200)
+        self.assertEqual(image_response.headers['Content-Type'], 'image/gif')
+        self.assertGreater(len(b''.join(image_response.streaming_content)), 0)
 
     def test_dashboard_marks_stale_snapshot_offline(self):
         self._write_snapshot(snapshot_at=datetime.now(timezone.utc) - timedelta(seconds=60))
