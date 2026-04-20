@@ -10,6 +10,8 @@ echo "     QQ AI 机器人启动器"
 echo "========================================"
 echo ""
 
+cd xueli
+
 # 检查 Python
 if ! command -v python3 &> /dev/null; then
     echo "[错误] 未找到 Python3，请先安装 Python 3.8+"
@@ -34,22 +36,22 @@ echo "[信息] 检查依赖..."
 pip install -q -r requirements.txt
 
 # 检查配置文件
-if [ ! -f ".env" ]; then
+if [ ! -f "config/.env" ]; then
     echo ""
     echo "[警告] 未找到 .env 配置文件！"
     echo "[信息] 正在从示例创建..."
-    cp .env.example .env
+    cp config/.env.example config/.env
     echo ""
     echo "========================================"
-    echo "请编辑 .env 文件，填入你的配置后重新运行"
+    echo "请编辑 config/.env 文件，填入你的配置后重新运行"
     echo "========================================"
     echo ""
 
     # 尝试使用默认编辑器打开
     if command -v nano &> /dev/null; then
-        nano .env
+        nano config/.env
     elif command -v vim &> /dev/null; then
-        vim .env
+        vim config/.env
     fi
 
     exit 1

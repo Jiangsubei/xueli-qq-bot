@@ -1,10 +1,17 @@
 # OpenAI 兼容接口配置指南
 
-本文档说明当前项目如何通过 `config.toml` 配置 OpenAI 兼容服务。
+本文档说明当前项目如何通过本地 `config.toml` 配置 OpenAI 兼容服务。
 
 ## 当前主配置入口
 
 当前项目以仓库根目录的 `config.toml` 作为主配置文件，不再以 `.env` 作为默认启动配置入口。
+
+仓库内建议把：
+
+- `config.example.toml` 作为模板
+- `config.toml` 作为本地私有配置
+
+也就是说，后续分享仓库时应优先同步模板，而不是同步你的真实 `config.toml`。
 
 主模型配置位于：
 
@@ -127,9 +134,16 @@ response_path = "choices.0.message.content"
 
 统一会话规划模型配置位于 `group_reply_decision`。
 
-只有当 `group_reply_decision.api_base` 和 `group_reply_decision.model` 完整时，`ConversationPlanner` 才会作为群聊规划模型启用。
+只有当 `group_reply_decision.api_base` 和 `group_reply_decision.model` 完整时，`ConversationPlanner` / `TimingGateService` 使用的规划模型才会启用。
 
 如果未完整配置，不会自动回退到 `ai_service` 充当 planner，而是退回规则路径：群聊通常只在被 `@` 时回复，或使用规则型兜底行为。
+
+当前回复主链里，`group_reply_decision` 负责的是：
+
+- `ConversationPlanner` 的 `reply / wait / ignore`
+- `TimingGateService` 的 `continue / wait / no_reply`
+
+它不负责生成最终用户可见回复；最终回复仍然由 `ai_service` 主模型负责。
 
 ## 记忆提取模型配置
 
@@ -219,4 +233,4 @@ response_path = "choices.0.message.content"
 - `group_reply_decision.api_base`
 - `group_reply_decision.model`
 
-如果未完整配置，群聊不会启用统一 planner 模型，而会退回规则路径。
+如果未完整配置，群聊不会启用统一 planner / timing gate 模型，而会退回规则路径。

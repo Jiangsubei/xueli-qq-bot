@@ -9,6 +9,8 @@ echo        QQ AI Launcher
 echo ========================================
 echo.
 
+cd xueli
+
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python was not found. Please install Python 3.8+ first.
@@ -42,17 +44,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist ".env" (
+if not exist "config\.env" (
     echo.
     echo [WARN] .env was not found.
     echo [INFO] Creating .env from .env.example...
-    copy /Y .env.example .env >nul
+    copy /Y config\.env.example config\.env >nul
     echo.
     echo ========================================
-    echo Edit .env and run start.bat again.
+    echo Edit config\.env and run start.bat again.
     echo ========================================
     echo.
-    notepad .env
+    notepad config\.env
     pause
     exit /b 1
 )

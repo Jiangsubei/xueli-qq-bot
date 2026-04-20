@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import unittest
+
+from src.core.models import MessageEvent, MessagePlanAction, TemporalContext
+from src.handlers.message_context import MessageContext
+from src.handlers.prompt_planner import PromptPlanner
+
+
+class PromptPlannerTests(unittest.TestCase):
+    def test_default_prompt_plan_uses_rich_memory_for_old_topic_resume(self) -> None:
+        planner = PromptPlanner()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 1,
+                "user_id": 42,
+                "self_id": 999,
+                "raw_message": "继续",
+                "message": [{"type": "text", "data": {"text": "继续"}}],
+            }
+        )
+        context = MessageContext(
+            temporal_context=TemporalContext(
+                continuity_hint="old_topic_resume",
+            )
+        )
+
+        plan = planner.default_prompt_plan(
+            event=event,
+            action=MessagePlanAction.REPLY.value,
+            context=context,
+        )
+
+        self.assertEqual(plan.reply_goal, "recall")
+        self.assertEqual(plan.continuity_mode, "resume_old_topic")
+        self.assertEqual(plan.timeline_detail, "per_message")
+        self.assertEqual(plan.memory_profile, "rich")
+        self.assertEqual(plan.tone_profile, "deep")
+        self.assertEqual(plan.context_profile, "full")
+        self.assertTrue(plan.policy.include_session_restore)
+        self.assertTrue(plan.policy.include_precise_recall)
+
+    def test_default_prompt_plan_uses_comfort_goal_when_context_shows_care_cue(self) -> None:
+        planner = PromptPlanner()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 2,
+                "user_id": 42,
+                "self_id": 999,
+                "raw_message": "我今天有点累",
+                "message": [{"type": "text", "data": {"text": "我今天有点累"}}],
+            }
+        )
+        context = MessageContext(planning_signals={"care_cue_detected": True})
+
+        plan = planner.default_prompt_plan(
+            event=event,
+            action=MessagePlanAction.REPLY.value,
+            context=context,
+        )
+
+        self.assertEqual(plan.reply_goal, "comfort")
+        self.assertEqual(plan.tone_profile, "warm")
+        self.assertEqual(plan.expression_profile, "companion")
+        self.assertIn("先轻轻接住", plan.notes)
+
+    def test_default_prompt_plan_uses_continue_goal_for_follow_up(self) -> None:
+        planner = PromptPlanner()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "message_id": 3,
+                "user_id": 42,
+                "group_id": 100,
+                "self_id": 999,
+                "raw_message": "然后呢",
+                "message": [{"type": "text", "data": {"text": "然后呢"}}],
+            }
+        )
+        context = MessageContext(planning_signals={"follow_up_after_assistant": True})
+
+        plan = planner.default_prompt_plan(
+            event=event,
+            action=MessagePlanAction.REPLY.value,
+            context=context,
+        )
+
+        self.assertEqual(plan.reply_goal, "continue")
+        self.assertEqual(plan.initiative, "gentle_follow")
+        self.assertEqual(plan.expression_profile, "colloquial")
+
+
+if __name__ == "__main__":
+    unittest.main()

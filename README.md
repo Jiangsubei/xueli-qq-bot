@@ -1,192 +1,159 @@
 # xueli
 
-`xueli` 当前的方向是：
+> 轻量对话内核 · 多平台适配 · 开放 API 接入
 
-`轻量对话内核 + 薄多平台 adapter + 开放 API 接入层`
+**xueli** 是一个专注于对话能力的轻量级机器人框架。它不绑定任何特定平台，你可以把它接入 QQ（NapCat）、开放 API，或者未来任何消息渠道。
 
-它不再只被看作一个 QQ 机器人项目。当前仓库里已经保留了 QQ / NapCat 路径，同时也开始具备标准化入站事件、标准化出站动作，以及开放 API 接入能力。
+核心特点：
 
-## 当前能力
+- 🧠 **智能对话规划** – 不只会回复，还会判断“该不该回、什么时候回、怎么回”
+- 📝 **长期记忆系统** – 记住用户说过的重要信息，支持事实沉淀、会话恢复、精准召回
+- 🔌 **平台解耦** – 同样的内核，通过不同的 adapter 接入 QQ、API 等渠道
+- 🧩 **模块化设计** – 对话规划、节奏控制、记忆检索、风格策略均可独立配置
+- 🌐 **本地 WebUI** – 提供可视化控制台，方便调试和管理
+- 📡 **开放 API 接入层** – 允许第三方服务通过 HTTP 调用机器人能力
 
-- 私聊与群聊回复
-- 统一会话规划、复读触发与图片理解
-- 结构化主动陪伴与 `engagement_mode` 驱动的回复编排
-- 长期记忆提取、检索与写入
-- 会话摘要恢复、旧对话精准召回、人物事实分层
-- PromptPlan 驱动的动态 prompt layer 编译
-- 私聊短窗口 batching 与 `reply / wait / ignore`
-- 本地 WebUI 控制台
-- NapCat adapter
-- API adapter
-- 标准 `InboundEvent` / `ReplyAction` / `ImageAction` 数据流
-- 独立轻量 API runtime 第一版
+---
 
-## 当前架构
+## ✨ 主要功能
 
-项目现在大致分成四层：
+| 功能模块 | 说明 |
+|---------|------|
+| 会话规划 | 群聊与私聊共用一条规划链路 |
+| 节奏控制 | 避免刷屏，让对话更自然 |
+| 回复规划 | 控制回复风格、情感、相关记忆的拼接 |
+| 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 使用明文存储方便阅读编辑 |
+| 图片理解 | 通过视觉模型分析图片内容，增强回复内容 |
+| 表情互动 | 根据语境追发表情，增强交互感 |
+| WebUI | 实时查看会话状态、记忆内容、日志，支持在线配置 |
+| API 接入 | 提供 `POST /events` 接口，任何外部系统都可以发送事件并获取回复 |
 
-1. 运行入口
-2. 平台无关核心
-3. 薄 adapter 层
-4. WebUI 与数据层
+---
 
-关键目录：
+## 🚀 快速开始
 
-```text
-main.py                     启动入口
-config.toml                 主配置文件
-src/core/                   平台无关核心运行逻辑
-src/adapters/               平台 adapter
-src/handlers/               消息处理链
-src/services/               AI / Vision / 图片等服务
-src/emoji/                  表情追发与分类
-src/memory/                 记忆系统
-src/webui/                  本地 WebUI
-tests/                      自动化测试
-```
+### 环境要求
 
-## 当前主链路
-
-### 入站
-
-1. NapCat 或 API payload 进入 adapter
-2. adapter 归一化为标准 `InboundEvent`
-3. `BotRuntime.ingest_adapter_payload(...)` / `ingest_inbound_event(...)`
-4. `EventDispatcher` 分发
-5. `MessageHandler` / planner / reply pipeline 处理
-
-### 统一规划与回复编译
-
-当前的消息处理链不再区分“群聊有 planner，私聊直接回复”这种旧路径，而是统一变成：
-
-1. `MessageHandler` 先整理消息事实、窗口上下文、图片信息、时间跨度和 planning signals
-2. `ConversationPlanner` 先决定当前动作是 `reply`、`wait` 还是 `ignore`
-3. 如果动作是 `reply`，planner 继续产出 `PromptPlan`
-4. `ReplyPipeline` 按 `PromptPlan` 动态编译 prompt layer，再调用主回复模型
-5. memory retrieval 也按 `PromptPlan` 按需加载对应层，而不是固定把所有记忆都塞进 prompt
-
-这里的关键边界是：
-
-- 代码负责收集事实信号与执行动作
-- planner 负责动作判断和 prompt layer 规划
-- `new_session_prompt` 已移除，改由 `temporal_context` 提供时间连续性事实
-
-### 出站
-
-1. 核心链路决定回复动作
-2. 生成 `ReplyAction` / `ImageAction`
-3. 根据 session 的 platform 选择对应 adapter
-4. adapter 转成平台 payload 发出
-
-## 运行要求
-
-至少准备：
-
-- Python 3.10+
-- 一个可用的 OpenAI 兼容接口
-
-如果你要走 QQ / OneBot 路径，还需要：
-
-- 一个可工作的 NapCat
-
-## 配置方式
-
-当前主配置入口是仓库根目录的 `config.toml`。
-
-连接配置已经从旧的 `napcat` 命名迁到更中性的 `adapter_connection`。
-
-推荐写法：
-
-```toml
-[adapter_connection]
-adapter = "napcat"
-platform = "qq"
-ws_url = "ws://127.0.0.1:8095"
-http_url = "http://127.0.0.1:6700"
-
-[ai_service]
-api_base = "https://your-openai-compatible-endpoint/v1"
-api_key = "sk-xxxx"
-model = "your-model"
-response_path = "choices.0.message.content"
-
-[ai_service.extra_params]
-
-[ai_service.extra_headers]
-```
-
-说明：
-
-- 新配置优先读取 `[adapter_connection]`
-- 旧的 `[napcat]` 仍然兼容读取
-- WebUI 保存网络设置时会自动写回 `[adapter_connection]`
-
-关键配置块：
-
-- `adapter_connection`：事件 adapter 的连接地址
-- `ai_service`：主模型
-- `vision_service`：识图模型
-- `group_reply`：群聊侧的节流、兴趣回复与复读策略
-- `group_reply_decision`：统一会话规划模型
-- `bot_behavior.private_batch_window_seconds`：私聊短窗口合批时长
-- `memory`：长期记忆
-- `memory_rerank`：记忆重排
-
-## 启动方式
-
-安装依赖：
-
-Windows:
+- Python 3.11+
+- 一个可用的 OpenAI 兼容接口（本地或云端）
+- 第三方聊天平台或任何可接入聊天的应用。如使用 NapCat 接入 QQ
+> 目前api接口还处于开发阶段，可能有问题
+### 安装
 
 ```bash
+# 克隆项目
+git clone https://github.com/Jiangsubei/xueli-qq-bot.git
+cd xueli
+
+# 创建虚拟环境
 python -m venv venv
-venv\Scripts\activate
-python -m pip install -r requirements.txt
+source venv/bin/activate        # Linux/macOS
+venv\Scripts\activate           # Windows
+
+# 安装依赖
+pip install -r requirements.txt
 ```
 
-Linux / macOS:
+### 配置
+
+1. 复制配置示例并编辑：
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-python3 -m pip install -r requirements.txt
+cp config/config.example.toml config/config.toml
 ```
 
-启动：
+2. 修改 `config/config.toml`，至少配置：
+
+- `[adapter_connection]` – 填写你的平台连接信息（NapCat WebSocket 地址或 API 地址）
+- `[ai_service]` – 填写主模型的 API 地址、Key、模型名称
+
+> 💡 推荐从 **NapCat + QQ** 开始测试，也可以先使用 `[adapter_connection].adapter = "api"` 模式，用 `curl` 发送事件验证。
+
+### 启动
+---
+
+- windows
+
+直接使用双击 start.cmd 或者 start.ps1
+
+- linux
 
 ```bash
-python main.py
+bash start.sh
+```
+---
+
+启动后你会看到：
+
+- 日志输出，显示 adapter 连接状态
+- 本地 WebUI 地址（默认 `http://127.0.0.1:8080`）
+
+### 测试运行
+
+项目包含单元测试，可以快速验证环境：
+
+```bash
+python -m unittest discover -s tests
 ```
 
-默认会启动：
+---
 
-- `BotRuntimeSupervisor`
-- `BotRuntime`
-- 本地 WebUI runtime server
+## ⚙️ 主要配置说明
 
-如果启用了开放 API runtime，也会额外启动：
+配置文件 `config/config.toml` 采用 TOML 格式，主要块如下：
 
-- 独立 HTTP ingress server
+| 配置块 | 作用 |
+|--------|------|
+| `[adapter_connection]` | 设置事件来源（napcat / api），以及 WebSocket 或 HTTP 地址 |
+| `[ai_service]` | 主模型（对话生成）的接口、模型名、超时等 |
+| `[vision_service]` | 图片理解模型的配置（可选） |
+| `[group_reply]` | 群聊的回复节流、兴趣回复、复读策略 |
+| `[group_reply_decision]` | 统一规划模型（可单独指定模型） |
+| `[bot_behavior]` | 私聊合批窗口、默认时区等 |
+| `[memory]` | 记忆开关、检索数量、半衰期等 |
+| `[memory_rerank]` | 记忆重排模型配置（可选） |
 
-## 独立 API runtime
+几乎所有配置都提供了合理的默认值，你只需要关注 `adapter_connection` 和 `ai_service` 即可快速跑起来。
 
-第一版开放 API 入口已经存在，默认关闭。
+---
 
-可用环境变量：
+## 🌐 开放 API 接入
 
-- `API_RUNTIME_ENABLED=true`
-- `API_RUNTIME_HOST=127.0.0.1`
-- `API_RUNTIME_PORT=8765`
-- `API_RUNTIME_TIMEOUT=10`
+如果你希望其他程序（例如一个 Web 应用、一个定时任务）调用机器人的对话能力，可以启用 **API runtime**。
 
-当前接口：
+设置环境变量：
 
-- `GET /health`
-- `POST /events`
+```bash
+export API_RUNTIME_ENABLED=true
+export API_RUNTIME_HOST=127.0.0.1
+export API_RUNTIME_PORT=8765
+```
 
-`POST /events` 的 payload 会先走 `ApiAdapter.normalize_inbound_payload(...)`，再进入现有 bot 核心链路。
+启动后，向 `POST http://127.0.0.1:8765/events` 发送 JSON 格式的事件即可。事件结构参考 `InboundEvent` 定义（见文档或源码）。
 
-## 当前关键模块
+---
+
+## 🧩 如果你是来修改代码的
+
+这里是项目目前的结构：
+
+```
+xueli/
+├── config/               # 配置文件（.toml + .env）
+├── src/
+│   ├── main.py               # 启动入口
+│   ├── adapters/         # 平台适配器（napcat, api, ...）
+│   ├── core/             # 核心运行时、事件分发
+│   ├── handlers/         # 规划、节奏、上下文、回复生成
+│   ├── memory/           # 记忆系统（存储、检索、摘要）
+│   ├── services/         # AI 调用、图片服务等
+│   ├── webui/            # 本地控制台后端
+│   └── emoji/            # 表情相关逻辑
+├── data/                 # 运行时数据（记忆、缓存、webui资源）
+└── tests/                # 单元测试
+```
+
+## 🔍 当前关键模块
 
 ### 核心
 
@@ -212,110 +179,34 @@ python main.py
 - `src/handlers/message_handler.py`
 - `src/handlers/reply_pipeline.py`
 - `src/handlers/conversation_planner.py`
+- `src/handlers/timing_gate_service.py`
+- `src/handlers/conversation_context_builder.py`
+- `src/handlers/reply_prompt_renderer.py`
+- `src/handlers/reply_generation_service.py`
+- `src/handlers/reply_style_policy.py`
 - `src/handlers/conversation_engagement.py`
 - `src/handlers/conversation_plan_coordinator.py`
 - `src/handlers/prompt_planner.py`
 - `src/handlers/temporal_context.py`
 
-### 记忆系统
+---
 
-- `src/memory/memory_manager.py`
-- `src/memory/chat_summary_service.py`
-- `src/memory/session_restore_service.py`
-- `src/memory/conversation_recall_service.py`
-- `src/memory/person_fact_service.py`
-- `src/memory/storage/conversation_store.py`
-- `src/memory/storage/person_fact_store.py`
+## 🤝 贡献与反馈
 
-当前记忆链路已经不是单一“检索几条长期记忆”模式，而是分成几层：
+项目目前由个人维护，但非常欢迎你：
 
-- `person_fact_context`：用户稳定事实、偏好、边界、计划等
-- `session_restore_context`：同一 dialogue 最近一轮会话的摘要恢复
-- `precise_recall_context`：围绕当前 query 的第一次提及 / 最近一次提及定位
-- `persistent_memory_context`：重要但不适合塞进人物事实层的长期关键信息
-- `dynamic_memory_context`：与当前消息动态相关的普通记忆
+- 报告 Bug 或提出新功能建议（提交 Issue）
+- 提交 Pull Request 改进代码或文档
+- 分享你的使用场景和配置经验
 
-其中：
+> 在提交代码前，请确保已通过现有测试，并对新增功能补充测试。
 
-- 会话关闭后会自动生成摘要并持久化到 conversation metadata
-- 重要记忆会同步沉淀为结构化人物事实
-- 普通记忆遗忘不再只看单一半衰期，还会结合提及次数、观察锚点和近期强化时间
-- 哪些层启用、启用多强，现在由 `PromptPlan` 控制
-- retrieval 侧会按 layer policy 和 intensity 决定是否查询 `session_restore / precise_recall / dynamic_memory / recent_history`
+---
 
-## 时间与私聊策略
+## 📄 许可证
 
-当前不再使用 `new_session_prompt` 这类静态结论，而是统一使用 `temporal_context`：
+本项目采用 **MIT 许可证**。你可以自由使用、修改、分发，甚至用于商业项目，只需保留原始版权声明。
 
-- 最近消息时间分层
-- 当前会话时间分层
-- 上一轮会话时间分层
-- continuity hint
+---
 
-这些都是 planner 的事实输入，不是代码替模型做出的结论。
-
-私聊路径也已经改成统一 planner：
-
-- 私聊不再默认必回复
-- 支持 `reply / wait / ignore`
-- 支持短窗口 batching，把连续碎片输入合并后再规划
-- 显式“等一下 / 我补充”类信号会直接触发强 hold
-- 群聊与私聊都会把陪伴信号整理成 `planning_signals`，由 `PromptPlan.engagement_mode` 决定更适合轻关怀、延续话题还是轻量存在感
-
-## 模型调用路由
-
-`src/core/model_invocation_router.py` 现在统一管理不同用途的模型调用队列与超时策略：
-
-- `GROUP_PLAN`
-- `REPLY_GENERATION`
-- `EMOJI_REPLY_DECISION`
-- `VISION_ANALYSIS`
-- `VISION_STICKER_EMOTION`
-- `MEMORY_EXTRACTION`
-- `MEMORY_RERANK`
-
-当前策略是：
-
-- 快决策任务使用更短的 purpose timeout
-- 回复生成、视觉分析、记忆提取继承主超时预算
-- 记忆重排可按自己的较短 timeout 显式覆盖
-
-## 当前状态说明
-
-仓库已经完成这些方向上的改造：
-
-- 去掉了核心里的默认 QQ-only 回复路径
-- 标准化了入站事件和出站动作
-- 让 API adapter 能进入现有处理链
-- 让回复动作能按 session.platform 选择正确 adapter
-- 把运行类命名切到中性的 `BotRuntime`
-- 把 NapCat transport 移到了 adapter 边界
-- 把私聊和群聊统一到同一条 conversation planner 主链
-- 把 prompt 控制权从静态拼接推进到 planner 产出的 `PromptPlan`
-- 把主动陪伴从粗粒度 proactive 标记推进到结构化 `engagement_mode`
-- 移除了 `new_session_prompt`，改用 `temporal_context`
-- 把记忆上下文拆成了人物事实 / 会话恢复 / 精准召回 / 动态记忆几层
-- 给普通记忆补上了更稳的多因子遗忘逻辑
-- 给模型调用路由补上了 per-purpose timeout policy
-- 给 runtime 到 WebUI serializer 的高层闭环补上了集成测试
-
-仍然值得继续做的主要是：
-
-- 继续拆分 `src/webui/console/services.py`
-- 继续收紧 `MessageEvent` 和 `InboundEvent` 的边界
-- 在完整依赖环境下补跑更大范围测试
-- 如果未来接更多平台，再继续扩大 adapter 覆盖面
-
-## 测试
-
-项目已经有一组围绕这条多平台主线的 focused tests。
-
-常用运行方式：
-
-```bash
-venv\Scripts\python.exe -m unittest tests.test_platform_models tests.test_platform_normalizers tests.test_napcat_adapter tests.test_api_adapter tests.test_api_runtime tests.test_api_ingress_bridge tests.test_bot_api_ingress tests.test_bot_adapter_send_path tests.test_dispatcher_inbound_wiring tests.test_message_handler_inbound_event tests.test_downstream_inbound_helpers tests.test_conversation_planner_context_preference tests.test_private_planning tests.test_temporal_context tests.test_prompt_planner tests.test_conversation_planner tests.test_conversation_planner_prompt_signals tests.test_model_invocation_router tests.test_reply_pipeline_prompt_plan tests.test_reply_pipeline_memory_layer_policy tests.test_config_adapter_connection tests.test_console_network_settings tests.test_runtime_supervisor tests.test_session_restore_service tests.test_memory_session_restore_context tests.test_reply_pipeline_session_restore tests.test_conversation_recall_service tests.test_person_fact_service tests.test_memory_forgetting tests.test_runtime_conversation_flow_integration
-```
-
-## 额外说明
-
-仓库里如果还有旧文档把它描述成“QQ Bot”或把 `napcat` 视为唯一入口，请以当前 `src/core/`、`src/adapters/` 和本 README 为准。
+**如果你有任何问题，欢迎提 Issue 或直接联系作者。**

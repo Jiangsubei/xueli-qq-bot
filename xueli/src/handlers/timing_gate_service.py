@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from typing import Any, Dict, Optional
+
+from src.core.config import AppConfig, config, is_group_reply_decision_configured
+from src.core.message_trace import get_execution_key
+from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
+from src.core.models import TimingDecision, TimingDecisionAction
+from src.handlers.message_context import MessageContext
+from src.services.ai_client import AIAPIError, AIClient
+
+logger = logging.getLogger(__name__)
+
+
+class TimingGateService:
+    """Secondary pacing gate between planning and visible reply generation."""
+
+    def __init__(
+        self,
+        ai_client: Optional[AIClient] = None,
+        *,
+        app_config: Optional[AppConfig] = None,
+        model_invocation_router: Optional[ModelInvocationRouter] = None,
+    ) -> None:
+        self.app_config = app_config or config.app
+        self.ai_client = ai_client or self._create_ai_client()
+        self._owns_ai_client = ai_client is None
+        self.model_invocation_router = model_invocation_router
+
+    def _create_ai_client(self) -> Optional[AIClient]:
+        if not is_group_reply_decision_configured(self.app_config):
+            return None
+        decision = self.app_config.group_reply_decision
+        return AIClient(
+            api_base=decision.api_base,
+            api_key=decision.api_key,
+            model=decision.model,
+            extra_params=dict(decision.extra_params or {}),
+            extra_headers=dict(decision.extra_headers or {}),
+            response_path=decision.response_path or "choices.0.message.content",
+            log_label="timing_gate",
+            app_config=self.app_config,
+        )
+
+    async def decide(self, *, event: Any, plan: Any, context: MessageContext) -> TimingDecision:
+        fallback = self._fallback_decision(plan=plan, context=context)
+        if self.ai_client is None:
+            return fallback
+        messages = [
+            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("user", self._build_user_prompt(event=event, plan=plan, context=context)),
+        ]
+        try:
+            async def run_chat():
+                return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+            if self.model_invocation_router is not None:
+                response = await self.model_invocation_router.submit(
+                    purpose=ModelInvocationType.TIMING_GATE,
+                    trace_id=context.trace_id,
+                    session_key=context.execution_key or get_execution_key(event),
+                    message_id=getattr(event, "message_id", 0),
+                    label="节奏判断",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
+            return self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
+        except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("节奏判断失败，回退到规则：%s", exc)
+            return fallback
+
+    def _build_system_prompt(self) -> str:
+        return (
+            "你的任务只是在 continue、wait、no_reply 之间做节奏判断，不要生成对用户可见的回复。\n"
+            "规则：\n"
+            "- continue：现在就进入正式回复\n"
+            "- wait：用户像是还没说完，先等下一条\n"
+            "- no_reply：这轮无需继续发言\n"
+            '严格只输出 JSON：{"decision":"continue|wait|no_reply","reason":"简短理由"}'
+        )
+
+    def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
+        lines = [
+            f"当前消息类型：{getattr(event, 'message_type', '') or 'private'}",
+            f"planner_action：{getattr(plan, 'action', '')}",
+            f"planner_reason：{getattr(plan, 'reason', '')}",
+            f"当前消息：{context.user_message}",
+            f"时间线摘要：{context.rendered_timeline_summary or getattr(context.temporal_context, 'summary_text', '')}",
+            "运行时信号：",
+        ]
+        signals = dict(context.planning_signals or {})
+        if signals:
+            lines.extend(f"- {key}: {value}" for key, value in signals.items())
+        else:
+            lines.append("- 无")
+        if context.rendered_recent_history:
+            lines.append("最近上下文：")
+            lines.append(context.rendered_recent_history)
+        return "\n".join(str(line or "").strip() for line in lines if str(line or "").strip())
+
+    def _extract_json_object(self, content: str) -> Dict[str, Any]:
+        text = str(content or "").strip()
+        if not text:
+            raise ValueError("empty timing gate response")
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S | re.I)
+        if fenced_match:
+            return json.loads(fenced_match.group(1))
+        json_match = re.search(r"\{.*\}", text, re.S)
+        if json_match:
+            return json.loads(json_match.group(0))
+        raise ValueError("invalid timing gate response")
+
+    def _parse_response(self, content: str, *, fallback: TimingDecision) -> TimingDecision:
+        payload = self._extract_json_object(content)
+        decision = str(payload.get("decision", "") or "").strip().lower()
+        aliases = {
+            "continue": TimingDecisionAction.CONTINUE.value,
+            "wait": TimingDecisionAction.WAIT.value,
+            "no_reply": TimingDecisionAction.NO_REPLY.value,
+            "ignore": TimingDecisionAction.NO_REPLY.value,
+        }
+        normalized = aliases.get(decision, "")
+        if normalized not in {item.value for item in TimingDecisionAction}:
+            raise ValueError(f"unsupported timing decision: {decision}")
+        return TimingDecision(
+            decision=normalized,
+            reason=str(payload.get("reason", "") or fallback.reason or "").strip(),
+            source="timing_gate",
+            raw_decision=payload,
+        )
+
+    def _fallback_decision(self, *, plan: Any, context: MessageContext) -> TimingDecision:
+        signals = dict(context.planning_signals or {})
+        if bool(signals.get("explicit_hold_signal")):
+            return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="用户看起来还在继续补充", source="rule")
+        if bool(signals.get("has_image_without_text")):
+            return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="当前更像是等待图片相关补充", source="rule")
+        if bool(signals.get("looks_fragmented")) or bool(signals.get("ends_like_incomplete")):
+            return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="当前输入像是未说完", source="rule")
+        return TimingDecision(
+            decision=TimingDecisionAction.CONTINUE.value,
+            reason=str(getattr(plan, "reason", "") or "当前适合继续生成回复"),
+            source="rule",
+        )
+
+    async def close(self) -> None:
+        if self._owns_ai_client and self.ai_client:
+            await self.ai_client.close()

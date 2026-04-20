@@ -21,6 +21,8 @@ Write-Host "       QQ AI Launcher (PowerShell)"
 Write-Host "========================================"
 Write-Host ""
 
+Set-Location -LiteralPath "xueli"
+
 try {
     python --version *> $null
 } catch {
@@ -44,17 +46,17 @@ if ($LASTEXITCODE -ne 0) {
     Fail-AndExit "Failed to install dependencies."
 }
 
-if (-not (Test-Path -LiteralPath ".env")) {
+if (-not (Test-Path -LiteralPath "config\.env")) {
     Write-Host ""
     Write-Host "[WARN] .env was not found." -ForegroundColor Yellow
     Write-Host "[INFO] Creating .env from .env.example..." -ForegroundColor Cyan
-    Copy-Item -LiteralPath ".env.example" -Destination ".env" -Force
+    Copy-Item -LiteralPath "config\.env.example" -Destination "config\.env" -Force
     Write-Host ""
     Write-Host "========================================"
-    Write-Host "Edit .env and run start.ps1 again."
+    Write-Host "Edit config\.env and run start.ps1 again."
     Write-Host "========================================"
     Write-Host ""
-    notepad .env
+    notepad config\.env
     Read-Host "Press Enter to continue"
     exit 1
 }
