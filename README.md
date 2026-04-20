@@ -59,10 +59,10 @@ pip install -r requirements.txt
 1. 复制配置示例并编辑：
 
 ```bash
-cp config/config.example.toml config/config.toml
+cp xueli/config/config.example.toml xueli/config/config.toml
 ```
 
-2. 修改 `config/config.toml`，至少配置：
+2. 修改 `xueli/config/config.toml`，至少配置：
 
 - `[adapter_connection]` – 填写你的平台连接信息（NapCat WebSocket 地址或 API 地址）
 - `[ai_service]` – 填写主模型的 API 地址、Key、模型名称
@@ -74,7 +74,7 @@ cp config/config.example.toml config/config.toml
 
 - windows
 
-直接使用双击 start.cmd 或者 start.ps1
+直接双击 `start.bat` 或者运行 `start.ps1`
 
 - linux
 
@@ -93,14 +93,14 @@ bash start.sh
 项目包含单元测试，可以快速验证环境：
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s xueli/tests -t xueli
 ```
 
 ---
 
 ## ⚙️ 主要配置说明
 
-配置文件 `config/config.toml` 采用 TOML 格式，主要块如下：
+配置文件 `xueli/config/config.toml` 采用 TOML 格式，主要块如下：
 
 | 配置块 | 作用 |
 |--------|------|
@@ -138,56 +138,88 @@ export API_RUNTIME_PORT=8765
 这里是项目目前的结构：
 
 ```
-xueli/
-├── config/               # 配置文件（.toml + .env）
-├── src/
-│   ├── main.py               # 启动入口
-│   ├── adapters/         # 平台适配器（napcat, api, ...）
-│   ├── core/             # 核心运行时、事件分发
-│   ├── handlers/         # 规划、节奏、上下文、回复生成
-│   ├── memory/           # 记忆系统（存储、检索、摘要）
-│   ├── services/         # AI 调用、图片服务等
-│   ├── webui/            # 本地控制台后端
-│   └── emoji/            # 表情相关逻辑
-├── data/                 # 运行时数据（记忆、缓存、webui资源）
-└── tests/                # 单元测试
+.
+├── data/                # 运行时数据（记忆、缓存、webui 资源）
+├── xueli/
+│   ├── config/          # 配置文件
+│   ├── src/
+│   │   ├── adapters/    # 平台适配器（napcat, api, ...）
+│   │   ├── core/        # 核心运行时、事件分发
+│   │   ├── handlers/    # 规划、节奏、上下文、回复生成
+│   │   ├── memory/      # 记忆系统（存储、检索、摘要）
+│   │   ├── services/    # AI 调用、图片服务等
+│   │   ├── webui/       # 本地控制台后端
+│   │   └── emoji/       # 表情相关逻辑
+│   ├── tests/           # 单元测试
+│   ├── tools/           # 工具脚本
+│   └── main.py          # 启动入口
+├── requirements.txt     # 依赖
+├── start.bat
+├── start.ps1
+├── start.sh
+├── README.md
+├── AGENTS.md
+└── API_CONFIG_GUIDE.md
+
 ```
 
 ## 🔍 当前关键模块
 
 ### 核心
 
-- `src/core/runtime.py`
-- `src/core/bootstrap.py`
-- `src/core/runtime_supervisor.py`
-- `src/core/dispatcher.py`
-- `src/core/platform_models.py`
-- `src/core/platform_normalizers.py`
-- `src/core/platform_bridge.py`
+- `xueli/src/core/runtime.py`
+- `xueli/src/core/bootstrap.py`
+- `xueli/src/core/runtime_supervisor.py`
+- `xueli/src/core/dispatcher.py`
+- `xueli/src/core/config.py`
+- `xueli/src/core/models.py`
+- `xueli/src/core/platform_models.py`
+- `xueli/src/core/platform_normalizers.py`
+- `xueli/src/core/platform_bridge.py`
 
 ### adapter
 
-- `src/adapters/base.py`
-- `src/adapters/registry.py`
-- `src/adapters/napcat/adapter.py`
-- `src/adapters/napcat/connection.py`
-- `src/adapters/api/adapter.py`
-- `src/adapters/api/runtime.py`
+- `xueli/src/adapters/base.py`
+- `xueli/src/adapters/registry.py`
+- `xueli/src/adapters/napcat/adapter.py`
+- `xueli/src/adapters/napcat/connection.py`
+- `xueli/src/adapters/api/adapter.py`
+- `xueli/src/adapters/api/runtime.py`
 
 ### 消息处理链
 
-- `src/handlers/message_handler.py`
-- `src/handlers/reply_pipeline.py`
-- `src/handlers/conversation_planner.py`
-- `src/handlers/timing_gate_service.py`
-- `src/handlers/conversation_context_builder.py`
-- `src/handlers/reply_prompt_renderer.py`
-- `src/handlers/reply_generation_service.py`
-- `src/handlers/reply_style_policy.py`
-- `src/handlers/conversation_engagement.py`
-- `src/handlers/conversation_plan_coordinator.py`
-- `src/handlers/prompt_planner.py`
-- `src/handlers/temporal_context.py`
+- `xueli/src/handlers/message_handler.py`
+- `xueli/src/handlers/planning_window_service.py`  # 规划窗口服务
+- `xueli/src/handlers/conversation_planner.py`
+- `xueli/src/handlers/timing_gate_service.py`
+- `xueli/src/handlers/conversation_context_builder.py`
+- `xueli/src/handlers/conversation_session_manager.py`
+- `xueli/src/handlers/conversation_timeline_formatter.py`
+- `xueli/src/handlers/message_context.py`
+- `xueli/src/handlers/reply_pipeline.py`
+- `xueli/src/handlers/reply_prompt_renderer.py`
+- `xueli/src/handlers/reply_generation_service.py`
+- `xueli/src/handlers/reply_style_policy.py`
+- `xueli/src/handlers/character_card_service.py`  # 角色卡服务
+- `xueli/src/handlers/conversation_engagement.py`
+- `xueli/src/handlers/conversation_plan_coordinator.py`
+- `xueli/src/handlers/prompt_planner.py`
+- `xueli/src/handlers/temporal_context.py`
+
+### 记忆系统
+
+- `xueli/src/memory/memory_manager.py`
+- `xueli/src/memory/memory_flow_service.py`
+- `xueli/src/memory/memory_dispute_resolver.py`  # 记忆纠错裁决
+- `xueli/src/memory/person_fact_service.py`
+- `xueli/src/memory/chat_summary_service.py`
+- `xueli/src/memory/session_restore_service.py`
+- `xueli/src/memory/conversation_recall_service.py`
+- `xueli/src/memory/storage/fact_evidence_store.py`  # 事实证据存储
+- `xueli/src/memory/storage/conversation_store.py`
+- `xueli/src/memory/storage/important_memory_store.py`
+- `xueli/src/memory/storage/markdown_store.py`
+- `xueli/src/memory/storage/person_fact_store.py`
 
 ---
 

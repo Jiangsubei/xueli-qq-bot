@@ -1,17 +1,17 @@
 # OpenAI 兼容接口配置指南
 
-本文档说明当前项目如何通过本地 `config.toml` 配置 OpenAI 兼容服务。
+本文档说明当前项目如何通过本地 `xueli/config/config.toml` 配置 OpenAI 兼容服务。
 
 ## 当前主配置入口
 
-当前项目以仓库根目录的 `config.toml` 作为主配置文件，不再以 `.env` 作为默认启动配置入口。
+当前项目以 `xueli/config/config.toml` 作为主配置文件，不再以 `.env` 作为默认启动配置入口。
 
 仓库内建议把：
 
-- `config.example.toml` 作为模板
-- `config.toml` 作为本地私有配置
+- `xueli/config/config.example.toml` 作为模板
+- `xueli/config/config.toml` 作为本地私有配置
 
-也就是说，后续分享仓库时应优先同步模板，而不是同步你的真实 `config.toml`。
+也就是说，后续分享仓库时应优先同步模板，而不是同步你的真实 `xueli/config/config.toml`。
 
 主模型配置位于：
 

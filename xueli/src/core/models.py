@@ -375,6 +375,17 @@ class FinalStyleGuide:
     anti_patterns: List[str] = field(default_factory=list)
 
 
+@dataclass
+class PlanningWindowResult:
+    """Stabilized user input emitted by the planning window layer."""
+
+    merged_user_message: str = ""
+    window_messages: List[Dict[str, Any]] = field(default_factory=list)
+    planning_signals: Dict[str, Any] = field(default_factory=dict)
+    window_reason: str = ""
+    bypassed: bool = False
+
+
 class TimingDecisionAction(str, Enum):
     CONTINUE = "continue"
     WAIT = "wait"
@@ -409,6 +420,72 @@ class PromptPlan:
     expression_profile: str = "plain"
     policy: PromptSectionPolicy = field(default_factory=PromptSectionPolicy)
     notes: str = ""
+
+
+@dataclass
+class MemoryDisputeDecision:
+    """Normalized background judgement for a reflected memory conflict."""
+
+    level: str = "ignore"
+    confidence: float = 0.0
+    action: str = ""
+    conflict_type: str = "none"
+    summary: str = ""
+    reason: str = ""
+    targets: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class FactEvidenceRecord:
+    """Structured persisted evidence for a memory dispute."""
+
+    record_id: str
+    user_id: str
+    source_memory_id: str = ""
+    source_memory_type: str = ""
+    decision_level: str = "ignore"
+    confidence: float = 0.0
+    action: str = ""
+    conflict_type: str = "none"
+    summary: str = ""
+    reason: str = ""
+    targets: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SoftUncertaintySignal:
+    """Cautious tone signal derived from a high-confidence memory dispute."""
+
+    signal_id: str
+    user_id: str
+    summary: str = ""
+    confidence: float = 0.0
+    conflict_type: str = "none"
+    action: str = ""
+    active: bool = True
+    source_memory_id: str = ""
+    created_at: str = ""
+    expires_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CharacterCardSnapshot:
+    """Layered lightweight character adjustments consumed by reply style policy."""
+
+    user_id: str = ""
+    core_traits: List[str] = field(default_factory=list)
+    tone_preferences: List[str] = field(default_factory=list)
+    behavior_habits: List[str] = field(default_factory=list)
+    explicit_feedback_count: int = 0
+    stable_signal_count: int = 0
+    updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

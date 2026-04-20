@@ -3,7 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from src.core.models import Conversation, ConversationContextItem, FinalStyleGuide, PromptPlan, TemporalContext
+from src.core.models import (
+    CharacterCardSnapshot,
+    Conversation,
+    ConversationContextItem,
+    FinalStyleGuide,
+    PromptPlan,
+    SoftUncertaintySignal,
+    TemporalContext,
+)
 
 
 @dataclass
@@ -38,6 +46,9 @@ class MessageContext:
     reply_context: Dict[str, Any] = field(default_factory=dict)
     direct_reply_text: str = ""
     planning_signals: Dict[str, Any] = field(default_factory=dict)
+    soft_uncertainty_signals: List[SoftUncertaintySignal] = field(default_factory=list)
+    character_card_snapshot: CharacterCardSnapshot = field(default_factory=CharacterCardSnapshot)
+    window_reason: str = ""
     prompt_plan: Optional[PromptPlan] = None
     final_style_guide: FinalStyleGuide = field(default_factory=FinalStyleGuide)
     conversation: Optional[Conversation] = None

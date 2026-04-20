@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from src.core.message_trace import get_execution_key
-from src.core.models import ConversationContextItem
+from src.core.models import CharacterCardSnapshot, ConversationContextItem
 from src.handlers.conversation_engagement import build_companionship_signals
 from src.handlers.conversation_timeline_formatter import ConversationTimelineFormatter
 from src.handlers.message_context import MessageContext
@@ -129,6 +129,13 @@ class ConversationContextBuilder:
                     count_in_context=False,
                 )
             )
+        soft_uncertainty_signals = []
+        evidence_store = getattr(self.host, "fact_evidence_store", None)
+        if evidence_store is not None:
+            loader = getattr(evidence_store, "get_active_signals", None)
+            if callable(loader):
+                soft_uncertainty_signals = list(loader(str(event.user_id), limit=3) or [])
+        character_card_snapshot = getattr(self.host, "get_character_card_snapshot", lambda _user_id: None)(str(event.user_id))
         message_context = MessageContext(
             trace_id=trace_id,
             execution_key=execution_key,
@@ -168,6 +175,9 @@ class ConversationContextBuilder:
             reply_context=reply_context,
             direct_reply_text=str(reply_context.get("direct_reply_text") or "").strip(),
             planning_signals=planning_signals,
+            soft_uncertainty_signals=soft_uncertainty_signals,
+            character_card_snapshot=character_card_snapshot or CharacterCardSnapshot(),
+            window_reason=str(reply_context.get("window_reason") or ""),
             prompt_plan=prompt_plan,
             conversation=conversation,
         )
@@ -177,6 +187,8 @@ class ConversationContextBuilder:
             chat_mode=str(getattr(event, "message_type", "private") or "private"),
             planner_reason=str(getattr(plan, "reason", "") or ""),
             planning_signals=message_context.planning_signals,
+            soft_uncertainty_signals=message_context.soft_uncertainty_signals,
+            character_card_snapshot=message_context.character_card_snapshot,
         )
         return message_context
 

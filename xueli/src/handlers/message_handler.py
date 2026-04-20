@@ -3,12 +3,22 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections import defaultdict, deque
 from typing import Any, Deque, Dict, List, Optional
 
-from src.core.config import AppConfig, config, get_vision_service_status, is_group_reply_decision_configured, is_vision_service_configured
+from src.core.config import (
+    AppConfig,
+    CharacterGrowthConfig,
+    MemoryDisputeConfig,
+    PlanningWindowConfig,
+    config,
+    get_vision_service_status,
+    is_group_reply_decision_configured,
+    is_vision_service_configured,
+)
 from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import ImageProcessingError, wrap_image_error
@@ -29,11 +39,14 @@ from src.handlers.conversation_engagement import build_companionship_signals
 from src.handlers.conversation_plan_coordinator import ConversationPlanCoordinator
 from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
+from src.handlers.character_card_service import CharacterCardService
 from src.handlers.message_context import MessageContext
+from src.handlers.planning_window_service import PlanningWindowService
 from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 from src.handlers.timing_gate_service import TimingGateService
 from src.memory.memory_flow_service import MemoryFlowService
+from src.memory.storage.fact_evidence_store import FactEvidenceStore
 from src.services.ai_client import AIClient, AIResponse
 from src.services.image_client import ImageClient
 from src.services.vision_client import VisionClient
@@ -106,21 +119,34 @@ class MessageHandler:
             app_config=self.app_config,
             reset_callback=self._handle_reset_command,
         )
-        self.memory_flow_service = MemoryFlowService(self.memory_manager)
+        memory_base_path = self._get_memory_base_path()
+        self.fact_evidence_store = FactEvidenceStore(os.path.join(memory_base_path, "_fact_evidence"))
+        self.character_card_service = CharacterCardService(
+            os.path.join(memory_base_path, "_character_cards"),
+            self.app_config.character_growth,
+        )
+        self.memory_flow_service = MemoryFlowService(
+            self.memory_manager,
+            dispute_config=self.app_config.memory_dispute,
+            evidence_store=self.fact_evidence_store,
+            character_card_service=self.character_card_service,
+        )
         self.context_builder = ConversationContextBuilder(self)
         self.timing_gate_service = TimingGateService(
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
         )
         self.reply_pipeline = ReplyPipeline(self)
+        self.planning_window_service = PlanningWindowService(self, self.app_config.planning_window)
 
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
         self.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
-        self.private_batch_lock = asyncio.Lock()
-        self.private_batch_versions: Dict[str, int] = defaultdict(int)
-        self.private_pending_inputs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        self.private_batch_window_seconds = float(getattr(self.app_config.bot_behavior, "private_batch_window_seconds", 1.2) or 0.0)
+        self.private_batch_lock = getattr(self.planning_window_service, "_lock")
+        self.private_batch_versions = getattr(self.planning_window_service, "_versions")
+        self.private_pending_inputs = getattr(self.planning_window_service, "_pending_inputs")
+        self.private_batch_window_seconds = float(getattr(self.app_config.planning_window, "private_window_seconds", 1.2) or 0.0)
+        self.group_proactive_window_seconds = float(getattr(self.app_config.planning_window, "group_proactive_window_seconds", 0.45) or 0.0)
         self.group_repeat_lock = asyncio.Lock()
         self._group_repeat_history: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
         self._group_repeat_cooldowns: Dict[tuple[int, str], float] = {}
@@ -156,6 +182,46 @@ class MessageHandler:
         if self.app_config is config.app:
             return config.get_memory_read_scope()
         return self.app_config.memory.read_scope
+
+    def _get_memory_base_path(self) -> str:
+        if self.memory_manager is not None and hasattr(self.memory_manager, "config"):
+            base_path = str(getattr(self.memory_manager.config, "storage_base_path", "") or "").strip()
+            if base_path:
+                return base_path
+        memory_config = getattr(self.app_config, "memory", None)
+        base_path = str(getattr(memory_config, "storage_path", "") or "").strip()
+        return base_path or "../data/memories"
+
+    def _ensure_extended_services(self) -> None:
+        planning_window_config = getattr(self.app_config, "planning_window", PlanningWindowConfig())
+        memory_dispute_config = getattr(self.app_config, "memory_dispute", MemoryDisputeConfig())
+        character_growth_config = getattr(self.app_config, "character_growth", CharacterGrowthConfig())
+        if not hasattr(self, "fact_evidence_store") or self.fact_evidence_store is None:
+            self.fact_evidence_store = FactEvidenceStore(os.path.join(self._get_memory_base_path(), "_fact_evidence"))
+        if not hasattr(self, "character_card_service") or self.character_card_service is None:
+            self.character_card_service = CharacterCardService(
+                os.path.join(self._get_memory_base_path(), "_character_cards"),
+                character_growth_config,
+            )
+        if not hasattr(self, "memory_flow_service") or self.memory_flow_service is None:
+            self.memory_flow_service = MemoryFlowService(
+                self.memory_manager,
+                dispute_config=memory_dispute_config,
+                evidence_store=self.fact_evidence_store,
+                character_card_service=self.character_card_service,
+            )
+        if not hasattr(self, "planning_window_service") or self.planning_window_service is None:
+            self.planning_window_service = PlanningWindowService(self, planning_window_config)
+        if not hasattr(self, "private_batch_lock"):
+            self.private_batch_lock = getattr(self.planning_window_service, "_lock")
+        if not hasattr(self, "private_batch_versions"):
+            self.private_batch_versions = getattr(self.planning_window_service, "_versions")
+        if not hasattr(self, "private_pending_inputs"):
+            self.private_pending_inputs = getattr(self.planning_window_service, "_pending_inputs")
+        if not hasattr(self, "private_batch_window_seconds"):
+            self.private_batch_window_seconds = float(getattr(planning_window_config, "private_window_seconds", 1.2) or 0.0)
+        if not hasattr(self, "group_proactive_window_seconds"):
+            self.group_proactive_window_seconds = float(getattr(planning_window_config, "group_proactive_window_seconds", 0.45) or 0.0)
 
     def _should_label_memory_owner(self) -> bool:
         return self._get_memory_read_scope() == "global"
@@ -338,26 +404,15 @@ class MessageHandler:
         return conversation
 
     def _clean_expired_conversations(self) -> None:
+        self._ensure_extended_services()
         self.session_manager.clean_expired()
         self._cleanup_private_batch_state()
         self._cleanup_group_repeat_state()
         self._sync_active_conversations_metric()
 
     def _cleanup_private_batch_state(self) -> None:
-        active_keys = set(getattr(self.session_manager, "_conversations", {}).keys())
-        now = time.time()
-        stale_after = max(30.0, self.private_batch_window_seconds * 8)
-        stale_keys: List[str] = []
-        for key, items in list(self.private_pending_inputs.items()):
-            if key not in active_keys:
-                stale_keys.append(key)
-                continue
-            latest_time = max((float(item.get("inserted_at", 0.0) or 0.0) for item in items), default=0.0)
-            if latest_time > 0 and now - latest_time > stale_after:
-                stale_keys.append(key)
-        for key in stale_keys:
-            self.private_pending_inputs.pop(key, None)
-            self.private_batch_versions.pop(key, None)
+        active_keys = list(getattr(self.session_manager, "_conversations", {}).keys())
+        self.planning_window_service.cleanup(active_keys=active_keys)
 
     def _cleanup_group_repeat_state(self) -> None:
         now = time.time()
@@ -461,13 +516,23 @@ class MessageHandler:
         return display_text
 
     async def _plan_group_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
+        self._ensure_extended_services()
+        window_result = await self.planning_window_service.process_group_message(event=event, trace_id=trace_id)
+        if not window_result.bypassed and window_result.window_reason == "group_window_wait_for_more":
+            return self._build_rule_plan(
+                MessagePlanAction.WAIT,
+                "群聊里最近还有连续补充，先等这一轮消息稳定",
+                reply_context={"trace_id": trace_id, "window_reason": window_result.window_reason} if trace_id else {"window_reason": window_result.window_reason},
+                event=event,
+            )
         return await self.conversation_plan_coordinator.plan_group_message(
             event=event,
-            user_message=self.extract_user_message(event),
+            user_message=window_result.merged_user_message or self.extract_user_message(event),
             trace_id=trace_id,
         )
 
     async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
+        self._ensure_extended_services()
         conversation_key = self._get_conversation_key(event)
         conversation = self._get_conversation(conversation_key)
         user_message = self.extract_user_message(event)
@@ -501,37 +566,27 @@ class MessageHandler:
             ),
             conversation=conversation,
         )
-        current_version = await self._push_private_pending_input(
-            conversation_key=conversation_key,
-            event=event,
-            user_message=user_message,
-        )
-        hold_reason = self._private_hold_reason(event, user_message)
-        if hold_reason:
+        window_result = await self.planning_window_service.process_private_message(event=event, trace_id=trace_id)
+        if window_result.window_reason == "用户明显还在继续补充，私聊先等待下一条消息":
             return MessageHandlingPlan(
                 action=MessagePlanAction.WAIT.value,
-                reason=hold_reason,
+                reason=window_result.window_reason,
                 source="rule",
                 reply_context={"trace_id": trace_id} if trace_id else {},
             )
-        await asyncio.sleep(self.private_batch_window_seconds)
-        if await self._has_newer_private_input(conversation_key, current_version):
+        if window_result.window_reason == "用户仍在短时间内连续补充，先等待本轮私聊输入稳定":
             return MessageHandlingPlan(
                 action=MessagePlanAction.WAIT.value,
-                reason="用户仍在短时间内连续补充，先等待本轮私聊输入稳定",
+                reason=window_result.window_reason,
                 source="rule",
                 reply_context={"trace_id": trace_id} if trace_id else {},
             )
-        pending_items = await self._consume_private_pending_input(conversation_key)
-        merged_user_message = self._merge_private_pending_input(pending_items, user_message)
+        pending_items = list(window_result.window_messages or [])
+        merged_user_message = window_result.merged_user_message or user_message
         context.user_message = merged_user_message
-        context.planning_signals = self._build_private_planning_signals(
-            event=event,
-            user_message=merged_user_message,
-            conversation=conversation,
-            temporal_context=temporal_context,
-            pending_items=pending_items,
-        )
+        context.window_messages = pending_items
+        context.window_reason = window_result.window_reason
+        context.planning_signals = dict(window_result.planning_signals or {})
         plan = await self.conversation_planner.plan(
             event=event,
             user_message=merged_user_message,
@@ -541,6 +596,8 @@ class MessageHandler:
         reply_context = dict(plan.reply_context or {})
         if trace_id:
             reply_context["trace_id"] = trace_id
+        if window_result.window_reason:
+            reply_context["window_reason"] = window_result.window_reason
         if plan.should_reply:
             reply_context.setdefault("reply_mode", "private")
             reply_context["merged_user_message"] = merged_user_message
@@ -568,8 +625,11 @@ class MessageHandler:
         )
 
     async def plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
+        self._ensure_extended_services()
         self._record_background_activity()
         self._clean_expired_conversations()
+        if hasattr(self, "character_card_service") and self.character_card_service is not None:
+            self.character_card_service.record_explicit_feedback(str(event.user_id), self.extract_user_message(event))
 
         if event.user_id == event.self_id:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "机器人自己的消息，跳过处理")
@@ -669,13 +729,7 @@ class MessageHandler:
         )
 
     def _private_hold_reason(self, event: MessageEvent, user_message: str) -> str:
-        text = str(user_message or "").strip()
-        normalized = re.sub(r"\s+", "", text).lower()
-        if any(token in normalized for token in ["等等", "等下", "稍等", "先别回", "我补充", "我再发", "还没说完"]):
-            return "用户明显还在继续补充，私聊先等待下一条消息"
-        if self._has_image_input(event) and not normalized:
-            return "私聊当前只有图片，先等待用户补充文字或更多上下文"
-        return ""
+        return self.planning_window_service._private_hold_reason(event, user_message)
 
     def _build_private_planning_signals(
         self,
@@ -686,32 +740,18 @@ class MessageHandler:
         temporal_context: Any,
         pending_items: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        text = str(user_message or "").strip()
-        normalized = re.sub(r"\s+", "", text).lower()
-        pending = list(pending_items or [])
-        previous_role = ""
-        if conversation.messages:
-            previous_role = str(conversation.messages[-1].get("role") or "").strip().lower()
-            if previous_role not in {"user", "assistant"}:
-                previous_role = ""
-        return {
-            "batch_count": max(1, len(pending)),
-            "merged_from_multiple_inputs": len(pending) > 1,
-            "explicit_hold_signal": bool(self._private_hold_reason(event, user_message)),
-            "has_image_without_text": bool(self._has_image_input(event) and not normalized),
-            "looks_fragmented": bool(len(normalized) <= 6 and normalized in {"那个", "就是", "然后", "还有", "等会", "继续", "在吗"}),
-            "ends_like_incomplete": bool(text.endswith(("...", "..", "。。。", "然后", "就是"))),
-            "recent_gap_bucket": str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
-            "conversation_turn_count": len(conversation.messages),
-            **build_companionship_signals(
-                text,
-                current_user_id=event.user_id,
-                previous_speaker_role=previous_role,
-                previous_user_id=event.user_id,
-                recent_gap_bucket=str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
-                recent_history_count=len(conversation.messages),
-            ),
-        }
+        return self.planning_window_service._build_private_planning_signals(
+            event=event,
+            user_message=user_message,
+            conversation=conversation,
+            temporal_context=temporal_context,
+            pending_items=pending_items,
+        )
+
+    def get_character_card_snapshot(self, user_id: str):
+        if not hasattr(self, "character_card_service") or self.character_card_service is None:
+            return None
+        return self.character_card_service.get_snapshot(str(user_id))
 
     async def _push_private_pending_input(
         self,

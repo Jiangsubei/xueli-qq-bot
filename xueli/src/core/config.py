@@ -70,6 +70,31 @@ class BotBehaviorConfig:
 
 
 @dataclass(frozen=True)
+class PlanningWindowConfig:
+    enabled: bool = True
+    private_window_seconds: float = 1.2
+    group_proactive_window_seconds: float = 0.45
+
+
+@dataclass(frozen=True)
+class MemoryDisputeConfig:
+    enabled: bool = True
+    high_confidence_threshold: float = 0.75
+    normal_confidence_threshold: float = 0.45
+    signal_ttl_hours: float = 168.0
+
+
+@dataclass(frozen=True)
+class CharacterGrowthConfig:
+    enabled: bool = True
+    explicit_feedback_threshold: int = 2
+    stable_signal_threshold: int = 6
+    core_trait_threshold: int = 5
+    tone_preference_threshold: int = 3
+    behavior_habit_threshold: int = 2
+
+
+@dataclass(frozen=True)
 class AssistantProfileConfig:
     name: str = "AI??"
     alias: str = ""
@@ -152,6 +177,9 @@ class AppConfig:
     vision_service: VisionServiceConfig = field(default_factory=VisionServiceConfig)
     emoji: EmojiConfig = field(default_factory=EmojiConfig)
     bot_behavior: BotBehaviorConfig = field(default_factory=BotBehaviorConfig)
+    planning_window: PlanningWindowConfig = field(default_factory=PlanningWindowConfig)
+    memory_dispute: MemoryDisputeConfig = field(default_factory=MemoryDisputeConfig)
+    character_growth: CharacterGrowthConfig = field(default_factory=CharacterGrowthConfig)
     assistant_profile: AssistantProfileConfig = field(default_factory=AssistantProfileConfig)
     group_reply: GroupReplyConfig = field(default_factory=GroupReplyConfig)
     group_reply_decision: GroupReplyDecisionConfig = field(default_factory=GroupReplyDecisionConfig)
@@ -261,6 +289,19 @@ class Config:
         "LOG_FULL_PROMPT": ("bot_behavior", "log_full_prompt"),
         "PRIVATE_QUOTE_REPLY_ENABLED": ("bot_behavior", "private_quote_reply_enabled"),
         "PRIVATE_BATCH_WINDOW_SECONDS": ("bot_behavior", "private_batch_window_seconds"),
+        "PLANNING_WINDOW_ENABLED": ("planning_window", "enabled"),
+        "PLANNING_WINDOW_PRIVATE_SECONDS": ("planning_window", "private_window_seconds"),
+        "PLANNING_WINDOW_GROUP_PROACTIVE_SECONDS": ("planning_window", "group_proactive_window_seconds"),
+        "MEMORY_DISPUTE_ENABLED": ("memory_dispute", "enabled"),
+        "MEMORY_DISPUTE_HIGH_CONFIDENCE_THRESHOLD": ("memory_dispute", "high_confidence_threshold"),
+        "MEMORY_DISPUTE_NORMAL_CONFIDENCE_THRESHOLD": ("memory_dispute", "normal_confidence_threshold"),
+        "MEMORY_DISPUTE_SIGNAL_TTL_HOURS": ("memory_dispute", "signal_ttl_hours"),
+        "CHARACTER_GROWTH_ENABLED": ("character_growth", "enabled"),
+        "CHARACTER_GROWTH_EXPLICIT_FEEDBACK_THRESHOLD": ("character_growth", "explicit_feedback_threshold"),
+        "CHARACTER_GROWTH_STABLE_SIGNAL_THRESHOLD": ("character_growth", "stable_signal_threshold"),
+        "CHARACTER_GROWTH_CORE_TRAIT_THRESHOLD": ("character_growth", "core_trait_threshold"),
+        "CHARACTER_GROWTH_TONE_PREFERENCE_THRESHOLD": ("character_growth", "tone_preference_threshold"),
+        "CHARACTER_GROWTH_BEHAVIOR_HABIT_THRESHOLD": ("character_growth", "behavior_habit_threshold"),
         "ASSISTANT_NAME": ("assistant_profile", "name"),
         "ASSISTANT_ALIAS": ("assistant_profile", "alias"),
         "PERSONALITY": ("personality", "content"),
@@ -475,7 +516,9 @@ class Config:
         return AppConfig(
             adapter_connection=self._build_adapter_connection_config(), ai_service=self._build_ai_service_config(),
             vision_service=self._build_vision_service_config(), emoji=self._build_emoji_config(),
-            bot_behavior=self._build_bot_behavior_config(), assistant_profile=self._build_assistant_profile_config(),
+            bot_behavior=self._build_bot_behavior_config(), planning_window=self._build_planning_window_config(),
+            memory_dispute=self._build_memory_dispute_config(), character_growth=self._build_character_growth_config(),
+            assistant_profile=self._build_assistant_profile_config(),
             group_reply=self._build_group_reply_config(), group_reply_decision=self._build_group_reply_decision_config(),
             memory_rerank=self._build_memory_rerank_config(),
             personality=self._build_content_section("personality"), dialogue_style=self._build_content_section("dialogue_style"),
@@ -545,6 +588,78 @@ class Config:
             log_full_prompt=self._bool_value(section, "bot_behavior", "log_full_prompt", default=False),
             private_quote_reply_enabled=self._bool_value(section, "bot_behavior", "private_quote_reply_enabled", default=False),
             private_batch_window_seconds=self._bounded_float(section, "bot_behavior", "private_batch_window_seconds", default=1.2, minimum=0.0),
+        )
+
+    def _build_planning_window_config(self) -> PlanningWindowConfig:
+        section = self._get_section("planning_window")
+        fallback_private_window = self._bounded_float(
+            self._get_section("bot_behavior"),
+            "bot_behavior",
+            "private_batch_window_seconds",
+            default=1.2,
+            minimum=0.0,
+        )
+        return PlanningWindowConfig(
+            enabled=self._bool_value(section, "planning_window", "enabled", default=True),
+            private_window_seconds=self._bounded_float(
+                section,
+                "planning_window",
+                "private_window_seconds",
+                default=fallback_private_window,
+                minimum=0.0,
+            ),
+            group_proactive_window_seconds=self._bounded_float(
+                section,
+                "planning_window",
+                "group_proactive_window_seconds",
+                default=0.45,
+                minimum=0.0,
+            ),
+        )
+
+    def _build_memory_dispute_config(self) -> MemoryDisputeConfig:
+        section = self._get_section("memory_dispute")
+        high = self._bounded_float(
+            section,
+            "memory_dispute",
+            "high_confidence_threshold",
+            default=0.75,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        normal = self._bounded_float(
+            section,
+            "memory_dispute",
+            "normal_confidence_threshold",
+            default=0.45,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        if normal > high:
+            self._add_error("memory_dispute.normal_confidence_threshold cannot be greater than memory_dispute.high_confidence_threshold")
+            normal = high
+        return MemoryDisputeConfig(
+            enabled=self._bool_value(section, "memory_dispute", "enabled", default=True),
+            high_confidence_threshold=high,
+            normal_confidence_threshold=normal,
+            signal_ttl_hours=self._bounded_float(
+                section,
+                "memory_dispute",
+                "signal_ttl_hours",
+                default=168.0,
+                minimum=1.0,
+            ),
+        )
+
+    def _build_character_growth_config(self) -> CharacterGrowthConfig:
+        section = self._get_section("character_growth")
+        return CharacterGrowthConfig(
+            enabled=self._bool_value(section, "character_growth", "enabled", default=True),
+            explicit_feedback_threshold=self._bounded_int(section, "character_growth", "explicit_feedback_threshold", default=2, minimum=1),
+            stable_signal_threshold=self._bounded_int(section, "character_growth", "stable_signal_threshold", default=6, minimum=1),
+            core_trait_threshold=self._bounded_int(section, "character_growth", "core_trait_threshold", default=5, minimum=1),
+            tone_preference_threshold=self._bounded_int(section, "character_growth", "tone_preference_threshold", default=3, minimum=1),
+            behavior_habit_threshold=self._bounded_int(section, "character_growth", "behavior_habit_threshold", default=2, minimum=1),
         )
 
     def _build_assistant_profile_config(self) -> AssistantProfileConfig:

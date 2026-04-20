@@ -57,7 +57,7 @@
 
 ### 改动时
 
-1. 优先沿现有主链路改：`MessageHandler -> ConversationPlanner -> TimingGateService -> ConversationContextBuilder -> ReplyPipeline/ReplyPromptRenderer -> ReplyGenerationService -> MemoryFlowService`
+1. 优先沿现有主链路改：`MessageHandler -> PlanningWindowService -> ConversationPlanner -> TimingGateService -> ConversationContextBuilder -> ReplyPipeline/ReplyPromptRenderer -> ReplyGenerationService -> MemoryFlowService`
 2. 如果改 planner，就同时考虑 `PromptPlan`、timing、prompt renderer、测试是否要一起变。
 3. 如果改 reply prompt，就优先改 section / renderer / style policy，不要退回大段字符串硬拼。
 4. 如果改 memory，就优先区分“检索能力”和“流程编排”，不要把写回逻辑散落回 handler/pipeline。

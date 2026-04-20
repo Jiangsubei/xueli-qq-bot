@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.core.models import PromptPlan, TemporalContext
+from src.core.models import CharacterCardSnapshot, PromptPlan, SoftUncertaintySignal, TemporalContext
 from src.handlers.reply_style_policy import ReplyStylePolicy
 
 
@@ -29,6 +29,26 @@ class ReplyStylePolicyTests(unittest.TestCase):
         )
 
         self.assertIn("自然想起", guide.tone_guidance)
+
+    def test_soft_uncertainty_and_character_snapshot_adjust_expression(self) -> None:
+        policy = ReplyStylePolicy()
+        guide = policy.build(
+            prompt_plan=PromptPlan(reply_goal="continue", tone_profile="balanced"),
+            temporal_context=TemporalContext(),
+            chat_mode="private",
+            soft_uncertainty_signals=[
+                SoftUncertaintySignal(signal_id="sig-1", user_id="42", summary="用户偏好可能发生变化", confidence=0.91)
+            ],
+            character_card_snapshot=CharacterCardSnapshot(
+                user_id="42",
+                tone_preferences=["偏好更短一点"],
+                behavior_habits=["少一点主动追问"],
+            ),
+        )
+
+        self.assertIn("留有余地", guide.tone_guidance)
+        self.assertIn("偏好更短一点", guide.expression_guidance)
+        self.assertIn("谨慎", guide.initiative_guidance)
 
 
 if __name__ == "__main__":

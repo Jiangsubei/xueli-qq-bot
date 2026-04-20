@@ -157,9 +157,13 @@ _CONFIG_CACHE: Dict[str, Any] = {
 _OPTIONAL_MODEL_SECTIONS = {"group_reply_decision", "vision_service", "memory_rerank"}
 
 
-def _repo_root() -> Path:
+def _app_root() -> Path:
     config_path = Path(settings.WEBUI_CONFIG_PATH)
-    return config_path.resolve().parent
+    return config_path.resolve().parent.parent
+
+
+def _workspace_root() -> Path:
+    return _app_root().parent
 
 
 def _config_path() -> Path:
@@ -199,7 +203,7 @@ def _snapshot_path() -> Path:
 
 
 def _avatar_root() -> Path:
-    return Path(getattr(settings, "WEBUI_AVATAR_ROOT", _repo_root() / "data" / "webui" / "avatar"))
+    return Path(getattr(settings, "WEBUI_AVATAR_ROOT", _workspace_root() / "data" / "webui" / "avatar"))
 
 
 def _snapshot_ttl_seconds() -> int:
@@ -289,8 +293,8 @@ def _parse_group_strategy(strategy: str) -> Dict[str, bool]:
 def _resolve_storage_path(raw_path: str) -> Path:
     path = Path(str(raw_path or "").strip())
     if path.is_absolute():
-        return path
-    return _repo_root() / path
+        return path.resolve()
+    return (_app_root() / path).resolve()
 
 
 def _load_json_file(path: Path, default: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -336,7 +340,7 @@ def _avatar_absolute_path(avatar_path: str) -> Path | None:
     normalized = path.as_posix().lstrip("./")
     if normalized.startswith("data/webui/avatar/"):
         return (_avatar_root() / path.name).resolve()
-    return (_repo_root() / path).resolve()
+    return (_app_root() / path).resolve()
 
 
 def _avatar_url(avatar_path: str) -> str | None:
