@@ -37,7 +37,7 @@ if errorlevel 1 (
 )
 
 echo [INFO] Installing dependencies...
-pip install -q -r requirements.txt
+pip install -q -r ..\requirements.txt
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies.
     pause

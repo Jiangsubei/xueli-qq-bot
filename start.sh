@@ -33,7 +33,7 @@ source venv/bin/activate
 
 # 检查依赖
 echo "[信息] 检查依赖..."
-pip install -q -r requirements.txt
+pip install -q -r ../requirements.txt
 
 # 检查配置文件
 if [ ! -f "config/.env" ]; then

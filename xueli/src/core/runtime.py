@@ -270,7 +270,14 @@ class BotRuntime:
                     logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 
     async def _send_response(self, event: MessageEvent, message: str, plan: Any = None, trace_id: str = "") -> bool:
-        parts = self.message_handler.split_long_message(message)
+        is_repeat_echo = getattr(plan, "source", None) == "repeat_echo"
+        if is_repeat_echo:
+            parts = [message]
+        else:
+            raw_parts = self.message_handler.split_by_sentence(message)
+            parts = []
+            for part in raw_parts:
+                parts.extend(self.message_handler.split_long_message(part))
         reply_session = self._reply_session_for_event(event)
         if event.message_type == MessageType.PRIVATE.value:
             quote_reply_enabled = self._private_quote_reply_enabled()

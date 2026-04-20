@@ -103,6 +103,42 @@ response_path = "choices.0.message.content"
 response_path = "output.choices.0.message.content"
 ```
 
+## 机器人行为配置
+
+`bot_behavior` 控制机器人的核心行为。
+
+### 回复语义拆分
+
+```toml
+[bot_behavior]
+sentence_split_enabled = true
+```
+
+开启后，AI 生成的回复文本会按句末标点（`。`、`！`、`？`）自动拆分为多条消息发送，模拟猫娘自然接话的效果。
+
+示例：模型输出 `这车刚从沙漠里开出来的吧！玻璃水不够用了吧` 会拆分为两条消息发送。
+
+复读内容不受此规则影响，原样发送。
+
+### 会话连续性
+
+私聊与群聊的会话在运行期间永不过期，始终保持连续对话。每次对话结束后，相关消息会自动存入历史存储，重启时可从历史存储恢复上一轮会话的全部消息。
+
+`max_context_length` 控制内存中保留的最大历史消息条数。
+
+### 其他行为配置
+
+```toml
+[bot_behavior]
+max_context_length = 10          # 对话历史最大条数
+max_message_length = 4000         # 单条消息最大长度（字符），超长自动截断
+response_timeout = 60             # AI 响应超时时间（秒）
+rate_limit_interval = 1.0         # 同一目标发送间隔（秒）
+private_quote_reply_enabled = false  # 私聊是否启用引用回复
+private_batch_window_seconds = 1.2   # 私聊消息合批窗口（秒）
+log_full_prompt = false               # 是否打印完整提示词（仅调试用）
+```
+
 ## 视觉模型配置
 
 视觉功能配置位于 `vision_service`。

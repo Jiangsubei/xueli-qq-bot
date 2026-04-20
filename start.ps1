@@ -41,7 +41,7 @@ Write-Host "[INFO] Activating virtual environment..." -ForegroundColor Cyan
 . .\venv\Scripts\Activate.ps1
 
 Write-Host "[INFO] Installing dependencies..." -ForegroundColor Cyan
-python -m pip install -q -r requirements.txt
+python -m pip install -q -r ../requirements.txt
 if ($LASTEXITCODE -ne 0) {
     Fail-AndExit "Failed to install dependencies."
 }

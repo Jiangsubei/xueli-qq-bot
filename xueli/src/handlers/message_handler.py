@@ -94,7 +94,9 @@ class MessageHandler:
             model_invocation_router=self.model_invocation_router,
         )
 
-        self.session_manager = ConversationSessionManager()
+        self.session_manager = ConversationSessionManager(
+            conversation_store=getattr(memory_manager, "conversation_store", None) if memory_manager else None
+        )
         self.conversation_plan_coordinator = ConversationPlanCoordinator(
             planner=self.conversation_planner,
             session_manager=self.session_manager,
@@ -535,6 +537,8 @@ class MessageHandler:
         self._ensure_extended_services()
         conversation_key = self._get_conversation_key(event)
         conversation = self._get_conversation(conversation_key)
+        if not conversation.messages:
+            await self.session_manager.restore(conversation, conversation_key)
         user_message = self.extract_user_message(event)
         temporal_context = self._build_temporal_context(
             event=event,
@@ -1077,6 +1081,21 @@ class MessageHandler:
     async def mark_emoji_follow_up_sent(self, event: MessageEvent, selection) -> None:
         if self.emoji_reply_service and selection:
             await self.emoji_reply_service.mark_follow_up_sent(event=event, selection=selection)
+
+    def split_by_sentence(self, message: str) -> List[str]:
+        """按句末标点（。！？）切分为语义独立的短句。"""
+        enabled = getattr(self.app_config.bot_behavior, "sentence_split_enabled", True)
+        if not enabled:
+            return [message]
+        if not message or len(message) < 5:
+            return [message]
+        parts = re.split(r"(?<=[。！？])", message)
+        if len(parts) < 2:
+            return [message]
+        filtered = [p.strip() for p in parts if len(p.strip()) >= 2]
+        if len(filtered) < 2:
+            return [message]
+        return filtered
 
     def split_long_message(self, message: str) -> List[str]:
         max_length = self.app_config.bot_behavior.max_message_length

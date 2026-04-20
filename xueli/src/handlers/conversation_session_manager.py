@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.core.models import Conversation, MessageEvent, MessageType
 from src.core.platform_models import InboundEvent, SessionRef
@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 class ConversationSessionManager:
     """Manage per-conversation chat state for private and group chats."""
 
-    def __init__(self) -> None:
+    def __init__(self, conversation_store: Optional[Any] = None) -> None:
         self._conversations: Dict[str, Conversation] = {}
+        self._conversation_store = conversation_store
 
     def get_key_for_session(self, session: SessionRef) -> str:
         return session.qualified_key
@@ -46,13 +47,44 @@ class ConversationSessionManager:
         return self.clear(self.get_key(event))
 
     def clean_expired(self) -> None:
-        expired_keys = [
-            key for key, conversation in self._conversations.items() if conversation.is_expired()
-        ]
-        for key in expired_keys:
-            del self._conversations[key]
-            logger.debug("已清理过期会话：%s", key)
+        pass
 
     def count_active(self) -> int:
-        self.clean_expired()
         return len(self._conversations)
+
+    async def restore(self, conversation: Conversation, key: str) -> None:
+        """Load the most recent closed session's messages into an empty conversation."""
+        if not self._conversation_store:
+            return
+        if conversation.messages:
+            return
+        try:
+            sessions = await self._conversation_store.get_conversations(
+                self._extract_user_id_from_key(key), limit=3
+            )
+        except Exception as exc:
+            logger.warning("加载历史会话失败：%s，错误=%s", key, exc)
+            return
+        dialogue_key = self._dialogue_key_from_session_key(key)
+        for record in sessions:
+            if str(record.dialogue_key or "") == dialogue_key and record.turn_count > 0:
+                for turn in record.turns:
+                    user_text = str(turn.user or "").strip()
+                    assistant_text = str(turn.assistant or "").strip()
+                    if user_text:
+                        conversation.add_message("user", user_text)
+                    if assistant_text:
+                        conversation.add_message("assistant", assistant_text)
+                logger.debug("已恢复历史会话：key=%s，轮次=%s", key, record.turn_count)
+                return
+
+    def _extract_user_id_from_key(self, key: str) -> str:
+        parts = key.split(":")
+        return parts[-1] if parts else ""
+
+    def _dialogue_key_from_session_key(self, key: str) -> str:
+        """Strip platform prefix from session key to get dialogue_key."""
+        parts = key.split(":")
+        if len(parts) >= 3:
+            return ":".join(parts[1:])
+        return key

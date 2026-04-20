@@ -67,6 +67,7 @@ class BotBehaviorConfig:
     log_full_prompt: bool = False
     private_quote_reply_enabled: bool = False
     private_batch_window_seconds: float = 1.2
+    sentence_split_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -289,6 +290,7 @@ class Config:
         "LOG_FULL_PROMPT": ("bot_behavior", "log_full_prompt"),
         "PRIVATE_QUOTE_REPLY_ENABLED": ("bot_behavior", "private_quote_reply_enabled"),
         "PRIVATE_BATCH_WINDOW_SECONDS": ("bot_behavior", "private_batch_window_seconds"),
+        "SENTENCE_SPLIT_ENABLED": ("bot_behavior", "sentence_split_enabled"),
         "PLANNING_WINDOW_ENABLED": ("planning_window", "enabled"),
         "PLANNING_WINDOW_PRIVATE_SECONDS": ("planning_window", "private_window_seconds"),
         "PLANNING_WINDOW_GROUP_PROACTIVE_SECONDS": ("planning_window", "group_proactive_window_seconds"),
@@ -588,6 +590,7 @@ class Config:
             log_full_prompt=self._bool_value(section, "bot_behavior", "log_full_prompt", default=False),
             private_quote_reply_enabled=self._bool_value(section, "bot_behavior", "private_quote_reply_enabled", default=False),
             private_batch_window_seconds=self._bounded_float(section, "bot_behavior", "private_batch_window_seconds", default=1.2, minimum=0.0),
+            sentence_split_enabled=self._bool_value(section, "bot_behavior", "sentence_split_enabled", default=True),
         )
 
     def _build_planning_window_config(self) -> PlanningWindowConfig:
