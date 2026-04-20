@@ -56,6 +56,7 @@ class ReplyPromptRenderer:
             ("vision_context", self._vision_section(message_context=message_context, prompt_plan=plan)),
             ("reply_scope", self._reply_scope_section(event=event, enabled=plan.policy.include_reply_scope)),
             ("final_style", self._final_style_section(style_guide=style_guide, enabled=plan.policy.include_style_guide)),
+            ("output_format", self._output_format_section()),
         ]
         active_sections = [name for name, text in sections if str(text or "").strip()]
         section_texts = {name: text for name, text in sections if str(text or "").strip()}
@@ -168,3 +169,12 @@ class ReplyPromptRenderer:
         if anti_patterns:
             parts.append("避免：\n" + anti_patterns)
         return "\n".join(parts)
+
+    def _output_format_section(self) -> str:
+        return (
+            "输出格式要求：\n"
+            "你必须只输出 JSON 字符串数组，数组里的每个元素都是一条可直接发送给用户的聊天文本。\n"
+            "如果只需要回复一句，也要输出单元素数组，例如：[\"晚上好喵~\"]。\n"
+            "如果适合自然分成多条，就输出多元素数组，例如：[\"刚在发呆呢喵~\", \"顺便刷手机呢喵~\", \"你呢喵？\"]。\n"
+            "不要输出 JSON 对象，不要输出解释，不要输出编号，不要输出 markdown code block。"
+        )

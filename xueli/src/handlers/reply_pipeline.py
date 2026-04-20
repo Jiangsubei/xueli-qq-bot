@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from src.core.config import AppConfig
@@ -41,6 +41,7 @@ class PreparedReplyRequest:
 @dataclass
 class ReplyResult:
     text: str
+    segments: List[str] = field(default_factory=list)
     source: str = "ai"
 
 
@@ -202,16 +203,21 @@ class ReplyPipeline:
                 event.group_id,
                 len(response.content),
             )
-            return ReplyResult(text=response.content, source=source)
+            normalized_text = str(response.content or "").strip()
+            normalized_segments = [str(item or "").strip() for item in list(getattr(response, "segments", None) or []) if str(item or "").strip()]
+            if not normalized_segments and normalized_text:
+                normalized_segments = [normalized_text]
+            return ReplyResult(text=normalized_text, segments=normalized_segments, source=source)
         except asyncio.TimeoutError:
             logger.error("回复生成失败：%s category=model_request_error 错误=模型响应超时", trace_log)
-            return ReplyResult(text="AI 服务响应超时，请稍后再试。", source="fallback")
+            return ReplyResult(text="AI 服务响应超时，请稍后再试。", segments=["AI 服务响应超时，请稍后再试。"], source="fallback")
         except AIAPIError as exc:
             logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
-            return ReplyResult(text=f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}", source="fallback")
+            fallback_text = f"AI 服务暂时不可用，请稍后再试。\n错误信息: {exc}"
+            return ReplyResult(text=fallback_text, segments=[fallback_text], source="fallback")
         except Exception as exc:
             logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
-            return ReplyResult(text="处理消息时出错，请稍后再试。", source="fallback")
+            return ReplyResult(text="处理消息时出错，请稍后再试。", segments=["处理消息时出错，请稍后再试。"], source="fallback")
 
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
         if not self._event_has_image(event) or not self._vision_enabled():

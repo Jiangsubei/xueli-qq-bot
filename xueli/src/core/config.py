@@ -68,6 +68,12 @@ class BotBehaviorConfig:
     private_quote_reply_enabled: bool = False
     private_batch_window_seconds: float = 1.2
     sentence_split_enabled: bool = True
+    segmented_reply_enabled: bool = True
+    max_segments: int = 3
+    first_segment_delay_min_ms: int = 0
+    first_segment_delay_max_ms: int = 600
+    followup_delay_min_seconds: float = 3.0
+    followup_delay_max_seconds: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -292,6 +298,12 @@ class Config:
         "PRIVATE_QUOTE_REPLY_ENABLED": ("bot_behavior", "private_quote_reply_enabled"),
         "PRIVATE_BATCH_WINDOW_SECONDS": ("bot_behavior", "private_batch_window_seconds"),
         "SENTENCE_SPLIT_ENABLED": ("bot_behavior", "sentence_split_enabled"),
+        "SEGMENTED_REPLY_ENABLED": ("bot_behavior", "segmented_reply_enabled"),
+        "SEGMENTED_REPLY_MAX_SEGMENTS": ("bot_behavior", "max_segments"),
+        "FIRST_SEGMENT_DELAY_MIN_MS": ("bot_behavior", "first_segment_delay_min_ms"),
+        "FIRST_SEGMENT_DELAY_MAX_MS": ("bot_behavior", "first_segment_delay_max_ms"),
+        "FOLLOWUP_DELAY_MIN_SECONDS": ("bot_behavior", "followup_delay_min_seconds"),
+        "FOLLOWUP_DELAY_MAX_SECONDS": ("bot_behavior", "followup_delay_max_seconds"),
         "PLANNING_WINDOW_ENABLED": ("planning_window", "enabled"),
         "PLANNING_WINDOW_PRIVATE_SECONDS": ("planning_window", "private_window_seconds"),
         "PLANNING_WINDOW_GROUP_PROACTIVE_SECONDS": ("planning_window", "group_proactive_window_seconds"),
@@ -584,7 +596,7 @@ class Config:
 
     def _build_bot_behavior_config(self) -> BotBehaviorConfig:
         section = self._get_section("bot_behavior")
-        return BotBehaviorConfig(
+        config = BotBehaviorConfig(
             max_context_length=self._bounded_int(section, "bot_behavior", "max_context_length", default=10, minimum=1),
             max_message_length=self._bounded_int(section, "bot_behavior", "max_message_length", default=4000, minimum=1),
             response_timeout=self._bounded_int(section, "bot_behavior", "response_timeout", default=60, minimum=1),
@@ -593,7 +605,20 @@ class Config:
             private_quote_reply_enabled=self._bool_value(section, "bot_behavior", "private_quote_reply_enabled", default=False),
             private_batch_window_seconds=self._bounded_float(section, "bot_behavior", "private_batch_window_seconds", default=1.2, minimum=0.0),
             sentence_split_enabled=self._bool_value(section, "bot_behavior", "sentence_split_enabled", default=True),
+            segmented_reply_enabled=self._bool_value(section, "bot_behavior", "segmented_reply_enabled", default=True),
+            max_segments=self._bounded_int(section, "bot_behavior", "max_segments", default=3, minimum=1),
+            first_segment_delay_min_ms=self._bounded_int(section, "bot_behavior", "first_segment_delay_min_ms", default=0, minimum=0),
+            first_segment_delay_max_ms=self._bounded_int(section, "bot_behavior", "first_segment_delay_max_ms", default=600, minimum=0),
+            followup_delay_min_seconds=self._bounded_float(section, "bot_behavior", "followup_delay_min_seconds", default=3.0, minimum=0.0),
+            followup_delay_max_seconds=self._bounded_float(section, "bot_behavior", "followup_delay_max_seconds", default=10.0, minimum=0.0),
         )
+        if config.first_segment_delay_min_ms > config.first_segment_delay_max_ms:
+            self._add_error("bot_behavior.first_segment_delay_min_ms cannot be greater than bot_behavior.first_segment_delay_max_ms")
+            config = BotBehaviorConfig(**{**config.__dict__, "first_segment_delay_min_ms": 0, "first_segment_delay_max_ms": max(0, config.first_segment_delay_max_ms)})
+        if config.followup_delay_min_seconds > config.followup_delay_max_seconds:
+            self._add_error("bot_behavior.followup_delay_min_seconds cannot be greater than bot_behavior.followup_delay_max_seconds")
+            config = BotBehaviorConfig(**{**config.__dict__, "followup_delay_min_seconds": 0.0, "followup_delay_max_seconds": max(0.0, config.followup_delay_max_seconds)})
+        return config
 
     def _build_planning_window_config(self) -> PlanningWindowConfig:
         section = self._get_section("planning_window")

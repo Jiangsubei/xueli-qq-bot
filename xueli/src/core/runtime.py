@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import signal
 import sys
 from dataclasses import replace
@@ -16,6 +17,7 @@ from src.core.message_trace import build_trace_id, format_trace_log, get_executi
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import SendError, classify_pipeline_error
 from src.core.platform_models import InboundEvent, ReplyAction, SessionRef
+from src.core.reply_send_orchestrator import ReplyPartPlan, ReplySendOrchestrator
 from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.session_message_pipeline import SessionMessagePipeline
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
@@ -64,6 +66,7 @@ class BotRuntime:
             base_timeout_seconds=max(1, int(self.config.app.bot_behavior.response_timeout or 60)),
             on_state_change=self._on_model_router_state_change,
         )
+        self._reply_send_orchestrator = ReplySendOrchestrator(rng=random.Random())
         self._connection_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._handlers_registered = False
@@ -256,9 +259,9 @@ class BotRuntime:
                         continue
                     return
 
-                self._log_reply_preview(reply_result.text, trace_log, source=getattr(reply_result, "source", ""))
+                self._log_reply_preview(reply_result, trace_log, source=getattr(reply_result, "source", ""))
                 logger.info("开始发送回复：%s", trace_log)
-                sent = await self._send_response(current_event, reply_result.text, plan=plan, trace_id=trace_id)
+                sent = await self._send_response(current_event, reply_result, plan=plan, trace_id=trace_id)
                 if sent:
                     logger.info("发送完成：%s", trace_log)
                     await self.message_handler.record_group_reply_sent(current_event, reply_result.text)
@@ -297,19 +300,22 @@ class BotRuntime:
                 except Exception as fallback_exc:
                     logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 
-    async def _send_response(self, event: MessageEvent, message: str, plan: Any = None, trace_id: str = "") -> bool:
+    async def _send_response(self, event: MessageEvent, reply: Any, plan: Any = None, trace_id: str = "") -> bool:
+        message = str(getattr(reply, "text", reply) or "").strip()
         is_repeat_echo = getattr(plan, "source", None) == "repeat_echo"
-        if is_repeat_echo:
-            parts = [message]
-        else:
-            raw_parts = self.message_handler.split_by_sentence(message)
-            parts = []
-            for part in raw_parts:
-                parts.extend(self.message_handler.split_long_message(part))
+        raw_segments = list(getattr(reply, "segments", None) or [])
+        parts = self._build_reply_part_plans(
+            event=event,
+            message=message,
+            raw_segments=raw_segments,
+            force_single_part=is_repeat_echo,
+        )
         reply_session = self._reply_session_for_event(event)
         if event.message_type == MessageType.PRIVATE.value:
             quote_reply_enabled = self._private_quote_reply_enabled()
-            for index, part in enumerate(parts):
+            for index, part_plan in enumerate(parts):
+                if part_plan.delay_before_seconds > 0:
+                    await asyncio.sleep(part_plan.delay_before_seconds)
                 message_id = getattr(event, "message_id", "")
                 use_quote_reply = (
                     quote_reply_enabled
@@ -319,18 +325,18 @@ class BotRuntime:
                 if use_quote_reply:
                     await self._send_private_segments(
                         reply_session,
-                        [MessageSegment.reply(message_id), MessageSegment.text(part)],
+                        [MessageSegment.reply(message_id), MessageSegment.text(part_plan.text)],
                         trace_id=trace_id,
                     )
                 else:
-                    await self._send_private_msg(reply_session, part, trace_id=trace_id)
-                await asyncio.sleep(0.5)
+                    await self._send_private_msg(reply_session, part_plan.text, trace_id=trace_id)
         else:
             at_user = self.message_handler.resolve_group_at_user(event, plan)
-            for index, part in enumerate(parts):
+            for index, part_plan in enumerate(parts):
+                if part_plan.delay_before_seconds > 0:
+                    await asyncio.sleep(part_plan.delay_before_seconds)
                 part_at_user = at_user if index == 0 else None
-                await self._send_group_msg(reply_session, part, part_at_user, trace_id=trace_id)
-                await asyncio.sleep(0.5)
+                await self._send_group_msg(reply_session, part_plan.text, part_at_user, trace_id=trace_id)
 
         self.runtime_metrics.inc_messages_replied(len(parts))
         self._sync_status_cache()
@@ -343,6 +349,43 @@ class BotRuntime:
                 len(parts),
             )
         return True
+
+    def _build_reply_part_plans(
+        self,
+        *,
+        event: MessageEvent,
+        message: str,
+        raw_segments: List[str],
+        force_single_part: bool,
+    ) -> List[ReplyPartPlan]:
+        if not hasattr(self, "_reply_send_orchestrator") or self._reply_send_orchestrator is None:
+            self._reply_send_orchestrator = ReplySendOrchestrator(rng=random.Random())
+        app_config = getattr(self.message_handler, "app_config", None)
+        bot_behavior = getattr(app_config, "bot_behavior", None)
+        segmented_reply_enabled = bool(getattr(bot_behavior, "segmented_reply_enabled", True))
+        max_segments = int(getattr(bot_behavior, "max_segments", 3) or 3)
+        if force_single_part:
+            return [ReplyPartPlan(text=message, delay_before_seconds=0.0)] if message else []
+        if segmented_reply_enabled:
+            plans = self._reply_send_orchestrator.build_part_plan(
+                segments=raw_segments,
+                fallback_text=message,
+                max_segments=max_segments,
+                first_segment_delay_min_ms=int(getattr(bot_behavior, "first_segment_delay_min_ms", 0) or 0),
+                first_segment_delay_max_ms=int(getattr(bot_behavior, "first_segment_delay_max_ms", 600) or 600),
+                followup_delay_min_seconds=float(getattr(bot_behavior, "followup_delay_min_seconds", 3.0) or 0.0),
+                followup_delay_max_seconds=float(getattr(bot_behavior, "followup_delay_max_seconds", 10.0) or 0.0),
+            )
+            if plans:
+                return plans
+        raw_parts = self.message_handler.split_by_sentence(message)
+        parts: List[ReplyPartPlan] = []
+        for part in raw_parts:
+            for long_part in self.message_handler.split_long_message(part):
+                normalized = str(long_part or "").strip()
+                if normalized:
+                    parts.append(ReplyPartPlan(text=normalized, delay_before_seconds=0.0))
+        return parts
 
     async def _send_emoji_follow_up_if_needed(self, event: MessageEvent, reply_result: Any, plan: Any, *, trace_id: str = "") -> None:
         if event.message_type != MessageType.GROUP.value:
@@ -759,9 +802,21 @@ class BotRuntime:
             preview_json_for_log(raw_decision),
         )
 
-    def _log_reply_preview(self, reply_text: str, trace_log: str, *, source: str = "") -> None:
+    def _log_reply_preview(self, reply: Any, trace_log: str, *, source: str = "") -> None:
+        reply_text = str(getattr(reply, "text", reply) or "").strip()
         preview = preview_text_for_log(reply_text)
         if not preview:
             return
         normalized_source = str(source or "").strip() or "unknown"
+        segments = list(getattr(reply, "segments", None) or [])
+        if segments:
+            logger.info(
+                "最终回复预览：%s source=%s segments=%s content=%s raw_segments=%s",
+                trace_log,
+                normalized_source,
+                len(segments),
+                preview,
+                preview_json_for_log(segments),
+            )
+            return
         logger.info("最终回复预览：%s source=%s content=%s", trace_log, normalized_source, preview)

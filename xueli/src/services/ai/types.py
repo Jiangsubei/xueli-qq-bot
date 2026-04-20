@@ -9,6 +9,7 @@ class AIResponse:
     """Normalized response payload returned by the AI client facade."""
 
     content: str
+    segments: Optional[List[str]] = None
     usage: Optional[Dict[str, int]] = None
     model: str = ""
     finish_reason: str = ""

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from src.core.models import Conversation, MessageEvent, MessageType
@@ -68,15 +69,32 @@ class ConversationSessionManager:
         dialogue_key = self._dialogue_key_from_session_key(key)
         for record in sessions:
             if str(record.dialogue_key or "") == dialogue_key and record.turn_count > 0:
+                conversation.restored_previous_session_time = self._parse_timestamp(record.closed_at or record.updated_at)
+                conversation.restored_session_id = str(record.session_id or "")
+                conversation.restored_session_pending = True
                 for turn in record.turns:
                     user_text = str(turn.user or "").strip()
                     assistant_text = str(turn.assistant or "").strip()
                     image_desc = str(turn.image_description or "").strip()
                     msg_id = str(turn.source_message_id or "").strip()
+                    turn_timestamp = self._parse_timestamp(turn.timestamp)
                     if user_text:
-                        conversation.add_message("user", user_text, image_description=image_desc, message_id=msg_id)
+                        conversation.add_message(
+                            "user",
+                            user_text,
+                            timestamp=turn_timestamp,
+                            image_description=image_desc,
+                            message_id=msg_id,
+                            restored=True,
+                        )
                     if assistant_text:
-                        conversation.add_message("assistant", assistant_text, message_id=msg_id)
+                        conversation.add_message(
+                            "assistant",
+                            assistant_text,
+                            timestamp=turn_timestamp,
+                            message_id=msg_id,
+                            restored=True,
+                        )
                 logger.debug("已恢复历史会话：key=%s，轮次=%s", key, record.turn_count)
                 return
 
@@ -90,3 +108,12 @@ class ConversationSessionManager:
         if len(parts) >= 3:
             return ":".join(parts[1:])
         return key
+
+    def _parse_timestamp(self, value: Any) -> float:
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        try:
+            return datetime.fromisoformat(text).timestamp()
+        except ValueError:
+            return 0.0

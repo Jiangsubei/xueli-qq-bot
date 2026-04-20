@@ -779,6 +779,7 @@ class MessageHandler:
         current_event_time = normalize_event_time(getattr(event, "time", 0.0)) or time.time()
         window_messages = list((reply_context or {}).get("window_messages") or [])
         previous_message_time = 0.0
+        previous_session_time = 0.0
         history_event_times: List[float] = []
 
         if window_messages:
@@ -789,12 +790,17 @@ class MessageHandler:
 
         if previous_message_time <= 0 and conversation.messages:
             previous_message_time = float(conversation.last_update or 0.0)
+        if getattr(conversation, "restored_session_pending", False):
+            previous_session_time = float(getattr(conversation, "restored_previous_session_time", 0.0) or 0.0)
+            if previous_message_time <= 0:
+                previous_message_time = float(getattr(conversation, "restored_last_message_time", 0.0) or 0.0)
 
         return build_temporal_context(
             current_event_time=current_event_time,
             chat_mode=str(getattr(event, "message_type", "private") or "private"),
             previous_message_time=previous_message_time,
             conversation_last_time=previous_message_time,
+            previous_session_time=previous_session_time,
             history_event_times=history_event_times,
         )
 
@@ -968,13 +974,13 @@ class MessageHandler:
         if plan and isinstance(plan.reply_context, dict):
             direct_reply_text = str(plan.reply_context.get("direct_reply_text") or "").strip()
             if direct_reply_text:
-                return ReplyResult(text=direct_reply_text, source=plan.source or "rule")
+                return ReplyResult(text=direct_reply_text, segments=[direct_reply_text], source=plan.source or "rule")
 
         reply_context = dict(getattr(plan, "reply_context", None) or {})
         user_message = str(reply_context.get("merged_user_message") or self.extract_user_message(event)).strip()
         command_result = self.check_command(user_message, event)
         if command_result is not None:
-            return ReplyResult(text=command_result, source="command")
+            return ReplyResult(text=command_result, segments=[command_result], source="command")
         context = await self.build_message_context(
             event,
             plan=plan,

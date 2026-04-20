@@ -63,6 +63,8 @@ if "aiohttp" not in sys.modules:
 from src.memory.chat_summary_service import ChatSummaryService
 from src.memory.session_restore_service import SessionRestoreService
 from src.memory.storage.conversation_store import ConversationStore
+from src.handlers.conversation_session_manager import ConversationSessionManager
+from src.core.models import Conversation
 
 
 class SessionRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +113,36 @@ class SessionRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(entries), 1)
             self.assertIn("群1的话题", entries[0]["content"])
             self.assertNotIn("群2的话题", entries[0]["content"])
+
+    async def test_restore_rehydrates_original_turn_timestamps_and_previous_session_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(base_path=str(Path(temp_dir) / "conversations"))
+            registration = store.add_turn(
+                user_id="user-1",
+                user_message="第一句",
+                assistant_message="第二句",
+                message_type="private",
+                message_id="m1",
+            )
+            session_id = store.close_session(user_id="user-1", message_type="private")
+            record = await store.save_conversation(user_id="user-1", session_id=session_id, force=True)
+            self.assertIsNotNone(record)
+
+            manager = ConversationSessionManager(conversation_store=store)
+            conversation = Conversation()
+            await manager.restore(conversation, "qq:private:user-1")
+
+            self.assertEqual(len(conversation.messages), 2)
+            restored_timestamp = float(conversation.messages[-1]["timestamp"])
+            expected_timestamp = record.turns[-1].timestamp
+            self.assertAlmostEqual(restored_timestamp, manager._parse_timestamp(expected_timestamp), places=3)
+            self.assertAlmostEqual(
+                float(conversation.restored_previous_session_time),
+                manager._parse_timestamp(record.closed_at),
+                places=3,
+            )
+            self.assertTrue(conversation.restored_session_pending)
+            self.assertEqual(conversation.restored_session_id, registration.session_id)
 
 
 if __name__ == "__main__":

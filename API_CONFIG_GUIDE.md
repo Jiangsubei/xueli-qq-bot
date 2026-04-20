@@ -107,24 +107,43 @@ response_path = "output.choices.0.message.content"
 
 `bot_behavior` 控制机器人的核心行为。
 
-### 回复语义拆分
+### 结构化分段发送
 
 ```toml
 [bot_behavior]
-sentence_split_enabled = true
+segmented_reply_enabled = true
+max_segments = 3
+first_segment_delay_min_ms = 0
+first_segment_delay_max_ms = 600
+followup_delay_min_seconds = 3
+followup_delay_max_seconds = 10
 ```
 
-开启后，AI 生成的回复文本会按句末标点（`。`、`！`、`？`）自动拆分为多条消息发送，模拟猫娘自然接话的效果。
+开启后，回复模型会被要求直接输出 JSON 字符串数组，例如：
 
-示例：模型输出 `这车刚从沙漠里开出来的吧！玻璃水不够用了吧` 会拆分为两条消息发送。
+```json
+["刚在发呆呢喵~", "顺便刷手机呢喵~", "你呢喵？"]
+```
 
-复读内容不受此规则影响，原样发送。
+程序会负责：
+
+- 清洗空段和重复段
+- 按段逐条发送
+- 第一段近即时发送
+- 后续段按随机延迟发送
+
+如果模型没有按协议输出字符串数组，则会退回普通单条文本；`sentence_split_enabled` 保留为最后的标点分句兜底，不再是主路径。
 
 ### 会话连续性
 
-私聊与群聊的会话在运行期间永不过期，始终保持连续对话。每次对话结束后，相关消息会自动存入历史存储，重启时可从历史存储恢复上一轮会话的全部消息。
+私聊与群聊的会话在运行期间永不过期，始终保持连续对话。每次对话结束后，相关消息会自动存入历史存储，重启时可从历史存储恢复上一轮会话的全部消息，并保留原始消息时间与上一轮会话关闭时间。
 
 `max_context_length` 控制内存中保留的最大历史消息条数。
+
+这意味着重启后的第一条新消息不再被错误判成“刚刚接上”，planner 能同时看到：
+
+- 最近一条恢复历史消息的真实时间
+- 上一轮已关闭会话的时间分层
 
 ### 其他行为配置
 
@@ -136,6 +155,13 @@ response_timeout = 60             # AI 响应超时时间（秒）
 rate_limit_interval = 1.0         # 同一目标发送间隔（秒）
 private_quote_reply_enabled = false  # 私聊是否启用引用回复
 private_batch_window_seconds = 1.2   # 私聊消息合批窗口（秒）
+sentence_split_enabled = true        # 仅作兜底标点分句
+segmented_reply_enabled = true       # 主回复路径使用字符串数组分段
+max_segments = 3                     # 单轮回复最多保留几段
+first_segment_delay_min_ms = 0       # 第一段最小延迟（毫秒）
+first_segment_delay_max_ms = 600     # 第一段最大延迟（毫秒）
+followup_delay_min_seconds = 3.0     # 后续段最小延迟（秒）
+followup_delay_max_seconds = 10.0    # 后续段最大延迟（秒）
 log_full_prompt = false               # 是否打印完整提示词（仅调试用）
 ```
 

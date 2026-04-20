@@ -69,6 +69,8 @@ class ReplyPipelinePromptPlanTests(unittest.TestCase):
         self.assertIn("连续性策略", prompt)
         self.assertIn("resume_old_topic", prompt)
         self.assertIn("最终回复风格", prompt)
+        self.assertIn("输出格式要求", prompt)
+        self.assertIn("JSON 字符串数组", prompt)
         self.assertIn("自然想起之前聊过的事", prompt)
         self.assertIn("适度展开", prompt)
         self.assertIn("用户长期在准备考研", prompt)

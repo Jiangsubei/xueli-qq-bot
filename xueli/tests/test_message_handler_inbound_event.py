@@ -129,6 +129,31 @@ class MessageHandlerInboundEventTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(handler.should_process(event))
 
+    def test_build_temporal_context_uses_restored_previous_session_time(self) -> None:
+        handler = self._build_handler()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 3,
+                "user_id": 42,
+                "self_id": 100,
+                "time": 10_000,
+                "raw_message": "继续",
+                "message": [{"type": "text", "data": {"text": "继续"}}],
+            }
+        )
+        conversation = handler._get_conversation(handler._get_conversation_key(event))
+        conversation.restored_session_pending = True
+        conversation.restored_previous_session_time = 8_000.0
+        conversation.add_message("user", "旧消息", timestamp=9_000.0, restored=True)
+
+        temporal_context = handler._build_temporal_context(event=event, conversation=conversation)
+
+        self.assertEqual(temporal_context.previous_message_time, 9_000.0)
+        self.assertEqual(temporal_context.previous_session_time, 8_000.0)
+        self.assertEqual(temporal_context.session_gap_bucket, "recent")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,8 +23,8 @@
 | 缓冲窗口调度 | 每会话按时间片生成窗口，顺序消费，超时窗口自动丢弃，避免延迟叠加 |
 | 节奏控制 | 避免刷屏，让对话更自然 |
 | 回复规划 | 控制回复风格、情感、相关记忆的拼接 |
-| 语义拆分发送 | AI 生成内容按句末标点（。！？）智能拆分为多条发送，模拟猫娘自然接话感 |
-| 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，历史消息条数受 `max_context_length` 控制 |
+| 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
+| 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
 | 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 使用明文存储方便阅读编辑 |
 | 图片理解 | 通过视觉模型分析图片内容，增强回复内容，图片描述持久化到历史记录，重启后仍可查看 |
 | 表情互动 | 根据语境追发表情，增强交互感 |
@@ -112,12 +112,19 @@ python -m unittest discover -s xueli/tests -t xueli
 | `[vision_service]` | 图片理解模型的配置（可选） |
 | `[group_reply]` | 群聊的回复节流、兴趣回复、复读策略 |
 | `[group_reply_decision]` | 统一规划模型（可单独指定模型） |
-| `[bot_behavior]` | 最大历史条数、回复长度限制、语义拆分开关等 |
+| `[bot_behavior]` | 最大历史条数、回复长度限制、结构化分段发送与延迟等 |
 | `[planning_window]` | 私聊/群聊缓冲窗口时长、窗口排队过期时间 |
 | `[memory]` | 记忆开关、检索数量、半衰期等 |
 | `[memory_rerank]` | 记忆重排模型配置（可选） |
 
 几乎所有配置都提供了合理的默认值，你只需要关注 `adapter_connection` 和 `ai_service` 即可快速跑起来。
+
+如果你想调整“分条发送”的手感，重点看 `bot_behavior` 里的这几个参数：
+
+- `segmented_reply_enabled`
+- `max_segments`
+- `first_segment_delay_min_ms` / `first_segment_delay_max_ms`
+- `followup_delay_min_seconds` / `followup_delay_max_seconds`
 
 ---
 
@@ -177,6 +184,7 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/core/dispatcher.py`
 - `xueli/src/core/config.py`
 - `xueli/src/core/models.py`
+- `xueli/src/core/reply_send_orchestrator.py`
 - `xueli/src/core/platform_models.py`
 - `xueli/src/core/platform_normalizers.py`
 - `xueli/src/core/platform_bridge.py`

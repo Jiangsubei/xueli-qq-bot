@@ -2,9 +2,9 @@
 数据模型定义
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Literal
 from enum import Enum
 import time
+from typing import Any, Dict, List, Literal, Optional
 
 
 class MessageType(Enum):
@@ -285,8 +285,21 @@ class Conversation:
     """对话历史记录"""
     messages: List[Dict[str, str]] = field(default_factory=list)
     last_update: float = field(default_factory=time.time)
+    restored_previous_session_time: float = 0.0
+    restored_last_message_time: float = 0.0
+    restored_session_id: str = ""
+    restored_session_pending: bool = False
 
-    def add_message(self, role: str, content: str, *, timestamp: Optional[float] = None, image_description: str = "", message_id: str = ""):
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        timestamp: Optional[float] = None,
+        image_description: str = "",
+        message_id: str = "",
+        restored: bool = False,
+    ):
         """添加消息到对话"""
         event_time = float(timestamp or time.time())
         msg = {"role": role, "content": content, "timestamp": event_time}
@@ -296,6 +309,10 @@ class Conversation:
             msg["message_id"] = message_id
         self.messages.append(msg)
         self.last_update = event_time
+        if restored:
+            self.restored_last_message_time = max(float(self.restored_last_message_time or 0.0), event_time)
+        elif self.restored_session_pending:
+            self.restored_session_pending = False
 
     def get_messages(self, max_length: int = 10) -> List[Dict[str, str]]:
         """获取最近的对话历史"""
@@ -305,6 +322,10 @@ class Conversation:
         """清空对话"""
         self.messages = []
         self.last_update = time.time()
+        self.restored_previous_session_time = 0.0
+        self.restored_last_message_time = 0.0
+        self.restored_session_id = ""
+        self.restored_session_pending = False
 
     def is_expired(self, timeout: int = 3600) -> bool:
         """检查对话是否过期（默认1小时）"""

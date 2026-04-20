@@ -5,7 +5,7 @@ import unittest
 
 from src.adapters.api.adapter import ApiAdapter
 from src.core.runtime import BotRuntime
-from src.core.models import MessageSegment
+from src.core.models import MessageEvent, MessageSegment
 from src.core.pipeline_errors import SendError
 from src.core.platform_bridge import build_message_event_from_inbound
 from src.core.platform_models import ReplyAction
@@ -25,10 +25,26 @@ class _FakeAdapter:
 
 class _MessageHandlerStub:
     def __init__(self) -> None:
-        bot_behavior = type("_BotBehavior", (), {"private_quote_reply_enabled": False, "log_full_prompt": False})()
+        bot_behavior = type(
+            "_BotBehavior",
+            (),
+            {
+                "private_quote_reply_enabled": False,
+                "log_full_prompt": False,
+                "segmented_reply_enabled": True,
+                "max_segments": 3,
+                "first_segment_delay_min_ms": 0,
+                "first_segment_delay_max_ms": 0,
+                "followup_delay_min_seconds": 0.0,
+                "followup_delay_max_seconds": 0.0,
+            },
+        )()
         self.app_config = type("_AppConfig", (), {"bot_behavior": bot_behavior})()
 
     def split_long_message(self, message):
+        return [message]
+
+    def split_by_sentence(self, message):
         return [message]
 
     def resolve_group_at_user(self, event, plan):
@@ -225,6 +241,36 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
                 {"type": "text", "data": {"text": " reply to group"}},
             ),
         )
+
+    async def test_send_response_uses_structured_segments_for_multiple_group_parts(self) -> None:
+        bot, adapter = self._build_bot()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "message_id": 123,
+                "user_id": 42,
+                "group_id": 100,
+                "self_id": 999,
+                "raw_message": "hello",
+                "message": [{"type": "text", "data": {"text": "hello"}}],
+            }
+        )
+
+        await bot._send_response(
+            event,
+            types.SimpleNamespace(text="第一句\n第二句", segments=["第一句", "第二句"]),
+        )
+
+        self.assertEqual(len(adapter.actions), 2)
+        self.assertEqual(
+            adapter.actions[0].segments,
+            (
+                {"type": "at", "data": {"qq": "42"}},
+                {"type": "text", "data": {"text": " 第一句"}},
+            ),
+        )
+        self.assertEqual(adapter.actions[1].text, "第二句")
 
 
 if __name__ == "__main__":

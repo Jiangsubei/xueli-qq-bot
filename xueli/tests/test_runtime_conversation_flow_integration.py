@@ -149,6 +149,12 @@ class _ReplyAIClient:
         return SimpleNamespace(content="那我们就顺着刚才的周末计划继续定一下吧。", tool_calls=[])
 
 
+class _SegmentedReplyAIClient(_ReplyAIClient):
+    async def chat_completion(self, **kwargs):
+        self.last_messages = list(kwargs.get("messages") or [])
+        return SimpleNamespace(content='["第一句", "第二句"]', tool_calls=[])
+
+
 class _MemoryManagerStub:
     def __init__(self) -> None:
         self.turns = []
@@ -248,6 +254,12 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 log_full_prompt=False,
                 private_quote_reply_enabled=False,
                 private_batch_window_seconds=0.0,
+                segmented_reply_enabled=True,
+                max_segments=3,
+                first_segment_delay_min_ms=0,
+                first_segment_delay_max_ms=0,
+                followup_delay_min_seconds=0.0,
+                followup_delay_max_seconds=0.0,
             ),
             memory=SimpleNamespace(read_scope="global"),
             group_reply=SimpleNamespace(
@@ -384,6 +396,20 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["summary"], "用户在顺着周末计划继续往下聊。")
         self.assertEqual(payload["source_message_type"], "group")
         self.assertEqual(payload["source_group_id"], "100")
+
+    async def test_runtime_sends_segmented_reply_as_multiple_messages(self) -> None:
+        memory_manager = _MemoryManagerStub()
+        reply_ai = _SegmentedReplyAIClient()
+        handler = self._build_handler(memory_manager=memory_manager, reply_ai=reply_ai)
+        runtime, adapter, metrics = self._build_runtime(handler)
+
+        await runtime._handle_message_event(self._event(), trace_id="trace-segmented")
+
+        self.assertEqual(metrics.received, 1)
+        self.assertEqual(metrics.replied, 2)
+        self.assertEqual(len(adapter.actions), 2)
+        self.assertEqual(adapter.actions[0].text, "第一句")
+        self.assertEqual(adapter.actions[1].text, "第二句")
 
 
 if __name__ == "__main__":
