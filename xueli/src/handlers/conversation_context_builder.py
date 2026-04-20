@@ -34,13 +34,14 @@ class ConversationContextBuilder:
         include_memory: bool = True,
     ) -> MessageContext:
         reply_context = dict(getattr(plan, "reply_context", None) or {})
-        user_message = str(reply_context.get("merged_user_message") or self.host.extract_user_message(event)).strip()
-        execution_key = get_execution_key(event)
-        conversation_key = self.host._get_conversation_key(event)
+        context_event = reply_context.get("window_event") if getattr(reply_context.get("window_event"), "message_type", None) else event
+        user_message = str(reply_context.get("merged_user_message") or self.host.extract_user_message(context_event)).strip()
+        execution_key = get_execution_key(context_event)
+        conversation_key = self.host._get_conversation_key(context_event)
         conversation = self.host._get_conversation(conversation_key)
         window_messages = list(reply_context.get("window_messages") or [])
         temporal_context = self.host._build_temporal_context(
-            event=event,
+            event=context_event,
             conversation=conversation,
             reply_context=reply_context,
         )
@@ -62,20 +63,20 @@ class ConversationContextBuilder:
                 related_history_messages,
                 is_first_turn,
             ) = await self.host._load_memory_context(
-                event=event,
+                event=context_event,
                 user_message=user_message,
                 conversation=conversation,
                 plan=plan,
             )
 
         base64_images: List[str] = []
-        vision_analysis = self.host.reply_pipeline._extract_reusable_vision_analysis(event=event, plan=plan)
-        if self.host._has_image_input(event) and not vision_analysis and self.host.vision_enabled():
+        vision_analysis = self.host.reply_pipeline._extract_reusable_vision_analysis(event=context_event, plan=plan)
+        if self.host._has_image_input(context_event) and not vision_analysis and self.host.vision_enabled():
             try:
-                base64_images = await self.host.download_images(event)
+                base64_images = await self.host.download_images(context_event)
                 if base64_images:
                     vision_analysis = await self.host.analyze_event_images(
-                        event,
+                        context_event,
                         user_message,
                         base64_images=base64_images,
                         trace_id=trace_id,
@@ -89,12 +90,12 @@ class ConversationContextBuilder:
         planning_signals = dict(reply_context.get("planning_signals") or {})
         if not planning_signals:
             previous_role = ""
-            previous_user_id = str(event.user_id)
+            previous_user_id = str(context_event.user_id)
             if conversation.messages:
                 previous_role = str(conversation.messages[-1].get("role") or "").strip().lower()
             planning_signals = build_companionship_signals(
                 user_message,
-                current_user_id=event.user_id,
+                current_user_id=context_event.user_id,
                 previous_speaker_role=previous_role,
                 previous_user_id=previous_user_id,
                 recent_gap_bucket=str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
@@ -104,7 +105,7 @@ class ConversationContextBuilder:
             window_messages=window_messages,
             prompt_plan=prompt_plan,
             temporal_context=temporal_context,
-            chat_mode=str(getattr(event, "message_type", "private") or "private"),
+            chat_mode=str(getattr(context_event, "message_type", "private") or "private"),
         )
         rendered_timeline_summary = self.timeline_formatter.render_summary(temporal_context)
         context_items = self.timeline_formatter.build_items(window_messages)
@@ -134,14 +135,14 @@ class ConversationContextBuilder:
         if evidence_store is not None:
             loader = getattr(evidence_store, "get_active_signals", None)
             if callable(loader):
-                soft_uncertainty_signals = list(loader(str(event.user_id), limit=3) or [])
-        character_card_snapshot = getattr(self.host, "get_character_card_snapshot", lambda _user_id: None)(str(event.user_id))
+                soft_uncertainty_signals = list(loader(str(context_event.user_id), limit=3) or [])
+        character_card_snapshot = getattr(self.host, "get_character_card_snapshot", lambda _user_id: None)(str(context_event.user_id))
         message_context = MessageContext(
             trace_id=trace_id,
             execution_key=execution_key,
             conversation_key=conversation_key,
             user_message=user_message,
-            current_sender_label=self.host._format_identity_label(event.user_id, self.host._get_sender_display_name(event)),
+            current_sender_label=self.host._format_identity_label(context_event.user_id, self.host._get_sender_display_name(context_event)),
             is_first_turn=is_first_turn,
             current_event_time=temporal_context.current_event_time,
             previous_message_time=temporal_context.previous_message_time,
@@ -151,7 +152,7 @@ class ConversationContextBuilder:
             context_items=context_items,
             window_messages=window_messages,
             recent_history_text=rendered_recent_history or self.host.reply_pipeline._build_recent_history_text(
-                event=event,
+                event=context_event,
                 conversation=conversation,
                 plan=plan,
             ),
@@ -184,7 +185,7 @@ class ConversationContextBuilder:
         message_context.final_style_guide = self.style_policy.build(
             prompt_plan=prompt_plan,
             temporal_context=temporal_context,
-            chat_mode=str(getattr(event, "message_type", "private") or "private"),
+            chat_mode=str(getattr(context_event, "message_type", "private") or "private"),
             planner_reason=str(getattr(plan, "reason", "") or ""),
             planning_signals=message_context.planning_signals,
             soft_uncertainty_signals=message_context.soft_uncertainty_signals,

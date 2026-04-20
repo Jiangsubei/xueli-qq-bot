@@ -189,6 +189,7 @@ class BotRuntime:
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
         plan = None
+        current_event = event
         app_config = getattr(self.message_handler, "app_config", None)
         bot_behavior = getattr(app_config, "bot_behavior", None)
         response_timeout = int(getattr(bot_behavior, "response_timeout", 60) or 60)
@@ -199,63 +200,86 @@ class BotRuntime:
 
         try:
             logger.info("开始处理消息：%s", trace_log)
-            logger.info("开始规划：%s", trace_log)
-            plan = await asyncio.wait_for(
-                self.message_handler.plan_message(event, trace_id=trace_id),
-                timeout=max(1, response_timeout),
-            )
-            logger.info("规划结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
-            self._log_plan_preview(plan, trace_log)
-            if self._should_log_message_summary():
-                logger.info(
-                    "消息计划：动作=%s，来源=%s，原因=%s，用户=%s，群=%s",
-                    plan.action,
-                    plan.source,
-                    plan.reason,
-                    event.user_id,
-                    event.group_id,
+            while True:
+                logger.info("开始规划：%s", trace_log)
+                if plan is None:
+                    plan = await asyncio.wait_for(
+                        self.message_handler.plan_message(current_event, trace_id=trace_id),
+                        timeout=max(1, response_timeout),
+                    )
+                logger.info("规划结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
+                self._log_plan_preview(plan, trace_log)
+                if self._should_log_message_summary():
+                    logger.info(
+                        "消息计划：动作=%s，来源=%s，原因=%s，用户=%s，群=%s",
+                        plan.action,
+                        plan.source,
+                        plan.reason,
+                        current_event.user_id,
+                        current_event.group_id,
+                    )
+
+                if not plan.should_reply:
+                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
+                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
+                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                        continue
+                    return
+
+                logger.info("开始节奏判断：%s", trace_log)
+                plan = await asyncio.wait_for(
+                    self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
+                    timeout=max(1, response_timeout),
                 )
+                logger.info("节奏判断结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
+                if not plan.should_reply:
+                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
+                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
+                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                        continue
+                    return
 
-            if not plan.should_reply:
+                target_id = str(
+                    current_event.user_id if current_event.message_type == MessageType.PRIVATE.value else current_event.group_id
+                )
+                await self.message_handler.check_rate_limit(target_id)
+                logger.info("开始生成回复：%s", trace_log)
+                reply_result = await asyncio.wait_for(
+                    self.message_handler.get_ai_response(current_event, plan=plan, trace_id=trace_id),
+                    timeout=max(1, response_timeout),
+                )
+                if not reply_result or not reply_result.text:
+                    logger.info("回复为空，跳过发送：%s", trace_log)
+                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
+                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
+                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                        continue
+                    return
+
+                self._log_reply_preview(reply_result.text, trace_log, source=getattr(reply_result, "source", ""))
+                logger.info("开始发送回复：%s", trace_log)
+                sent = await self._send_response(current_event, reply_result.text, plan=plan, trace_id=trace_id)
+                if sent:
+                    logger.info("发送完成：%s", trace_log)
+                    await self.message_handler.record_group_reply_sent(current_event, reply_result.text)
+                    await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
+                next_dispatch = await self.message_handler.complete_window_dispatch(plan)
+                if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
+                    current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                    continue
+                logger.info("消息处理结束：%s", trace_log)
                 return
-
-            logger.info("开始节奏判断：%s", trace_log)
-            plan = await asyncio.wait_for(
-                self.message_handler.apply_timing_gate(event, plan=plan, trace_id=trace_id),
-                timeout=max(1, response_timeout),
-            )
-            logger.info("节奏判断结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
-            if not plan.should_reply:
-                return
-
-            target_id = str(
-                event.user_id if event.message_type == MessageType.PRIVATE.value else event.group_id
-            )
-            await self.message_handler.check_rate_limit(target_id)
-            logger.info("开始生成回复：%s", trace_log)
-            reply_result = await asyncio.wait_for(
-                self.message_handler.get_ai_response(event, plan=plan, trace_id=trace_id),
-                timeout=max(1, response_timeout),
-            )
-            if not reply_result or not reply_result.text:
-                logger.info("回复为空，跳过发送：%s", trace_log)
-                return
-
-            self._log_reply_preview(reply_result.text, trace_log, source=getattr(reply_result, "source", ""))
-            logger.info("开始发送回复：%s", trace_log)
-            sent = await self._send_response(event, reply_result.text, plan=plan, trace_id=trace_id)
-            if sent:
-                logger.info("发送完成：%s", trace_log)
-                await self.message_handler.record_group_reply_sent(event, reply_result.text)
-                await self._send_emoji_follow_up_if_needed(event, reply_result, plan, trace_id=trace_id)
-            logger.info("消息处理结束：%s", trace_log)
         except asyncio.TimeoutError:
             logger.error("处理消息事件超时：%s timeout=%ss", trace_log, response_timeout)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
+            try:
+                await self.message_handler.complete_window_dispatch(plan)
+            except Exception:
+                logger.debug("超时后释放窗口调度失败：%s", trace_log, exc_info=True)
             if plan is not None and plan.should_reply:
                 try:
-                    await self._send_response(event, "抱歉，这次处理超时了，请稍后再试。", trace_id=trace_id)
+                    await self._send_response(current_event, "抱歉，这次处理超时了，请稍后再试。", trace_id=trace_id)
                 except Exception as fallback_exc:
                     logger.error("发送超时兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
         except Exception as exc:
@@ -263,9 +287,13 @@ class BotRuntime:
             logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
+            try:
+                await self.message_handler.complete_window_dispatch(plan)
+            except Exception:
+                logger.debug("异常后释放窗口调度失败：%s", trace_log, exc_info=True)
             if plan is not None and plan.should_reply:
                 try:
-                    await self._send_response(event, "抱歉，这次处理消息时出了点问题。", trace_id=trace_id)
+                    await self._send_response(current_event, "抱歉，这次处理消息时出了点问题。", trace_id=trace_id)
                 except Exception as fallback_exc:
                     logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 

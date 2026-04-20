@@ -75,6 +75,7 @@ class PlanningWindowConfig:
     enabled: bool = True
     private_window_seconds: float = 1.2
     group_proactive_window_seconds: float = 0.45
+    queue_expire_seconds: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -294,6 +295,7 @@ class Config:
         "PLANNING_WINDOW_ENABLED": ("planning_window", "enabled"),
         "PLANNING_WINDOW_PRIVATE_SECONDS": ("planning_window", "private_window_seconds"),
         "PLANNING_WINDOW_GROUP_PROACTIVE_SECONDS": ("planning_window", "group_proactive_window_seconds"),
+        "PLANNING_WINDOW_QUEUE_EXPIRE_SECONDS": ("planning_window", "queue_expire_seconds"),
         "MEMORY_DISPUTE_ENABLED": ("memory_dispute", "enabled"),
         "MEMORY_DISPUTE_HIGH_CONFIDENCE_THRESHOLD": ("memory_dispute", "high_confidence_threshold"),
         "MEMORY_DISPUTE_NORMAL_CONFIDENCE_THRESHOLD": ("memory_dispute", "normal_confidence_threshold"),
@@ -616,6 +618,13 @@ class Config:
                 "planning_window",
                 "group_proactive_window_seconds",
                 default=0.45,
+                minimum=0.0,
+            ),
+            queue_expire_seconds=self._bounded_float(
+                section,
+                "planning_window",
+                "queue_expire_seconds",
+                default=60.0,
                 minimum=0.0,
             ),
         )

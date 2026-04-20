@@ -20,6 +20,7 @@
 | 功能模块 | 说明 |
 |---------|------|
 | 会话规划 | 群聊与私聊共用一条规划链路 |
+| 缓冲窗口调度 | 每会话按时间片生成窗口，顺序消费，超时窗口自动丢弃，避免延迟叠加 |
 | 节奏控制 | 避免刷屏，让对话更自然 |
 | 回复规划 | 控制回复风格、情感、相关记忆的拼接 |
 | 语义拆分发送 | AI 生成内容按句末标点（。！？）智能拆分为多条发送，模拟猫娘自然接话感 |
@@ -112,6 +113,7 @@ python -m unittest discover -s xueli/tests -t xueli
 | `[group_reply]` | 群聊的回复节流、兴趣回复、复读策略 |
 | `[group_reply_decision]` | 统一规划模型（可单独指定模型） |
 | `[bot_behavior]` | 最大历史条数、回复长度限制、语义拆分开关等 |
+| `[planning_window]` | 私聊/群聊缓冲窗口时长、窗口排队过期时间 |
 | `[memory]` | 记忆开关、检索数量、半衰期等 |
 | `[memory_rerank]` | 记忆重排模型配置（可选） |
 
@@ -192,6 +194,8 @@ export API_RUNTIME_PORT=8765
 
 - `xueli/src/handlers/message_handler.py`
 - `xueli/src/handlers/planning_window_service.py`  # 规划窗口服务
+- `xueli/src/handlers/conversation_window_scheduler.py`  # 会话缓冲窗口调度器
+- `xueli/src/handlers/conversation_window_models.py`  # 窗口批次与调度状态模型
 - `xueli/src/handlers/conversation_planner.py`
 - `xueli/src/handlers/timing_gate_service.py`
 - `xueli/src/handlers/conversation_context_builder.py`

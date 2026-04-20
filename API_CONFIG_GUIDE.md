@@ -139,6 +139,32 @@ private_batch_window_seconds = 1.2   # 私聊消息合批窗口（秒）
 log_full_prompt = false               # 是否打印完整提示词（仅调试用）
 ```
 
+## 规划缓冲窗口配置
+
+`planning_window` 控制会话前置缓冲调度器。
+
+当前实现不是“每条消息各自 sleep 一轮”，而是：
+
+- 每个会话持续按时间片生成缓冲窗口
+- 窗口按顺序进入 `planner -> timing gate -> reply`
+- 后续排队窗口如果等待过久会被直接丢弃，避免延迟叠加
+
+示例：
+
+```toml
+[planning_window]
+enabled = true
+private_window_seconds = 1.2
+group_proactive_window_seconds = 0.45
+queue_expire_seconds = 60.0
+```
+
+字段说明：
+
+- `private_window_seconds`：私聊封窗时长
+- `group_proactive_window_seconds`：群聊主动接话路径的封窗时长
+- `queue_expire_seconds`：排队窗口的最大等待时间，超时后整窗丢弃
+
 ## 视觉模型配置
 
 视觉功能配置位于 `vision_service`。

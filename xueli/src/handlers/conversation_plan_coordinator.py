@@ -15,6 +15,7 @@ from src.handlers.conversation_engagement import build_companionship_signals
 from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.message_context import MessageContext
+from src.handlers.conversation_window_models import BufferedWindow
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,18 @@ class ConversationPlanCoordinator:
         has_image = image_count > 0
         text_present = bool(clean_text)
         effective_has_image = has_image and include_image_context
+        image_analysis = dict(image_analysis or {})
+        per_image_descriptions = [
+            str(item).strip()
+            for item in image_analysis.get("per_image_descriptions", [])
+            if str(item).strip()
+        ]
+        merged_description = str(image_analysis.get("merged_description", "")).strip()
+        vision_available = bool(image_analysis.get("vision_available"))
+        vision_failure_count = int(image_analysis.get("vision_failure_count", 0) or 0)
+        vision_success_count = int(image_analysis.get("vision_success_count", 0) or 0)
+        vision_source = str(image_analysis.get("vision_source", "")).strip()
+        vision_error = str(image_analysis.get("vision_error", "")).strip()
 
         if effective_has_image and text_present:
             message_shape = "text_with_image"
@@ -107,19 +120,6 @@ class ConversationPlanCoordinator:
 
         if has_image:
             display_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
-
-        image_analysis = dict(image_analysis or {})
-        per_image_descriptions = [
-            str(item).strip()
-            for item in image_analysis.get("per_image_descriptions", [])
-            if str(item).strip()
-        ]
-        merged_description = str(image_analysis.get("merged_description", "")).strip()
-        vision_available = bool(image_analysis.get("vision_available"))
-        vision_failure_count = int(image_analysis.get("vision_failure_count", 0) or 0)
-        vision_success_count = int(image_analysis.get("vision_success_count", 0) or 0)
-        vision_source = str(image_analysis.get("vision_source", "")).strip()
-        vision_error = str(image_analysis.get("vision_error", "")).strip()
 
         if merged_description:
             planner_text = f"{planner_text}\n图片摘要: {merged_description}".strip()
@@ -256,6 +256,45 @@ class ConversationPlanCoordinator:
         finally:
             if window_messages:
                 self._record_group_user_message(group_id, window_messages[-1])
+
+        reply_context = dict(context.reply_context or {})
+        reply_mode = "proactive" if plan.should_reply else ""
+        if reply_mode:
+            reply_context["reply_mode"] = reply_mode
+        reply_goal = str(getattr(getattr(plan, "prompt_plan", None), "reply_goal", "") or "").strip()
+        if reply_goal:
+            reply_context["reply_goal"] = reply_goal
+        if context.planning_signals:
+            reply_context["planning_signals"] = dict(context.planning_signals)
+        if trace_id:
+            reply_context["trace_id"] = trace_id
+        plan = self._clone_plan(plan, reply_context=reply_context)
+        self._record_plan_metric(plan.action)
+        return plan
+
+    async def plan_buffered_group_window(
+        self,
+        *,
+        event: MessageEvent,
+        window: BufferedWindow,
+        trace_id: str = "",
+    ) -> MessageHandlingPlan:
+        context = await self._build_buffered_window_context(event=event, window=window, trace_id=trace_id)
+        group_id = self._group_history_key(event)
+        window_messages = list(context.window_messages or [])
+        planner_user_message = str(window.merged_user_message or context.user_message or "").strip()
+
+        try:
+            plan = await self._plan_with_window_messages(
+                event=event,
+                user_message=planner_user_message,
+                recent_messages=[],
+                window_messages=window_messages,
+                context=context,
+            )
+        finally:
+            for item in list(window.messages or []):
+                self._record_group_user_message(group_id, item)
 
         reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
@@ -467,10 +506,127 @@ class ConversationPlanCoordinator:
         window_messages.append(latest)
         return window_messages
 
+    def _compose_buffered_window_messages(
+        self,
+        history_items: List[Dict[str, Any]],
+        buffered_messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        window_messages: List[Dict[str, Any]] = []
+        for item in history_items:
+            copied = dict(item)
+            copied["is_latest"] = False
+            window_messages.append(copied)
+        buffered = [dict(item) for item in buffered_messages]
+        for item in buffered[:-1]:
+            item["is_latest"] = False
+            window_messages.append(item)
+        if buffered:
+            latest = dict(buffered[-1])
+            latest["is_latest"] = True
+            window_messages.append(latest)
+        return window_messages
+
     def _record_group_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
         persisted = dict(current_message)
         persisted.pop("is_latest", None)
         self._append_group_history(group_id, persisted)
+
+    async def _build_buffered_window_context(
+        self,
+        *,
+        event: MessageEvent,
+        window: BufferedWindow,
+        trace_id: str = "",
+    ) -> MessageContext:
+        history_key = self._group_history_key(event)
+        history_items = self._get_recent_group_history(history_key)
+        buffered_messages = await self._enrich_buffered_window_messages(list(window.messages or []), trace_id=trace_id)
+        window_messages = self._compose_buffered_window_messages(history_items, buffered_messages)
+        latest_message = next(
+            (item for item in reversed(window_messages) if item.get("is_latest")),
+            window_messages[-1] if window_messages else {},
+        )
+        execution_key = get_execution_key(event)
+        conversation_key = self.session_manager.get_key(event)
+        previous_message_time = 0.0
+        previous_items = [item for item in window_messages if not bool(item.get("is_latest"))]
+        if previous_items:
+            previous_message_time = self._message_event_time(previous_items[-1])
+        history_event_times = [item.get("event_time", 0.0) for item in window_messages]
+        temporal_context = build_temporal_context(
+            current_event_time=float(latest_message.get("event_time", 0.0) or time.time()),
+            chat_mode="group",
+            previous_message_time=previous_message_time,
+            conversation_last_time=previous_message_time,
+            history_event_times=history_event_times,
+        )
+        planning_signals = self._build_planning_signals(window_messages=window_messages, temporal_context=temporal_context)
+        reply_context = self._merge_reply_context(
+            self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
+            self._build_planner_batch_context(
+                group_id=history_key,
+                mode="buffered_window",
+                batch_size=max(1, len(buffered_messages)),
+                is_latest=True,
+            ),
+        )
+        return MessageContext(
+            trace_id=trace_id,
+            execution_key=execution_key,
+            conversation_key=conversation_key,
+            user_message=str(window.merged_user_message or latest_message.get("text_content") or latest_message.get("text") or "").strip(),
+            current_sender_label=self._format_window_speaker(latest_message).replace("用户 ", "", 1),
+            is_first_turn=False,
+            current_event_time=float(latest_message.get("event_time", 0.0) or 0.0),
+            previous_message_time=float(previous_message_time or 0.0),
+            conversation_last_time=float(previous_message_time or 0.0),
+            temporal_context=temporal_context,
+            window_messages=window_messages,
+            recent_history_text=self._build_recent_history_text(window_messages),
+            vision_analysis={
+                "per_image_descriptions": list(latest_message.get("per_image_descriptions") or []),
+                "merged_description": str(latest_message.get("merged_description", "") or ""),
+                "vision_success_count": int(latest_message.get("vision_success_count", 0) or 0),
+                "vision_failure_count": int(latest_message.get("vision_failure_count", 0) or 0),
+                "vision_source": str(latest_message.get("vision_source", "") or ""),
+                "vision_error": str(latest_message.get("vision_error", "") or ""),
+                "vision_available": bool(latest_message.get("vision_available", False)),
+            },
+            reply_context=reply_context,
+            planning_signals=planning_signals,
+        )
+
+    async def _enrich_buffered_window_messages(
+        self,
+        buffered_messages: List[Dict[str, Any]],
+        *,
+        trace_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        enriched: List[Dict[str, Any]] = []
+        for item in buffered_messages:
+            copied = dict(item)
+            source_event = copied.get("_event")
+            if isinstance(source_event, MessageEvent):
+                text_content = str(copied.get("text_content") or copied.get("display_text") or copied.get("text") or "").strip()
+                image_analysis = {}
+                needs_image_enrichment = bool(copied.get("raw_has_image") or copied.get("has_image"))
+                has_existing_analysis = bool(copied.get("merged_description")) or bool(copied.get("per_image_descriptions"))
+                if needs_image_enrichment and not has_existing_analysis:
+                    image_analysis = await self._analyze_images_for_event(source_event, text_content, trace_id=trace_id)
+                planner_message = self.build_planner_message_info(
+                    source_event,
+                    text_content,
+                    image_analysis=image_analysis,
+                    include_image_context=self.image_analyzer is not None,
+                )
+                copied.update(planner_message)
+                copied["message_id"] = str(copied.get("message_id") or getattr(source_event, "message_id", "") or "")
+                copied["user_id"] = str(copied.get("user_id") or getattr(source_event, "user_id", "") or "")
+                copied["speaker_role"] = str(copied.get("speaker_role") or "user")
+                copied["speaker_name"] = str(copied.get("speaker_name") or self._sender_display_name(source_event))
+            copied.pop("_event", None)
+            enriched.append(copied)
+        return enriched
 
     def _build_group_window_reply_context(self, window_messages: List[Dict[str, Any]], assistant_self_id: Any = "") -> Dict[str, Any]:
         return {
