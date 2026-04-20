@@ -418,6 +418,7 @@ class MemoryManager:
         message_type: str = "private",
         group_id: Optional[str] = None,
         message_id: Optional[str] = None,
+        image_description: str = "",
     ):
         self.background_coordinator.register_dialogue_turn(
             user_id=user_id,
@@ -427,6 +428,7 @@ class MemoryManager:
             message_type=message_type,
             group_id=group_id,
             message_id=message_id,
+            image_description=image_description,
         )
         self._sync_background_task_metric()
 

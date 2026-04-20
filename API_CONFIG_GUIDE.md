@@ -270,3 +270,13 @@ response_path = "choices.0.message.content"
 - `group_reply_decision.model`
 
 如果未完整配置，群聊不会启用统一 planner / timing gate 模型，而会退回规则路径。
+
+### 图片描述没有持久化到历史
+
+检查：
+
+- `vision_service.enabled` 是否为 `true`
+- `vision_service.api_base` 和 `vision_service.model` 是否都已填写
+- 视觉模型是否成功返回了 `merged_description`（可查看日志中 `vision_success_count`）
+
+图片描述在视觉分析成功后会自动随对话轮次存入历史存储，重启后仍可在历史消息中显示为 `[图片描述：xxx]`。

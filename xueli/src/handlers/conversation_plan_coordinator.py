@@ -97,7 +97,12 @@ class ConversationPlanCoordinator:
         display_text = clean_text
         image_placeholder = ""
         if has_image:
-            image_placeholder = "[图片]" if image_count == 1 else f"[图片 x{image_count}]"
+            # 优先使用 vision 分析结果中的图片描述
+            image_desc = str(merged_description or "").strip()
+            if image_desc:
+                image_placeholder = f"[图片描述：{image_desc}]"
+            else:
+                image_placeholder = "[图片]" if image_count == 1 else f"[图片 x{image_count}]"
             planner_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
 
         if has_image:
@@ -132,7 +137,7 @@ class ConversationPlanCoordinator:
             "display_text": display_text,
             "text_content": clean_text,
             "raw_text": raw_text,
-            "has_image": effective_has_image,
+            "has_image": has_image,
             "raw_has_image": has_image,
             "image_context_enabled": effective_has_image,
             "image_count": image_count if effective_has_image else 0,
@@ -164,9 +169,8 @@ class ConversationPlanCoordinator:
         for index, item in enumerate(window_messages, 1):
             speaker = self._format_window_speaker(item)
             text = self._window_display_text(item)
-            image_note = f" [图片 {item.get('image_count', 1)} 张]" if item.get("has_image") else ""
             latest_note = " [当前消息]" if item.get("is_latest") else ""
-            lines.append(f"{index}. {speaker}: {text}{image_note}{latest_note}")
+            lines.append(f"{index}. {speaker}: {text}{latest_note}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
@@ -696,10 +700,16 @@ class ConversationPlanCoordinator:
 
     def _window_display_text(self, item: Dict[str, Any]) -> str:
         text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
+        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
+        if has_image_indicator and image_desc:
+            if text and text != "[空]":
+                return f"{text}[图片描述：{image_desc}]"
+            return f"[图片描述：{image_desc}]"
         if text and text != "[空]":
             return text
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+        if has_image_indicator:
             return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
         return text or "[空]"
 

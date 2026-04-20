@@ -586,6 +586,18 @@ class MessageHandler:
                 reply_context={"trace_id": trace_id} if trace_id else {},
             )
         pending_items = list(window_result.window_messages or [])
+        # 从 conversation.messages 提取 image_description，注入到 pending_items
+        msg_id_to_image_desc: Dict[str, str] = {}
+        for msg in conversation.messages:
+            mid = str(msg.get("message_id") or "").strip()
+            if mid:
+                desc = str(msg.get("image_description") or "").strip()
+                if desc:
+                    msg_id_to_image_desc[mid] = desc
+        for item in pending_items:
+            mid = str(item.get("message_id") or "").strip()
+            if mid and mid in msg_id_to_image_desc:
+                item["image_description"] = msg_id_to_image_desc[mid]
         merged_user_message = window_result.merged_user_message or user_message
         context.user_message = merged_user_message
         context.window_messages = pending_items

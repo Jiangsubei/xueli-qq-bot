@@ -30,6 +30,7 @@ class ConversationTurn:
     owner_user_id: str
     source_message_type: str = ""
     dialogue_key: str = ""
+    image_description: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class ConversationTurn:
             "owner_user_id": self.owner_user_id,
             "source_message_type": self.source_message_type,
             "dialogue_key": self.dialogue_key,
+            "image_description": self.image_description,
         }
 
     @classmethod
@@ -56,6 +58,7 @@ class ConversationTurn:
             owner_user_id=str(data.get("owner_user_id", "") or ""),
             source_message_type=str(data.get("source_message_type", "") or ""),
             dialogue_key=str(data.get("dialogue_key", "") or ""),
+            image_description=str(data.get("image_description", "") or ""),
         )
 
 
@@ -238,6 +241,7 @@ class ConversationStore:
         message_type: str = "private",
         group_id: Optional[str] = None,
         message_id: Optional[str] = None,
+        image_description: str = "",
     ) -> ConversationTurnRegistration:
         resolved_dialogue_key = self._dialogue_key(
             user_id=str(user_id),
@@ -262,6 +266,7 @@ class ConversationStore:
             owner_user_id=str(user_id),
             source_message_type=str(message_type or "private"),
             dialogue_key=resolved_dialogue_key,
+            image_description=str(image_description or ""),
         )
         session.turns.append(turn)
         session.updated_at = timestamp

@@ -126,8 +126,7 @@ class ConversationPlanner:
                 else f"用户 {self._format_identity_label(item.get('user_id'), str(item.get('speaker_name') or ''))}"
             )
             text = self._window_display_text(item)
-            image_note = f" [图片 {item.get('image_count', 1)} 张]" if item.get("has_image") else ""
-            lines.append(f"{speaker}: {text}{image_note}")
+            lines.append(f"{speaker}: {text}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
@@ -145,10 +144,17 @@ class ConversationPlanner:
 
     def _window_display_text(self, item: Dict[str, Any]) -> str:
         text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
+        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
+        # 如果有图片描述，即使 text 非空也追加描述
+        if has_image_indicator and image_desc:
+            if text and text != "[空]":
+                return f"{text}[图片描述：{image_desc}]"
+            return f"[图片描述：{image_desc}]"
         if text and text != "[空]":
             return text
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+        if has_image_indicator:
             return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
         return text or "[空]"
 

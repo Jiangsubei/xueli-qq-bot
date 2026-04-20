@@ -44,6 +44,15 @@ class MemoryFlowService:
             return
         try:
             dialogue_key = host._get_conversation_key(event)
+            # 从 vision_analysis 提取图片描述
+            image_description = ""
+            if prepared.message_context and prepared.message_context.vision_analysis:
+                va = prepared.message_context.vision_analysis
+                image_description = str(va.get("merged_description") or "").strip()
+                if not image_description:
+                    parts = [str(p).strip() for p in (va.get("per_image_descriptions") or []) if str(p).strip()]
+                    if parts:
+                        image_description = "；".join(parts)
             self.memory_manager.register_dialogue_turn(
                 user_id=str(event.user_id),
                 user_message=prepared.original_user_message,
@@ -52,6 +61,7 @@ class MemoryFlowService:
                 message_type=event.message_type,
                 group_id=str(event.group_id or ""),
                 message_id=str(event.message_id or ""),
+                image_description=image_description,
             )
             scheduler = getattr(self.memory_manager, "schedule_memory_extraction", None)
             if callable(scheduler):

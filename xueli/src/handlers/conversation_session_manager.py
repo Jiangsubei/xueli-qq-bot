@@ -71,10 +71,12 @@ class ConversationSessionManager:
                 for turn in record.turns:
                     user_text = str(turn.user or "").strip()
                     assistant_text = str(turn.assistant or "").strip()
+                    image_desc = str(turn.image_description or "").strip()
+                    msg_id = str(turn.source_message_id or "").strip()
                     if user_text:
-                        conversation.add_message("user", user_text)
+                        conversation.add_message("user", user_text, image_description=image_desc, message_id=msg_id)
                     if assistant_text:
-                        conversation.add_message("assistant", assistant_text)
+                        conversation.add_message("assistant", assistant_text, message_id=msg_id)
                 logger.debug("已恢复历史会话：key=%s，轮次=%s", key, record.turn_count)
                 return
 

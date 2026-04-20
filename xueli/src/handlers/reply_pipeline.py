@@ -240,8 +240,8 @@ class ReplyPipeline:
             logger.info("[FULL PROMPT]\ntrace=%s\n%s", trace_id, prepared.system_prompt or "[空]")
 
     def _persist_reply_result(self, event: MessageEvent, prepared: PreparedReplyRequest, response: AIResponse) -> None:
-        prepared.conversation.add_message("user", prepared.history_user_message)
-        prepared.conversation.add_message("assistant", response.content)
+        prepared.conversation.add_message("user", prepared.history_user_message, message_id=str(event.message_id or ""))
+        prepared.conversation.add_message("assistant", response.content, message_id=str(event.message_id or ""))
         self.memory_flow_service.on_reply_generated(
             host=self.host,
             event=event,
@@ -883,10 +883,16 @@ class ReplyPipeline:
 
     def _window_display_text(self, item: Dict[str, Any]) -> str:
         text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
+        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
+        if has_image_indicator and image_desc:
+            if text and text != "[空]":
+                return f"{text}[图片描述：{image_desc}]"
+            return f"[图片描述：{image_desc}]"
         if text and text != "[空]":
             return text
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        if bool(item.get("raw_has_image")) or raw_image_count > 0:
+        if has_image_indicator:
             return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
         return ""
 

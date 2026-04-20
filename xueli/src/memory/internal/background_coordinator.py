@@ -75,6 +75,7 @@ class MemoryBackgroundCoordinator:
         message_type: str = "private",
         group_id: Optional[str] = None,
         message_id: Optional[str] = None,
+        image_description: str = "",
     ) -> None:
         registration = self.conversation_store.add_turn(
             user_id=user_id,
@@ -84,6 +85,7 @@ class MemoryBackgroundCoordinator:
             message_type=message_type,
             group_id=group_id,
             message_id=message_id,
+            image_description=image_description,
         )
         logger.debug(
             "已登记对话轮次：用户=%s，会话=%s，轮次=%s",

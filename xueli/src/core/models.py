@@ -286,10 +286,15 @@ class Conversation:
     messages: List[Dict[str, str]] = field(default_factory=list)
     last_update: float = field(default_factory=time.time)
 
-    def add_message(self, role: str, content: str, *, timestamp: Optional[float] = None):
+    def add_message(self, role: str, content: str, *, timestamp: Optional[float] = None, image_description: str = "", message_id: str = ""):
         """添加消息到对话"""
         event_time = float(timestamp or time.time())
-        self.messages.append({"role": role, "content": content, "timestamp": event_time})
+        msg = {"role": role, "content": content, "timestamp": event_time}
+        if image_description:
+            msg["image_description"] = image_description
+        if message_id:
+            msg["message_id"] = message_id
+        self.messages.append(msg)
         self.last_update = event_time
 
     def get_messages(self, max_length: int = 10) -> List[Dict[str, str]]:
