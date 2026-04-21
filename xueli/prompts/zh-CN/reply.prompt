@@ -1,21 +1,19 @@
 {identity_block}
 
-{session_block}
+{constraint_block}
 
-{reply_target_block}
+{scene_block}
 
 {continuity_block}
 
 {planner_reference_block}
 
-{timeline_block}
+{vision_block}
 
-{recent_history_block}
+{person_facts_block}
 
-{memory_sections_block}
+{precise_recall_block}
 
-{reply_scope_block}
+{dynamic_memory_block}
 
 {final_style_block}
-
-{output_format_block}

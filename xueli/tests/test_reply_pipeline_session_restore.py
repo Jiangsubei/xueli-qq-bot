@@ -16,11 +16,22 @@ from src.handlers.reply_pipeline import ReplyPipeline
 
 
 class _FakeHost:
+    def _build_assistant_identity_text(self) -> str:
+        return "你是雪梨。"
+
     def _build_assistant_identity_prompt(self) -> str:
         return "assistant"
 
     def _build_system_prompt(self) -> str:
         return "system"
+
+    @property
+    def app_config(self):
+        class _FakeConfig:
+            personality = type("C", (), {"content": "性格：活泼。"})()
+            dialogue_style = type("C", (), {"content": "风格：简短。"})()
+            behavior = type("C", (), {"content": "约束：不主动。"})()
+        return _FakeConfig()
 
 
 class ReplyPipelineSessionRestorePromptTests(unittest.TestCase):
@@ -38,10 +49,9 @@ class ReplyPipelineSessionRestorePromptTests(unittest.TestCase):
             current_message="继续聊这个",
         )
 
-        self.assertIn("这些是当前用户的长期事实", prompt)
-        self.assertIn("这是上一轮相关会话的恢复摘要", prompt)
-        self.assertIn("这是和当前话题直接相关的旧对话定位", prompt)
+        self.assertIn("[人格事实]", prompt)
         self.assertIn("用户刚开始写毕业论文", prompt)
+        self.assertIn("[精确召回]", prompt)
 
 
 if __name__ == "__main__":

@@ -377,7 +377,7 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(reply_ai.last_messages)
         system_prompt = str(reply_ai.last_messages[0].get("content") or "")
-        self.assertIn("最终回复风格", system_prompt)
+        self.assertIn("[风格约束]", system_prompt)
         self.assertIn("回复目标：continue", system_prompt)
         self.assertIn("用户最近在准备周末出行", system_prompt)
 

@@ -8,11 +8,22 @@ from src.handlers.reply_prompt_renderer import ReplyPromptRenderer
 
 
 class _Host:
+    def _build_assistant_identity_text(self) -> str:
+        return "你是雪梨。"
+
     def _build_assistant_identity_prompt(self) -> str:
         return "你是雪梨。"
 
     def _build_system_prompt(self) -> str:
         return "自然聊天。"
+
+    @property
+    def app_config(self):
+        class _FakeConfig:
+            personality = type("C", (), {"content": ""})()
+            dialogue_style = type("C", (), {"content": ""})()
+            behavior = type("C", (), {"content": ""})()
+        return _FakeConfig()
 
 
 class ReplyPromptTemporalReferenceTests(unittest.TestCase):

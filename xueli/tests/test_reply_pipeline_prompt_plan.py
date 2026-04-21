@@ -17,11 +17,22 @@ from src.handlers.reply_pipeline import ReplyPipeline
 
 
 class _FakeHost:
+    def _build_assistant_identity_text(self) -> str:
+        return "你是雪梨。"
+
     def _build_assistant_identity_prompt(self) -> str:
         return "assistant"
 
     def _build_system_prompt(self) -> str:
         return "system"
+
+    @property
+    def app_config(self):
+        class _FakeConfig:
+            personality = type("C", (), {"content": "性格：活泼。"})()
+            dialogue_style = type("C", (), {"content": "风格：简短。"})()
+            behavior = type("C", (), {"content": "约束：不主动。"})()
+        return _FakeConfig()
 
 
 class ReplyPipelinePromptPlanTests(unittest.TestCase):
@@ -68,17 +79,16 @@ class ReplyPipelinePromptPlanTests(unittest.TestCase):
         self.assertIn("回复目标：recall", prompt)
         self.assertIn("连续性策略", prompt)
         self.assertIn("resume_old_topic", prompt)
-        self.assertIn("最终回复风格", prompt)
-        self.assertIn("输出格式要求", prompt)
-        self.assertIn("JSON 字符串数组", prompt)
+        self.assertIn("[风格约束]", prompt)
         self.assertIn("自然想起之前聊过的事", prompt)
         self.assertIn("适度展开", prompt)
         self.assertIn("用户长期在准备考研", prompt)
-        self.assertIn("时间线信息", prompt)
+        self.assertIn("时间线：", prompt)
         self.assertNotIn("上一轮会话摘要", prompt)
         self.assertNotIn("更早旧对话定位", prompt)
         self.assertNotIn("动态记忆", prompt)
         self.assertNotIn("回复范围：", prompt)
+        self.assertNotIn("JSON 字符串数组", prompt)
 
 
 if __name__ == "__main__":
