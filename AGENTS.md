@@ -60,8 +60,9 @@
 1. 优先沿现有主链路改：`MessageHandler -> PlanningWindowService -> ConversationPlanner -> TimingGateService -> ConversationContextBuilder -> ReplyPipeline/ReplyPromptRenderer -> ReplyGenerationService -> MemoryFlowService`
 2. 如果改 planner，就同时考虑 `PromptPlan`、timing、prompt renderer、测试是否要一起变。
 3. 如果改 reply prompt，就优先改 section / renderer / style policy，不要退回大段字符串硬拼。
-4. 如果改 memory，就优先区分“检索能力”和“流程编排”，不要把写回逻辑散落回 handler/pipeline。
+4. 如果改 memory，就优先区分”检索能力”和”流程编排”，不要把写回逻辑散落回 handler/pipeline。
 5. 如果改 adapter，尽量把影响锁在 adapter 边界，不要把平台字段一路传进 core。
+6. 对话记录必须每轮立即持久化，不依赖会话关闭；记忆提取必须按阈值触发，关闭时不再强制提取。
 
 ### 改动后
 

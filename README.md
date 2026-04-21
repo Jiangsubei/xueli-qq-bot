@@ -234,8 +234,8 @@ export API_RUNTIME_PORT=8765
   - 表情跟进也只会走 `face / mface`
   - 如果没有合适的原生表情资源，就直接不发非文本内容
 - `xueli/src/handlers/conversation_engagement.py`
-- `xueli/src/handlers/conversation_plan_coordinator.py`
-- `xueli/src/handlers/prompt_planner.py`
+- `xueli/src/handlers/conversation_plan_coordinator.py`  # 群聊历史窗口管理
+- `xueli/src/handlers/prompt_planner.py`  # PromptPlan V2 默认值与解析
 - `xueli/src/handlers/temporal_context.py`
 
 ### 提示词模板
@@ -260,7 +260,8 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/memory/session_restore_service.py`
 - `xueli/src/memory/conversation_recall_service.py`
 - `xueli/src/memory/storage/fact_evidence_store.py`  # 事实证据存储
-- `xueli/src/memory/storage/conversation_store.py`
+- `xueli/src/memory/storage/sqlite_conversation_store.py`  # SQLite 持久化存储（会话历史、群聊消息）
+- `xueli/src/memory/storage/conversation_store.py`  # SQLite store 的 re-export，兼容接口
 - `xueli/src/memory/storage/important_memory_store.py`
 - `xueli/src/memory/storage/markdown_store.py`
 - `xueli/src/memory/storage/person_fact_store.py`
