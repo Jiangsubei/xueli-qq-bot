@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+.venv/
+venv/
+xueli/venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific - credentials and local config
+.env
+xueli/config/config.toml
+xueli/config/.env
+
+# Local runtime artifacts
+*.sqlite3
+*.sqlite
+tests/_tmp/
+
+# xueli/ generated artifacts
+xueli/**/__pycache__/
+xueli/**/src/__pycache__/
+xueli/src/webui/**/__pycache__/
+
+# Claude Code settings
+.claude/
+
+# Local runtime data
+data/
