@@ -210,7 +210,14 @@ class BotRuntime:
                         self.message_handler.plan_message(current_event, trace_id=trace_id),
                         timeout=max(1, response_timeout),
                     )
-                logger.info("规划结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
+                logger.info(
+                    "规划结果：%s action=%s source=%s reason=%s reply_reference=%s",
+                    trace_log,
+                    plan.action,
+                    plan.source,
+                    plan.reason,
+                    str(getattr(plan, "reply_reference", "") or "").strip(),
+                )
                 self._log_plan_preview(plan, trace_log)
                 if self._should_log_message_summary():
                     logger.info(
@@ -234,7 +241,14 @@ class BotRuntime:
                     self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
                     timeout=max(1, response_timeout),
                 )
-                logger.info("节奏判断结果：%s action=%s source=%s reason=%s", trace_log, plan.action, plan.source, plan.reason)
+                logger.info(
+                    "节奏判断结果：%s action=%s source=%s reason=%s reply_reference=%s",
+                    trace_log,
+                    plan.action,
+                    plan.source,
+                    plan.reason,
+                    str(getattr(plan, "reply_reference", "") or "").strip(),
+                )
                 if not plan.should_reply:
                     next_dispatch = await self.message_handler.complete_window_dispatch(plan)
                     if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
@@ -576,7 +590,6 @@ class BotRuntime:
         self._shutdown_event.set()
 
         await self._cancel_message_tasks()
-        await self._model_router.close()
 
         adapter = self.adapter or self.connection
         if adapter:
@@ -594,6 +607,7 @@ class BotRuntime:
 
         await close_resource(self.message_handler, label="message_handler")
         await close_resource(self.memory_manager, label="memory_manager")
+        await self._model_router.close()
 
         self.runtime_metrics.set_state(
             connected=False,
@@ -797,8 +811,9 @@ class BotRuntime:
         if raw_decision is None:
             return
         logger.info(
-            "规划原始结果：%s preview=%s",
+            "规划原始结果：%s reply_reference=%s preview=%s",
             trace_log,
+            preview_text_for_log(str(getattr(plan, "reply_reference", "") or "").strip()),
             preview_json_for_log(raw_decision),
         )
 

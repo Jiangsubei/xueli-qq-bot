@@ -46,7 +46,7 @@ class ConversationPlannerPromptSignalTests(unittest.TestCase):
         self.assertIn("连续性信号标签：old_topic_resume", prompt)
         self.assertNotIn("更积极地考虑", prompt)
 
-    def test_user_prompt_exposes_companionship_hints_when_signals_exist(self) -> None:
+    def test_user_prompt_exposes_factual_signal_observations(self) -> None:
         planner = ConversationPlanner(ai_client=object())
         event = MessageEvent.from_dict(
             {
@@ -77,9 +77,31 @@ class ConversationPlannerPromptSignalTests(unittest.TestCase):
             context=context,
         )
 
-        self.assertIn("陪伴倾向提醒", prompt)
-        self.assertIn("更积极地考虑延续同一话题", prompt)
-        self.assertIn("顺着你刚刚的回复继续聊", prompt)
+        self.assertIn("附加观察", prompt)
+        self.assertIn("可能在顺着刚才的话题往下说", prompt)
+        self.assertIn("像是在顺着助手上一句继续聊", prompt)
+
+    def test_parse_plan_keeps_reply_reference(self) -> None:
+        planner = ConversationPlanner(ai_client=object())
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 32,
+                "user_id": 42,
+                "self_id": 999,
+                "raw_message": "早上好",
+                "message": [{"type": "text", "data": {"text": "早上好"}}],
+            }
+        )
+
+        plan = planner._parse_plan(
+            '{"action":"reply","reason":"适合直接回应","reply_reference":"简单回一句早安，轻一点，不要马上追问太多。","prompt_plan":{"reply_goal":"answer","continuity_mode":"resume_recent_topic","timeline_detail":"summary","context_profile":"standard","memory_profile":"off","tone_profile":"balanced","initiative":"reactive","expression_profile":"plain","policy":{"include_recent_history":true,"include_person_facts":false,"include_session_restore":false,"include_precise_recall":false,"include_dynamic_memory":false,"include_vision_context":true,"include_reply_scope":true,"include_style_guide":true},"notes":"简单回早安即可。"}}',
+            event=event,
+            context=None,
+        )
+
+        self.assertEqual(plan.reply_reference, "简单回一句早安，轻一点，不要马上追问太多。")
 
 
 if __name__ == "__main__":

@@ -49,6 +49,10 @@ class ReplyStylePolicyTests(unittest.TestCase):
         self.assertIn("留有余地", guide.tone_guidance)
         self.assertIn("偏好更短一点", guide.expression_guidance)
         self.assertIn("谨慎", guide.initiative_guidance)
+        self.assertTrue(guide.opening_style)
+        self.assertTrue(guide.sentence_shape)
+        self.assertTrue(guide.followup_shape)
+        self.assertTrue(guide.allowed_colloquialism)
 
 
 if __name__ == "__main__":

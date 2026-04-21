@@ -620,6 +620,7 @@ class MessageHandler:
             raw_decision=plan.raw_decision,
             reply_context=reply_context,
             prompt_plan=plan.prompt_plan,
+            reply_reference=plan.reply_reference,
         )
 
     async def _plan_group_window(
@@ -644,6 +645,7 @@ class MessageHandler:
             raw_decision=plan.raw_decision,
             reply_context=reply_context,
             prompt_plan=plan.prompt_plan,
+            reply_reference=plan.reply_reference,
         )
 
     async def _build_group_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
@@ -1052,6 +1054,7 @@ class MessageHandler:
                 raw_decision=plan.raw_decision,
                 reply_context=reply_context,
                 prompt_plan=plan.prompt_plan,
+                reply_reference=plan.reply_reference,
             )
         mapped_action = MessagePlanAction.WAIT.value if decision.decision == "wait" else MessagePlanAction.IGNORE.value
         return MessageHandlingPlan(
@@ -1061,6 +1064,7 @@ class MessageHandler:
             raw_decision=decision.raw_decision,
             reply_context=reply_context,
             prompt_plan=plan.prompt_plan,
+            reply_reference=plan.reply_reference,
         )
 
     async def plan_emoji_follow_up(

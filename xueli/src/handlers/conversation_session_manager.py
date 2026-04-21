@@ -69,7 +69,13 @@ class ConversationSessionManager:
         dialogue_key = self._dialogue_key_from_session_key(key)
         for record in sessions:
             if str(record.dialogue_key or "") == dialogue_key and record.turn_count > 0:
-                conversation.restored_previous_session_time = self._parse_timestamp(record.closed_at or record.updated_at)
+                restored_session_time = self._parse_timestamp(record.closed_at or record.updated_at)
+                if restored_session_time <= 0:
+                    restored_session_time = max(
+                        (self._parse_timestamp(getattr(turn, "timestamp", "")) for turn in list(record.turns or [])),
+                        default=0.0,
+                    )
+                conversation.restored_previous_session_time = restored_session_time
                 conversation.restored_session_id = str(record.session_id or "")
                 conversation.restored_session_pending = True
                 for turn in record.turns:

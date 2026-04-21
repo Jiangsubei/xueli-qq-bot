@@ -23,6 +23,7 @@
 | 缓冲窗口调度 | 每会话按时间片生成窗口，顺序消费，超时窗口自动丢弃，避免延迟叠加 |
 | 节奏控制 | 避免刷屏，让对话更自然 |
 | 回复规划 | 控制回复风格、情感、相关记忆的拼接 |
+| 提示词模板体系 | `planner / timing gate / reply` 主提示词已拆成模板文件，便于维护和调试 |
 | 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
 | 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
 | 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 使用明文存储方便阅读编辑 |
@@ -152,6 +153,7 @@ export API_RUNTIME_PORT=8765
 .
 ├── data/                # 运行时数据（记忆、缓存、webui 资源）
 ├── xueli/
+│   ├── prompts/         # planner / timing / reply 主提示词模板
 │   ├── config/          # 配置文件
 │   ├── src/
 │   │   ├── adapters/    # 平台适配器（napcat, api, ...）
@@ -184,6 +186,7 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/core/dispatcher.py`
 - `xueli/src/core/config.py`
 - `xueli/src/core/models.py`
+- `xueli/src/core/prompt_templates.py`
 - `xueli/src/core/reply_send_orchestrator.py`
 - `xueli/src/core/platform_models.py`
 - `xueli/src/core/platform_normalizers.py`
@@ -219,6 +222,18 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/handlers/conversation_plan_coordinator.py`
 - `xueli/src/handlers/prompt_planner.py`
 - `xueli/src/handlers/temporal_context.py`
+
+### 提示词模板
+
+- `xueli/prompts/zh-CN/planner.prompt`
+- `xueli/prompts/zh-CN/timing_gate.prompt`
+- `xueli/prompts/zh-CN/reply.prompt`
+
+当前实现采用“主模板文件 + 代码内 section 注入”的折中结构：
+
+- planner / timing gate / reply 的主 prompt 在模板文件中维护
+- 较小的动态 block 仍由 `ReplyPromptRenderer`、`ReplyStylePolicy` 和 planner user prompt 在代码里拼接
+- `reply_reference` 是 planner 给 reply 的软指导，不会被程序硬执行
 
 ### 记忆系统
 

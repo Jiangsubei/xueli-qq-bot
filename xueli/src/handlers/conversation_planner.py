@@ -11,6 +11,7 @@ from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.core.platform_normalizers import event_mentions_account
+from src.core.prompt_templates import PromptTemplateLoader
 from src.handlers.message_context import MessageContext
 from src.handlers.prompt_planner import PromptPlanner
 from src.services.ai_client import AIAPIError, AIClient
@@ -33,6 +34,7 @@ class ConversationPlanner:
         self._owns_ai_client = ai_client is None
         self.model_invocation_router = model_invocation_router
         self.prompt_planner = PromptPlanner()
+        self.template_loader = PromptTemplateLoader()
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
@@ -90,29 +92,19 @@ class ConversationPlanner:
         return self.prompt_planner.decision_output_schema()
 
     def _build_system_prompt(self, chat_mode: str) -> str:
-        if chat_mode == "private":
-            return (
-                "你现在的任务，不是生成回复内容，而是为私聊助手做两件事：先判断当前消息要 reply、wait 还是 ignore，再给出这次回复所需的 prompt_plan。\n\n"
-                "你会看到当前消息、最近上下文、时间跨度信号，以及一些运行时观察结果。"
-                "这些信息只是事实输入，不代表最终结论。请你自己判断此刻更适合 reply、wait 还是 ignore。\n\n"
-                "请特别关注：消息是否完整、用户是否还在连续补充、当前输入和最近上下文在时间上相距多远、以及这条消息是否需要更多历史信息才能自然回应。\n\n"
-                "如果 action 选择 reply，必须同时给出 prompt_plan，用来告诉下游回复模型该启用哪些上下文层。"
-                "如果 action 不是 reply，prompt_plan 可以省略。\n\n"
-                "你只允许输出 JSON，格式必须是：\n"
-                + self._decision_output_schema()
-                + "\n\n不要输出 JSON 以外的任何内容。"
-            ).strip()
-        return (
-            "你现在的任务，不是生成回复内容，而是为群聊助手做两件事：先判断当前消息要 reply、wait 还是 ignore，再给出这次回复所需的 prompt_plan。\n\n"
-            "请把自己当成群里的自然成员，而不是客服或问答机器人。"
-            "你会看到当前消息、最近群聊上下文、时间跨度信号以及一些运行时观察结果。"
-            "这些输入只是事实，不代表最终结论。请你自己判断此刻接话是否自然、合适、不过度打断。\n\n"
-            "请把注意力放在当前消息本身，再参考最近上下文、时间跨度、是否刚刚回复过、是否带图、是否明显指向助手等信号综合判断。\n\n"
-            "如果 action 选择 reply，必须同时给出 prompt_plan，用来告诉下游回复模型该启用哪些上下文层。\n\n"
-            "你只允许输出 JSON，格式必须是：\n"
-            + self._decision_output_schema()
-            + "\n\n不要输出 JSON 以外的任何内容。"
-        ).strip()
+        chat_mode_label = "私聊" if chat_mode == "private" else "群聊"
+        scene_guidance = (
+            "私聊里请更关注：这句是否完整、是否像直接提问、是否像情绪暴露、是否像隔了一段时间重新接话。"
+            "如果只是首次开场或自然打招呼，不要默认写成强连续续聊。"
+            if chat_mode == "private"
+            else "群聊里请更关注：当前消息是否自然指向助手、现在接话会不会打断别人、是否只是轻轻接一句就够。"
+        )
+        return self.template_loader.render(
+            "planner.prompt",
+            chat_mode_label=chat_mode_label,
+            scene_guidance=scene_guidance,
+            decision_output_schema=self._decision_output_schema(),
+        )
 
     def _format_window_messages(self, window_messages: List[Dict[str, Any]]) -> str:
         if not window_messages:
@@ -221,14 +213,14 @@ class ConversationPlanner:
         signals = dict(getattr(context, "planning_signals", {}) or {}) if context else {}
         hints: List[str] = []
         if bool(signals.get("care_cue_detected")):
-            hints.append("- 当前消息像是在暴露状态或情绪，如果回复，优先轻轻接住，不要一上来就给说教式建议")
+            hints.append("- 观察到当前消息可能包含状态或情绪暴露倾向")
         if bool(signals.get("continuation_cue_detected")):
-            hints.append("- 当前消息像是在顺着刚才的话题往下说，如果接话自然，可以更积极地考虑延续同一话题")
+            hints.append("- 观察到当前消息可能在顺着刚才的话题往下说")
         if bool(signals.get("follow_up_after_assistant")):
-            hints.append("- 用户像是在顺着你刚刚的回复继续聊，可以更积极地考虑自然接住")
+            hints.append("- 观察到用户像是在顺着助手上一句继续聊")
         if not hints:
             return ""
-        return "陪伴倾向提醒：\n" + "\n".join(hints)
+        return "附加观察：\n" + "\n".join(hints)
 
     def _build_user_prompt(
         self,
@@ -310,6 +302,7 @@ class ConversationPlanner:
                     "- 如果运行时信号显示用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
                     "- 只有在明显无需响应时才考虑 ignore\n"
                     "- 如果你选择 reply，请同时输出 prompt_plan，告诉下游回复模型该启用哪些上下文层\n"
+                    "- 如果你选择 reply，请额外提供一段自然语言 reply_reference，告诉下游回复模型这次更适合怎么接话，但不要直接替它写完整回复\n"
                     "- 请只输出 JSON，不要输出解释。",
                 ]
             )
@@ -332,6 +325,7 @@ class ConversationPlanner:
                 "- 请围绕当前消息做判断，不要把前面的话当成当前要回复的内容\n"
                 "- 如果最近记录显示助手刚刚接过话，这只是一个事实信号，不代表一定不能再回\n"
                 "- 如果你选择 reply，请同时输出 prompt_plan，告诉下游回复模型该启用哪些上下文层\n"
+                "- 如果你选择 reply，请额外提供一段自然语言 reply_reference，告诉下游回复模型这次更适合怎么接话，但不要直接替它写完整回复\n"
                 "- 请只输出 JSON，不要输出解释。",
             ]
         )
@@ -396,6 +390,7 @@ class ConversationPlanner:
             source="planner",
             raw_decision=decision,
             prompt_plan=self.prompt_planner.parse_prompt_plan(decision, event=event, action=action, context=context),
+            reply_reference=self.prompt_planner.parse_reply_reference(decision, event=event, action=action, context=context),
         )
 
     def _build_rule_plan(
@@ -418,6 +413,7 @@ class ConversationPlanner:
                     action=MessagePlanAction.REPLY.value,
                     context=None,
                 ),
+                reply_reference="先围绕当前这句自然回应，轻一点，不要假装一直在连续聊。",
             )
         if event_mentions_account(event):
             return MessageHandlingPlan(
@@ -430,6 +426,7 @@ class ConversationPlanner:
                     action=MessagePlanAction.REPLY.value,
                     context=None,
                 ),
+                reply_reference="先回应当前被点名的内容，简洁一点，不要展开太多。",
             )
         return MessageHandlingPlan(
             action=MessagePlanAction.IGNORE.value,
@@ -467,6 +464,7 @@ class ConversationPlanner:
                         action=MessagePlanAction.REPLY.value,
                         context=context,
                     ),
+                    reply_reference="围绕当前私聊消息自然回应，先答当前这一句，不要强行续旧话题。",
                 )
             return self._build_rule_plan(
                 MessagePlanAction.IGNORE,
@@ -512,10 +510,16 @@ class ConversationPlanner:
                 response = await run_chat()
             plan = self._parse_plan(response.content, event=event, context=context)
             if context and context.trace_id:
+                temporal = getattr(context, "temporal_context", None)
                 logger.info(
-                    "会话规划完成：%s action=%s",
+                    "会话规划完成：%s action=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s reply_reference=%s",
                     format_trace_log(trace_id=context.trace_id, session_key=execution_key, message_id=event.message_id),
                     plan.action,
+                    str(getattr(temporal, "recent_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(temporal, "conversation_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(temporal, "session_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(temporal, "continuity_hint", "unknown") or "unknown"),
+                    str(plan.reply_reference or "").strip(),
                 )
             return plan
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:

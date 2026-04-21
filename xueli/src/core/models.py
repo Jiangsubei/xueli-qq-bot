@@ -398,6 +398,10 @@ class FinalStyleGuide:
     initiative_guidance: str = ""
     tone_guidance: str = ""
     expression_guidance: str = ""
+    opening_style: str = ""
+    sentence_shape: str = ""
+    followup_shape: str = ""
+    allowed_colloquialism: str = ""
     anti_patterns: List[str] = field(default_factory=list)
 
 
@@ -524,6 +528,7 @@ class MessageHandlingPlan:
     raw_decision: Optional[Dict[str, Any]] = None
     reply_context: Optional[Dict[str, Any]] = None
     prompt_plan: Optional[PromptPlan] = None
+    reply_reference: str = ""
 
     @property
     def should_reply(self) -> bool:

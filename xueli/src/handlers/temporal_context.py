@@ -78,7 +78,12 @@ def _bucket_observation(bucket: str) -> str:
 
 
 def summarize_temporal_context(ctx: TemporalContext) -> str:
-    lines = [_bucket_observation(ctx.recent_gap_bucket)]
+    lines = []
+    if ctx.session_gap_bucket != "unknown":
+        lines.append(f"最近一条历史消息时间分层是 {ctx.recent_gap_bucket}")
+        lines.append(f"上一轮已关闭会话的时间分层是 {ctx.session_gap_bucket}")
+    else:
+        lines.append(_bucket_observation(ctx.recent_gap_bucket))
     if ctx.history_span_seconds is not None:
         if ctx.history_span_seconds < 300:
             lines.append("最近窗口里的消息时间分布比较集中")
@@ -86,8 +91,6 @@ def summarize_temporal_context(ctx: TemporalContext) -> str:
             lines.append("最近窗口里的消息覆盖了同一段较短时间范围")
         else:
             lines.append("最近窗口里的消息跨越了较长时间范围")
-    if ctx.session_gap_bucket != "unknown":
-        lines.append(f"上一轮已关闭会话的时间分层是 {ctx.session_gap_bucket}")
     return "；".join(lines)
 
 

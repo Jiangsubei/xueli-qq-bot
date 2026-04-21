@@ -107,6 +107,24 @@ response_path = "output.choices.0.message.content"
 
 `bot_behavior` 控制机器人的核心行为。
 
+## 提示词模板结构
+
+当前版本的主提示词不再全部硬编码在 Python 里，而是拆成模板文件：
+
+- `xueli/prompts/zh-CN/planner.prompt`
+- `xueli/prompts/zh-CN/timing_gate.prompt`
+- `xueli/prompts/zh-CN/reply.prompt`
+
+运行时通过 `xueli/src/core/prompt_templates.py` 加载，并由各自服务补充动态 section。
+
+目前的职责划分是：
+
+- planner：判断 `reply / wait / ignore`，输出 `PromptPlan` 和 `reply_reference`
+- timing gate：只判断 `continue / wait / no_reply`
+- reply：根据 `PromptPlan + MessageContext + reply_reference + style guide` 生成最终回复数组
+
+其中 `reply_reference` 是 planner 给 reply 的自然语言方向提示，只作为软指导，不参与程序硬执行。
+
 ### 结构化分段发送
 
 ```toml

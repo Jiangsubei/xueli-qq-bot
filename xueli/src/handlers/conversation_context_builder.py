@@ -180,6 +180,7 @@ class ConversationContextBuilder:
             character_card_snapshot=character_card_snapshot or CharacterCardSnapshot(),
             window_reason=str(reply_context.get("window_reason") or ""),
             prompt_plan=prompt_plan,
+            reply_reference=str(getattr(plan, "reply_reference", "") or "").strip(),
             conversation=conversation,
         )
         message_context.final_style_guide = self.style_policy.build(

@@ -18,13 +18,13 @@ from src.handlers.timing_gate_service import TimingGateService
 
 
 class TimingGateServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fallback_waits_when_message_looks_incomplete(self) -> None:
+    async def test_fallback_waits_when_only_image_signal_exists(self) -> None:
         service = TimingGateService()
         service.ai_client = None
         context = MessageContext(
             user_message="然后",
             temporal_context=TemporalContext(summary_text="刚刚还在连续对话"),
-            planning_signals={"looks_fragmented": True},
+            planning_signals={"has_image_without_text": True},
         )
         plan = MessageHandlingPlan(action="reply", reason="适合接话", prompt_plan=PromptPlan())
 

@@ -31,7 +31,8 @@ class PromptPlanner:
             '"include_vision_context":true,'
             '"include_reply_scope":true,'
             '"include_style_guide":true},'
-            '"notes":"可选说明"}}'
+            '"notes":"可选说明"},'
+            '"reply_reference":"给回复模型看的自然语言参考，可选"}'
         )
 
     def parse_prompt_plan(
@@ -106,6 +107,19 @@ class PromptPlanner:
             notes=str(raw_plan.get("notes") or default_plan.notes or "").strip(),
         )
 
+    def parse_reply_reference(
+        self,
+        decision: Dict[str, Any],
+        *,
+        event: MessageEvent,
+        action: str,
+        context: Optional[MessageContext],
+    ) -> str:
+        del event, context
+        if action != MessagePlanAction.REPLY.value:
+            return ""
+        return str(decision.get("reply_reference") or decision.get("reply_guidance") or "").strip()
+
     def default_prompt_plan(
         self,
         *,
@@ -122,7 +136,15 @@ class PromptPlanner:
             "soft_continuation": "resume_recent_topic",
             "resume_after_break": "resume_recent_topic",
             "old_topic_resume": "resume_old_topic",
-        }.get(continuity_hint, "direct_continue")
+        }.get(continuity_hint, "resume_recent_topic" if chat_mode == "private" else "direct_continue")
+        if (
+            chat_mode == "private"
+            and context is not None
+            and bool(getattr(context, "is_first_turn", False))
+            and continuity_hint in {"unknown", "strong_continuation"}
+            and not bool(signals.get("follow_up_after_assistant"))
+        ):
+            continuity_mode = "resume_recent_topic"
         timeline_detail = "summary"
         if continuity_hint == "old_topic_resume":
             timeline_detail = "per_message"
@@ -185,7 +207,9 @@ class PromptPlanner:
     def _default_reply_goal(self, *, chat_mode: str, continuity_hint: str, signals: Dict[str, Any]) -> str:
         if bool(signals.get("care_cue_detected")):
             return "comfort"
-        if bool(signals.get("follow_up_after_assistant")) or bool(signals.get("continuation_cue_detected")):
+        if bool(signals.get("follow_up_after_assistant")):
+            return "continue"
+        if bool(signals.get("continuation_cue_detected")) and continuity_hint in {"soft_continuation", "strong_continuation"}:
             return "continue"
         if continuity_hint == "old_topic_resume":
             return "recall"

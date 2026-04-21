@@ -7,9 +7,11 @@ import re
 from typing import Any, Dict, Optional
 
 from src.core.config import AppConfig, config, is_group_reply_decision_configured
+from src.core.message_trace import format_trace_log
 from src.core.message_trace import get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import TimingDecision, TimingDecisionAction
+from src.core.prompt_templates import PromptTemplateLoader
 from src.handlers.message_context import MessageContext
 from src.services.ai_client import AIAPIError, AIClient
 
@@ -30,6 +32,7 @@ class TimingGateService:
         self.ai_client = ai_client or self._create_ai_client()
         self._owns_ai_client = ai_client is None
         self.model_invocation_router = model_invocation_router
+        self.template_loader = PromptTemplateLoader()
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
@@ -69,28 +72,40 @@ class TimingGateService:
                 )
             else:
                 response = await run_chat()
-            return self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
+            decision = self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
+            if context.trace_id:
+                logger.info(
+                    "节奏判断完成：%s decision=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s",
+                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or get_execution_key(event), message_id=getattr(event, "message_id", 0)),
+                    decision.decision,
+                    str(getattr(context.temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(context.temporal_context, "conversation_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(context.temporal_context, "session_gap_bucket", "unknown") or "unknown"),
+                    str(getattr(context.temporal_context, "continuity_hint", "unknown") or "unknown"),
+                )
+            return decision
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("节奏判断失败，回退到规则：%s", exc)
             return fallback
 
     def _build_system_prompt(self) -> str:
-        return (
-            "你的任务只是在 continue、wait、no_reply 之间做节奏判断，不要生成对用户可见的回复。\n"
-            "规则：\n"
-            "- continue：现在就进入正式回复\n"
-            "- wait：用户像是还没说完，先等下一条\n"
-            "- no_reply：这轮无需继续发言\n"
-            '严格只输出 JSON：{"decision":"continue|wait|no_reply","reason":"简短理由"}'
+        return self.template_loader.render(
+            "timing_gate.prompt",
+            scene_guidance="如果当前消息是直接点名、明确提问、或已经足够完整且自然可接，优先继续；只有在明显还没说完或现在继续会太抢时才 wait。",
         )
 
     def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
+        temporal = context.temporal_context
         lines = [
             f"当前消息类型：{getattr(event, 'message_type', '') or 'private'}",
             f"planner_action：{getattr(plan, 'action', '')}",
             f"planner_reason：{getattr(plan, 'reason', '')}",
             f"当前消息：{context.user_message}",
-            f"时间线摘要：{context.rendered_timeline_summary or getattr(context.temporal_context, 'summary_text', '')}",
+            f"最近消息时间分层：{str(getattr(temporal, 'recent_gap_bucket', 'unknown') or 'unknown')}",
+            f"当前会话时间分层：{str(getattr(temporal, 'conversation_gap_bucket', 'unknown') or 'unknown')}",
+            f"上一轮会话时间分层：{str(getattr(temporal, 'session_gap_bucket', 'unknown') or 'unknown')}",
+            f"连续性标签：{str(getattr(temporal, 'continuity_hint', 'unknown') or 'unknown')}",
+            f"时间线摘要：{context.rendered_timeline_summary or getattr(temporal, 'summary_text', '')}",
             "运行时信号：",
         ]
         signals = dict(context.planning_signals or {})
@@ -142,12 +157,8 @@ class TimingGateService:
 
     def _fallback_decision(self, *, plan: Any, context: MessageContext) -> TimingDecision:
         signals = dict(context.planning_signals or {})
-        if bool(signals.get("explicit_hold_signal")):
-            return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="用户看起来还在继续补充", source="rule")
         if bool(signals.get("has_image_without_text")):
             return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="当前更像是等待图片相关补充", source="rule")
-        if bool(signals.get("looks_fragmented")) or bool(signals.get("ends_like_incomplete")):
-            return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="当前输入像是未说完", source="rule")
         return TimingDecision(
             decision=TimingDecisionAction.CONTINUE.value,
             reason=str(getattr(plan, "reason", "") or "当前适合继续生成回复"),

@@ -693,6 +693,7 @@ class ConversationPlanCoordinator:
             raw_decision=plan.raw_decision,
             reply_context=reply_context if reply_context is not None else plan.reply_context,
             prompt_plan=plan.prompt_plan,
+            reply_reference=plan.reply_reference,
         )
 
     def _merge_reply_context(

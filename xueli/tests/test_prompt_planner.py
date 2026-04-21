@@ -94,6 +94,59 @@ class PromptPlannerTests(unittest.TestCase):
         self.assertEqual(plan.initiative, "gentle_follow")
         self.assertEqual(plan.expression_profile, "colloquial")
 
+    def test_default_prompt_plan_keeps_private_first_turn_continuity_conservative(self) -> None:
+        planner = PromptPlanner()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 4,
+                "user_id": 42,
+                "self_id": 999,
+                "raw_message": "早上好",
+                "message": [{"type": "text", "data": {"text": "早上好"}}],
+            }
+        )
+        context = MessageContext(
+            is_first_turn=True,
+            temporal_context=TemporalContext(continuity_hint="strong_continuation"),
+        )
+
+        plan = planner.default_prompt_plan(
+            event=event,
+            action=MessagePlanAction.REPLY.value,
+            context=context,
+        )
+
+        self.assertEqual(plan.reply_goal, "answer")
+        self.assertEqual(plan.continuity_mode, "resume_recent_topic")
+
+    def test_parse_reply_reference_reads_soft_guidance_text(self) -> None:
+        planner = PromptPlanner()
+        event = MessageEvent.from_dict(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 5,
+                "user_id": 42,
+                "self_id": 999,
+                "raw_message": "早上好",
+                "message": [{"type": "text", "data": {"text": "早上好"}}],
+            }
+        )
+
+        reference = planner.parse_reply_reference(
+            {
+                "action": "reply",
+                "reply_reference": "简单回一句早安，轻一点，不要马上追问太多。",
+            },
+            event=event,
+            action=MessagePlanAction.REPLY.value,
+            context=None,
+        )
+
+        self.assertEqual(reference, "简单回一句早安，轻一点，不要马上追问太多。")
+
 
 if __name__ == "__main__":
     unittest.main()

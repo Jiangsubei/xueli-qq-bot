@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 from src.core.models import FinalStyleGuide, MessageType, PromptPlan
+from src.core.prompt_templates import PromptTemplateLoader
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_style_policy import ReplyStylePolicy
 
@@ -22,6 +23,7 @@ class ReplyPromptRenderer:
     def __init__(self, host: Any, style_policy: ReplyStylePolicy | None = None) -> None:
         self.host = host
         self.style_policy = style_policy or ReplyStylePolicy()
+        self.template_loader = PromptTemplateLoader()
 
     def render(
         self,
@@ -47,6 +49,7 @@ class ReplyPromptRenderer:
             ("session", self._session_section(event=event, message_context=message_context)),
             ("reply_target", self._reply_target_section(event=event, current_message=current_message)),
             ("continuity", self._continuity_section(message_context=message_context, prompt_plan=plan)),
+            ("planner_reference", self._planner_reference_section(message_context=message_context)),
             ("timeline", self._timeline_section(message_context=message_context, prompt_plan=plan)),
             ("recent_history", self._recent_history_section(message_context=message_context, prompt_plan=plan)),
             ("person_facts", self._simple_section("这些是当前用户的长期事实：", message_context.person_fact_context, enabled=plan.policy.include_person_facts)),
@@ -60,7 +63,25 @@ class ReplyPromptRenderer:
         ]
         active_sections = [name for name, text in sections if str(text or "").strip()]
         section_texts = {name: text for name, text in sections if str(text or "").strip()}
-        system_prompt = "\n\n".join(section_texts[name] for name in active_sections)
+        memory_sections = "\n\n".join(
+            section_texts[name]
+            for name in ("person_facts", "session_restore", "precise_recall", "dynamic_memory", "vision_context")
+            if name in section_texts
+        )
+        system_prompt = self.template_loader.render(
+            "reply.prompt",
+            identity_block=section_texts.get("identity", ""),
+            session_block=section_texts.get("session", ""),
+            reply_target_block=section_texts.get("reply_target", ""),
+            continuity_block=section_texts.get("continuity", ""),
+            planner_reference_block=section_texts.get("planner_reference", ""),
+            timeline_block=section_texts.get("timeline", ""),
+            recent_history_block=section_texts.get("recent_history", ""),
+            memory_sections_block=memory_sections,
+            reply_scope_block=section_texts.get("reply_scope", ""),
+            final_style_block=section_texts.get("final_style", ""),
+            output_format_block=section_texts.get("output_format", ""),
+        )
         return RenderedPrompt(
             system_prompt=system_prompt,
             user_message=current_message,
@@ -88,16 +109,38 @@ class ReplyPromptRenderer:
 
     def _continuity_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:
         summary = str(getattr(message_context.temporal_context, "summary_text", "") or "").strip()
+        temporal = message_context.temporal_context
         lines = [
             f"回复目标：{prompt_plan.reply_goal}",
             f"连续性策略：{prompt_plan.continuity_mode}",
+            f"最近消息时间分层：{str(getattr(temporal, 'recent_gap_bucket', 'unknown') or 'unknown')}",
+            f"最近消息时间语义：{self._describe_gap_bucket(str(getattr(temporal, 'recent_gap_bucket', 'unknown') or 'unknown'))}",
+            f"当前会话时间分层：{str(getattr(temporal, 'conversation_gap_bucket', 'unknown') or 'unknown')}",
+            f"当前会话时间语义：{self._describe_gap_bucket(str(getattr(temporal, 'conversation_gap_bucket', 'unknown') or 'unknown'))}",
         ]
+        if str(getattr(temporal, "session_gap_bucket", "unknown") or "unknown") != "unknown":
+            lines.append(f"上一轮会话时间分层：{str(getattr(temporal, 'session_gap_bucket', 'unknown') or 'unknown')}")
+            lines.append(
+                f"上一轮会话时间语义：{self._describe_session_gap_bucket(str(getattr(temporal, 'session_gap_bucket', 'unknown') or 'unknown'))}"
+            )
+        lines.append(f"连续性标签：{str(getattr(temporal, 'continuity_hint', 'unknown') or 'unknown')}")
+        lines.append(f"连续性解释：{self._describe_continuity_hint(str(getattr(temporal, 'continuity_hint', 'unknown') or 'unknown'))}")
         if summary:
             lines.append(f"时间连续性观察：{summary}")
         notes = str(getattr(prompt_plan, "notes", "") or "").strip()
         if notes:
             lines.append(f"补充提醒：{notes}")
         return "\n".join(lines)
+
+    def _planner_reference_section(self, *, message_context: MessageContext) -> str:
+        reference = str(getattr(message_context, "reply_reference", "") or "").strip()
+        if not reference:
+            return ""
+        return (
+            "规划参考：\n"
+            f"{reference}\n"
+            "这只是本轮回复方向参考，不要照抄，要把它自然融进最终回复。"
+        )
 
     def _timeline_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:
         detail = str(prompt_plan.timeline_detail or "summary").strip().lower()
@@ -166,9 +209,49 @@ class ReplyPromptRenderer:
             f"- 口吻：{style_guide.tone_guidance}",
             f"- 表达：{style_guide.expression_guidance}",
         ]
+        if str(style_guide.opening_style or "").strip():
+            parts.append(f"- 起手：{style_guide.opening_style}")
+        if str(style_guide.sentence_shape or "").strip():
+            parts.append(f"- 句形：{style_guide.sentence_shape}")
+        if str(style_guide.followup_shape or "").strip():
+            parts.append(f"- 收尾/跟进：{style_guide.followup_shape}")
+        if str(style_guide.allowed_colloquialism or "").strip():
+            parts.append(f"- 口语度：{style_guide.allowed_colloquialism}")
         if anti_patterns:
             parts.append("避免：\n" + anti_patterns)
         return "\n".join(parts)
+
+    def _describe_gap_bucket(self, bucket: str) -> str:
+        mapping = {
+            "immediate": "这更像刚刚连续在聊。",
+            "short_resume": "这更像停了不久又接上。",
+            "resume_after_break": "这更像隔了一段时间重新接话。",
+            "long_resume": "这更像已经隔了较久，再重新开口。",
+            "old_topic_resume": "这更像重新提起旧话题，不是同一轮无缝续聊。",
+            "unknown": "当前没有足够时间信号，别强写连续感。",
+        }
+        return mapping.get(bucket, "当前时间跨度信号有限，按自然聊天理解。")
+
+    def _describe_session_gap_bucket(self, bucket: str) -> str:
+        mapping = {
+            "immediate": "上一轮会话刚结束不久，仍接近连续聊天。",
+            "short_resume": "上一轮会话结束后隔了不久，现在更像重新接上。",
+            "resume_after_break": "上一轮会话结束后隔了一阵，现在是重新接话，不是同一轮连着聊。",
+            "long_resume": "上一轮会话已经过去较久，这次更像恢复旧会话后的续接。",
+            "old_topic_resume": "这更像从上一轮已关闭会话里重新提起旧话题。",
+            "unknown": "上一轮会话时间未知，不要假设一直在连续聊天。",
+        }
+        return mapping.get(bucket, "上一轮会话时间信号有限，不要写得像无缝连续。")
+
+    def _describe_continuity_hint(self, hint: str) -> str:
+        mapping = {
+            "strong_continuation": "更像同一轮对话里顺着往下说。",
+            "soft_continuation": "更像自然承接前面的话，但不用写得太黏。",
+            "resume_after_break": "更像隔了一阵后重新接上，不要写成一直在同步聊天。",
+            "old_topic_resume": "更像重新提起旧话题，要有恢复感，不要装作刚刚还在聊。",
+            "unknown": "连续性不明确，优先围绕当前消息自然回应。",
+        }
+        return mapping.get(hint, "连续性信号一般，优先自然围绕当前消息回应。")
 
     def _output_format_section(self) -> str:
         return (

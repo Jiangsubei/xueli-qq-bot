@@ -50,5 +50,6 @@ class MessageContext:
     character_card_snapshot: CharacterCardSnapshot = field(default_factory=CharacterCardSnapshot)
     window_reason: str = ""
     prompt_plan: Optional[PromptPlan] = None
+    reply_reference: str = ""
     final_style_guide: FinalStyleGuide = field(default_factory=FinalStyleGuide)
     conversation: Optional[Conversation] = None

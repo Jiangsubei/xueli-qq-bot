@@ -228,6 +228,19 @@ class ReplyPipeline:
         if not self.host.app_config.bot_behavior.log_full_prompt:
             return
         trace_id = prepared.message_context.trace_id if prepared.message_context else ""
+        temporal = prepared.message_context.temporal_context if prepared.message_context else TemporalContext()
+        logger.info(
+            "[PROMPT SUMMARY] trace=%s session=%s sections=%s continuity_has_session_gap=%s planner_reference_enabled=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s",
+            trace_id,
+            self.host._get_conversation_key(event),
+            ",".join(prepared.active_sections),
+            str(getattr(temporal, "session_gap_bucket", "unknown") or "unknown") != "unknown",
+            bool(str(getattr(prepared.message_context, "reply_reference", "") or "").strip()) if prepared.message_context else False,
+            str(getattr(temporal, "recent_gap_bucket", "unknown") or "unknown"),
+            str(getattr(temporal, "conversation_gap_bucket", "unknown") or "unknown"),
+            str(getattr(temporal, "session_gap_bucket", "unknown") or "unknown"),
+            str(getattr(temporal, "continuity_hint", "unknown") or "unknown"),
+        )
         if not prepared.messages:
             logger.info(
                 "[系统提示词]\ntrace=%s\n用户=%s\n会话=%s\nsections=%s\n[视觉兜底回复：未请求模型]\n%s",
