@@ -4,7 +4,7 @@ import unittest
 
 from src.adapters.napcat.adapter import NapCatAdapter
 from src.core.models import MessageEvent
-from src.core.platform_models import ImageAction, ReplyAction, SessionRef
+from src.core.platform_models import FaceAction, MfaceAction, ReplyAction, SessionRef
 
 
 class _FakeConnection:
@@ -82,11 +82,10 @@ class NapCatAdapterTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_send_group_image_action(self) -> None:
-        action = ImageAction(
+    async def test_send_group_face_action(self) -> None:
+        action = FaceAction(
             session=SessionRef(platform="qq", scope="group", conversation_id="group:100:0", channel_id="100"),
-            image_path="emoji.png",
-            caption="caption",
+            face_id="14",
         )
 
         await self.adapter.send_action(action)
@@ -98,8 +97,39 @@ class NapCatAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "params": {
                     "group_id": 100,
                     "message": [
-                        {"type": "image", "data": {"file": "emoji.png"}},
-                        {"type": "text", "data": {"text": "caption"}},
+                        {"type": "face", "data": {"id": "14"}},
+                    ],
+                },
+            },
+        )
+
+    async def test_send_group_mface_action(self) -> None:
+        action = MfaceAction(
+            session=SessionRef(platform="qq", scope="group", conversation_id="group:100:0", channel_id="100"),
+            emoji_id="991",
+            emoji_package_id="7",
+            key="native-key",
+            summary="开心",
+        )
+
+        await self.adapter.send_action(action)
+
+        self.assertEqual(
+            self.connection.sent_payloads[-1],
+            {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": 100,
+                    "message": [
+                        {
+                            "type": "mface",
+                            "data": {
+                                "emoji_id": "991",
+                                "emoji_package_id": "7",
+                                "key": "native-key",
+                                "summary": "开心",
+                            },
+                        },
                     ],
                 },
             },

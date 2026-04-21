@@ -4,7 +4,7 @@ import unittest
 
 from src.adapters.api.adapter import ApiAdapter
 from src.adapters.registry import create_adapter
-from src.core.platform_models import ImageAction, ReplyAction, SessionRef
+from src.core.platform_models import FaceAction, MfaceAction, ReplyAction, SessionRef
 
 
 class ApiAdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -81,7 +81,7 @@ class ApiAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inbound_event.attachments[0].attachment_id, "img-1")
         self.assertTrue(inbound_event.capabilities.supports_groups)
 
-    async def test_send_reply_and_image_actions_as_api_payloads(self) -> None:
+    async def test_send_reply_and_native_sticker_actions_as_api_payloads(self) -> None:
         reply_result = await self.adapter.send_action(
             ReplyAction(
                 session=SessionRef(platform="api", scope="private", conversation_id="api:session:1", user_id="external-user"),
@@ -89,16 +89,25 @@ class ApiAdapterTests(unittest.IsolatedAsyncioTestCase):
                 quote_message_id="api-msg-1",
             )
         )
-        image_result = await self.adapter.send_action(
-            ImageAction(
+        face_result = await self.adapter.send_action(
+            FaceAction(
                 session=SessionRef(platform="api", scope="group", conversation_id="api:group:room-1:user-9", channel_id="room-1", user_id="user-9"),
-                image_url="https://example.com/image.png",
-                caption="caption",
+                face_id="14",
+            )
+        )
+        mface_result = await self.adapter.send_action(
+            MfaceAction(
+                session=SessionRef(platform="api", scope="group", conversation_id="api:group:room-1:user-9", channel_id="room-1", user_id="user-9"),
+                emoji_id="991",
+                emoji_package_id="7",
+                key="native-key",
+                summary="开心",
             )
         )
 
         self.assertTrue(reply_result)
-        self.assertTrue(image_result)
+        self.assertTrue(face_result)
+        self.assertTrue(mface_result)
         self.assertEqual(
             self.adapter.sent_payloads[0],
             {
@@ -123,7 +132,7 @@ class ApiAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.adapter.sent_payloads[1],
             {
-                "action": "image",
+                "action": "face",
                 "session": {
                     "platform": "api",
                     "scope": "group",
@@ -133,10 +142,30 @@ class ApiAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "channel_id": "room-1",
                     "metadata": {},
                 },
-                "image": {
-                    "url": "https://example.com/image.png",
-                    "path": "",
-                    "caption": "caption",
+                "face": {
+                    "id": "14",
+                },
+                "metadata": {},
+            },
+        )
+        self.assertEqual(
+            self.adapter.sent_payloads[2],
+            {
+                "action": "mface",
+                "session": {
+                    "platform": "api",
+                    "scope": "group",
+                    "conversation_id": "api:group:room-1:user-9",
+                    "user_id": "user-9",
+                    "account_id": "",
+                    "channel_id": "room-1",
+                    "metadata": {},
+                },
+                "mface": {
+                    "emoji_id": "991",
+                    "emoji_package_id": "7",
+                    "key": "native-key",
+                    "summary": "开心",
                 },
                 "metadata": {},
             },

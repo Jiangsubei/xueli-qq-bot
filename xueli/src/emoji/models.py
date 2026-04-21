@@ -61,12 +61,12 @@ class EmojiReplyDecision:
 @dataclass
 class EmojiRecord:
     emoji_id: str
-    sha256: str
-    image_path: str
-    file_ext: str
+    sticker_kind: str = ""
+    native_id: str = ""
+    emoji_package_id: str = ""
+    native_key: str = ""
+    native_summary: str = ""
     description: str = ""
-    sticker_confidence: float = 0.0
-    sticker_reason: str = ""
     emotion_status: str = "pending"
     primary_emotion: str = ""
     emotion_confidence: float = 0.0
@@ -89,6 +89,12 @@ class EmojiRecord:
     raw_segment: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
     emotion_error: str = ""
+    # Legacy fields kept for backward compatibility with existing indexes/UI.
+    sha256: str = ""
+    image_path: str = ""
+    file_ext: str = ""
+    sticker_confidence: float = 0.0
+    sticker_reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -104,7 +110,9 @@ class EmojiRecord:
         payload["manual_weight"] = float(payload.get("manual_weight", 1.0) or 1.0)
         payload["auto_reply_count"] = int(payload.get("auto_reply_count", 0) or 0)
         payload["last_auto_reply_at"] = str(payload.get("last_auto_reply_at", "") or "")
-        return cls(**payload)
+        allowed = {field_name for field_name in cls.__dataclass_fields__}
+        filtered = {key: value for key, value in payload.items() if key in allowed}
+        return cls(**filtered)
 
 
 @dataclass

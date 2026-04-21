@@ -408,19 +408,22 @@ class BotRuntime:
         if not selection or not getattr(selection, "emoji", None):
             return
 
-        image_path = await self.message_handler.get_emoji_follow_up_image_path(selection)
-        if not image_path:
+        action = self.message_handler.build_emoji_follow_up_action(selection, self._reply_session_for_event(event))
+        if action is None:
             return
 
         try:
-            await self._send_group_segments(self._reply_session_for_event(event), [MessageSegment.image(image_path)], trace_id=trace_id)
+            result = await self._get_adapter_for_session(action.session).send_action(action)
+            if result is False:
+                raise SendError("发送表情跟进失败")
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
             if self._should_log_message_summary():
                 logger.info(
-                    "群聊表情跟进已发送：%s group=%s emoji_id=%s",
+                    "群聊表情跟进已发送：%s group=%s emoji_id=%s kind=%s",
                     format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
                     event.group_id,
                     getattr(selection.emoji, "emoji_id", ""),
+                    getattr(selection.emoji, "sticker_kind", ""),
                 )
         except Exception as exc:
             logger.error(
@@ -446,6 +449,7 @@ class BotRuntime:
         logger.debug("已发送私聊消息：session=%s", session.key)
 
     async def _send_private_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
+        self._ensure_no_outbound_image_segments(segments)
         session = self._resolve_private_reply_session(target)
         result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
@@ -477,6 +481,7 @@ class BotRuntime:
         logger.debug("已发送群聊消息：session=%s", session.key)
 
     async def _send_group_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
+        self._ensure_no_outbound_image_segments(segments)
         session = self._resolve_group_reply_session(target)
         result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
@@ -487,6 +492,11 @@ class BotRuntime:
         if result is False:
             raise SendError("发送群聊分段消息失败")
         logger.debug("已发送群聊分段消息：session=%s，segments=%s", session.key, len(segments))
+
+    def _ensure_no_outbound_image_segments(self, segments: List[MessageSegment]) -> None:
+        for segment in list(segments or []):
+            if segment.is_image():
+                raise SendError("当前运行模式禁止主动发送 image 段")
 
     def _private_quote_reply_enabled(self) -> bool:
         app_config = getattr(self.message_handler, "app_config", None)

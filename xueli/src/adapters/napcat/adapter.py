@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import base64
-import io
 import re
-from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
-
-from PIL import Image
 
 from src.adapters.base import PlatformAdapter, ProtocolAdapter, _ONEBOT_AT_PATTERN
 from src.adapters.napcat.connection import NapCatConnection
 from src.core.models import MessageEvent, MessageSegment
-from src.core.platform_models import ImageAction, InboundEvent, OutgoingAction, ReplyAction, SessionRef
+from src.core.platform_models import FaceAction, InboundEvent, MfaceAction, OutgoingAction, ReplyAction, SessionRef
 from src.core.platform_normalizers import attach_normalized_onebot_event
-
-_STICKER_MAX_PX = 128
 
 
 class NapCatProtocolAdapter(ProtocolAdapter):
@@ -85,8 +78,10 @@ class NapCatAdapter(PlatformAdapter):
     def _action_to_payload(self, action: OutgoingAction) -> Dict[str, Any]:
         if isinstance(action, ReplyAction):
             return self._build_reply_payload(action)
-        if isinstance(action, ImageAction):
-            return self._build_image_payload(action)
+        if isinstance(action, FaceAction):
+            return self._build_face_payload(action)
+        if isinstance(action, MfaceAction):
+            return self._build_mface_payload(action)
         raise TypeError(f"unsupported action type: {action.__class__.__name__}")
 
     def _build_reply_payload(self, action: ReplyAction) -> Dict[str, Any]:
@@ -104,21 +99,45 @@ class NapCatAdapter(PlatformAdapter):
             }
         raise ValueError(f"unsupported session scope for reply: {session.scope}")
 
-    def _build_image_payload(self, action: ImageAction) -> Dict[str, Any]:
+    def _build_face_payload(self, action: FaceAction) -> Dict[str, Any]:
         session = self._require_session(action.session)
-        image_file = str(action.image_path or action.image_url or "")
-        if not image_file:
-            raise ValueError("image action requires image_path or image_url")
-        segments = [MessageSegment.image(image_file)]
-        if action.caption:
-            segments.append(MessageSegment.text(action.caption))
+        if not str(action.face_id or "").strip():
+            raise ValueError("face action requires face_id")
+        message = [MessageSegment.face(action.face_id).to_dict()]
+        if session.scope == "private":
+            return {
+                "action": "send_private_msg",
+                "params": {"user_id": int(session.user_id), "message": message},
+            }
+        if session.scope == "group":
+            return {
+                "action": "send_group_msg",
+                "params": {"group_id": int(session.channel_id), "message": message},
+            }
+        raise ValueError(f"unsupported session scope for face action: {session.scope}")
+
+    def _build_mface_payload(self, action: MfaceAction) -> Dict[str, Any]:
+        session = self._require_session(action.session)
+        if not str(action.emoji_id or "").strip():
+            raise ValueError("mface action requires emoji_id")
+        segment = MessageSegment.mface(
+            emoji_id=action.emoji_id,
+            emoji_package_id=action.emoji_package_id,
+            key=action.key,
+            summary=action.summary,
+        ).to_dict()
+        if session.scope == "private":
+            return {
+                "action": "send_private_msg",
+                "params": {"user_id": int(session.user_id), "message": [segment]},
+            }
         if session.scope != "group":
-            raise ValueError(f"unsupported session scope for image action: {session.scope}")
+            raise ValueError(f"unsupported session scope for mface action: {session.scope}")
         return {
             "action": "send_group_msg",
             "params": {
                 "group_id": int(session.channel_id),
-                "message": [segment.to_dict() for segment in segments],
+                "message": [segment],
             },
         }
 
@@ -135,36 +154,7 @@ class NapCatAdapter(PlatformAdapter):
 
     @staticmethod
     def _segments_to_message(segments: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
-        result = []
-        for segment in segments:
-            seg_dict = dict(segment or {})
-            if seg_dict.get("type") == "image":
-                file_val = (seg_dict.get("data") or {}).get("file") or ""
-                if file_val and not file_val.startswith(("http://", "https://", "base64://")):
-                    compressed = NapCatAdapter._compress_local_image_to_base64(file_val)
-                    if compressed:
-                        seg_dict = {"type": "image", "data": {"file": compressed}}
-            result.append(seg_dict)
-        return result
-
-    @staticmethod
-    def _compress_local_image_to_base64(file_path: str) -> Optional[str]:
-        """Compress a local image to base64 PNG (128px max, aspect ratio preserved).
-
-        Returns the base64 string (with ``base64://`` prefix) or None if compression fails.
-        """
-        try:
-            image = Image.open(file_path)
-            if image.mode in ("RGBA", "LA", "P"):
-                image = image.convert("RGBA")
-            else:
-                image = image.convert("RGB")
-            image.thumbnail((_STICKER_MAX_PX, _STICKER_MAX_PX), Image.LANCZOS)
-            buf = io.BytesIO()
-            image.save(buf, format="PNG")
-            return "base64://" + base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            return None
+        return [dict(segment or {}) for segment in segments]
 
     @staticmethod
     def _require_session(session: Optional[SessionRef]) -> SessionRef:

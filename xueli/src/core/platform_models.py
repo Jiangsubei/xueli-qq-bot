@@ -63,6 +63,8 @@ class SessionRef:
 class PlatformCapabilities:
     supports_text: bool = True
     supports_images: bool = False
+    supports_face: bool = False
+    supports_mface: bool = False
     supports_quote_reply: bool = False
     supports_groups: bool = False
     supports_message_edit: bool = False
@@ -121,11 +123,18 @@ class ReplyAction(OutgoingAction):
 
 
 @dataclass(frozen=True)
-class ImageAction(OutgoingAction):
-    image_url: str = ""
-    image_path: str = ""
-    caption: str = ""
-    action_type: str = field(init=False, default="image")
+class FaceAction(OutgoingAction):
+    face_id: str = ""
+    action_type: str = field(init=False, default="face")
+
+
+@dataclass(frozen=True)
+class MfaceAction(OutgoingAction):
+    emoji_id: str = ""
+    emoji_package_id: str = ""
+    key: str = ""
+    summary: str = ""
+    action_type: str = field(init=False, default="mface")
 
 
 @dataclass(frozen=True)

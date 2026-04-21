@@ -56,6 +56,28 @@ class MessageSegment:
             data["url"] = url
         return cls(type="image", data=data)
 
+    @classmethod
+    def face(cls, face_id: int | str) -> "MessageSegment":
+        return cls(type="face", data={"id": str(face_id)})
+
+    @classmethod
+    def mface(
+        cls,
+        *,
+        emoji_id: str,
+        emoji_package_id: str = "",
+        key: str = "",
+        summary: str = "",
+    ) -> "MessageSegment":
+        data = {"emoji_id": str(emoji_id)}
+        if emoji_package_id:
+            data["emoji_package_id"] = str(emoji_package_id)
+        if key:
+            data["key"] = str(key)
+        if summary:
+            data["summary"] = str(summary)
+        return cls(type="mface", data=data)
+
     def to_dict(self) -> Dict[str, Any]:
         return {"type": self.type, "data": self.data}
 
@@ -72,6 +94,45 @@ class MessageSegment:
     def is_image(self) -> bool:
         """检查是否为图片消息段"""
         return self.type == "image"
+
+    def is_face(self) -> bool:
+        return self.type == "face" and bool(str(self.data.get("id", "")).strip())
+
+    def is_mface(self) -> bool:
+        if self.type == "mface":
+            return bool(str(self.data.get("emoji_id", "")).strip())
+        if self.type != "image":
+            return False
+        return bool(
+            str(self.data.get("emoji_id", "")).strip()
+            or str(self.data.get("emoji_package_id", "")).strip()
+            or str(self.data.get("summary", "")).strip()
+            or str(self.data.get("key", "")).strip()
+        )
+
+    def is_native_sticker(self) -> bool:
+        return self.is_face() or self.is_mface()
+
+    def get_native_sticker_kind(self) -> str:
+        if self.is_face():
+            return "face"
+        if self.is_mface():
+            return "mface"
+        return ""
+
+    def get_native_sticker_ref(self) -> Dict[str, str]:
+        kind = self.get_native_sticker_kind()
+        if not kind:
+            return {}
+        if kind == "face":
+            return {"kind": "face", "id": str(self.data.get("id", "")).strip()}
+        return {
+            "kind": "mface",
+            "emoji_id": str(self.data.get("emoji_id", "")).strip(),
+            "emoji_package_id": str(self.data.get("emoji_package_id", "")).strip(),
+            "key": str(self.data.get("key", "")).strip(),
+            "summary": str(self.data.get("summary", "")).strip(),
+        }
 
     def get_image_file_id(self) -> Optional[str]:
         """获取图片文件 ID（用于下载）"""
@@ -223,6 +284,9 @@ class MessageEvent(OneBotEvent):
     def has_image(self) -> bool:
         """检查消息是否包含图片"""
         return any(seg.is_image() for seg in self.message)
+
+    def get_native_sticker_segments(self) -> List[MessageSegment]:
+        return [seg for seg in self.message if seg.is_native_sticker()]
 
     def get_sender_info(self) -> Dict[str, Any]:
         sender = self.raw_data.get("sender", {}) if isinstance(self.raw_data, dict) else {}

@@ -56,7 +56,9 @@ class EmojiManager:
 
         self.enabled = bool(emoji_config and emoji_config.enabled)
         self.capture_enabled = bool(self.enabled and getattr(emoji_config, "capture_enabled", True))
-        self.classification_enabled = bool(self.enabled and getattr(emoji_config, "classification_enabled", True))
+        # Native emoji refs no longer persist images locally, so the old image-based
+        # idle classifier is intentionally disabled.
+        self.classification_enabled = False
         self.repository = EmojiRepository(
             getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis"
         )
@@ -86,6 +88,28 @@ class EmojiManager:
             return
         self._last_activity_at = time.monotonic()
 
+    async def capture_native_emoji_references(self, *, event: MessageEvent) -> None:
+        if not self.enabled or not self.capture_enabled:
+            return
+        if not self._initialized:
+            await self.initialize()
+
+        captured = 0
+        for segment in list(event.message or []):
+            if not segment.is_native_sticker():
+                continue
+            await self.repository.save_native_emoji(
+                event=event,
+                segment=segment,
+                description=str(segment.data.get("summary", "") or "").strip(),
+            )
+            captured += 1
+        if captured and self.runtime_metrics:
+            self.runtime_metrics.record_emoji_detection(captured)
+        if captured:
+            self.record_activity()
+            await self._sync_metrics()
+
     async def process_detection_result(
         self,
         *,
@@ -94,41 +118,8 @@ class EmojiManager:
         base64_images: List[str],
         analysis_result: ImageAnalysisResult,
     ) -> None:
-        if not self.enabled or not self.capture_enabled:
-            return
-        if not self._initialized:
-            await self.initialize()
-
-        sticker_count = 0
-        for index, image_base64 in enumerate(base64_images):
-            if index >= len(image_segments):
-                break
-            if not analysis_result.is_sticker(index):
-                continue
-
-            record = await self.repository.save_detected_emoji(
-                event=event,
-                segment=image_segments[index],
-                image_base64=image_base64,
-                description=analysis_result.get_description(index),
-                sticker_confidence=analysis_result.get_sticker_confidence(index),
-                sticker_reason=analysis_result.get_sticker_reason(index),
-            )
-            sticker_count += 1
-            logger.debug(
-                "检测到表情包：ID=%s，置信度=%.2f，用户=%s，群=%s",
-                record.emoji_id,
-                record.sticker_confidence,
-                event.user_id,
-                event.group_id,
-            )
-
-        if sticker_count and self.runtime_metrics:
-            self.runtime_metrics.record_emoji_detection(sticker_count)
-        if sticker_count:
-            self.record_activity()
-            if self.classification_enabled:
-                self._ensure_worker()
+        del event, image_segments, base64_images, analysis_result
+        if self.enabled:
             await self._sync_metrics()
 
     async def close(self) -> None:
@@ -170,8 +161,8 @@ class EmojiManager:
             self._worker_task = None
 
     async def _classify_one(self, emoji_id: str) -> None:
-        if not self.vision_client:
-            return
+        del emoji_id
+        return
 
         availability = getattr(self.vision_client, "is_available", None)
         if callable(availability) and not availability():

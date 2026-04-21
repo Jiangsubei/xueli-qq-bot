@@ -120,6 +120,8 @@ def normalize_onebot_message_event(
         capabilities=PlatformCapabilities(
             supports_text=True,
             supports_images=True,
+            supports_face=True,
+            supports_mface=True,
             supports_quote_reply=True,
             supports_groups=True,
             supports_proactive_push=True,

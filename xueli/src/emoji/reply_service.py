@@ -11,6 +11,7 @@ from src.core.config import AppConfig
 from src.core.message_trace import get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageType
+from src.core.platform_models import FaceAction, MfaceAction, OutgoingAction, SessionRef
 from src.core.runtime_metrics import RuntimeMetrics
 
 from .models import (
@@ -107,10 +108,26 @@ class EmojiReplyService:
             self.runtime_metrics.record_emoji_reply_sent(1)
         return record
 
-    async def get_image_path(self, selection: EmojiReplySelection) -> Optional[str]:
+    def build_follow_up_action(
+        self,
+        *,
+        selection: EmojiReplySelection,
+        session: SessionRef,
+    ) -> Optional[OutgoingAction]:
         if not selection.emoji:
             return None
-        return await self.repository.get_image_path(selection.emoji.emoji_id)
+        emoji = selection.emoji
+        if emoji.sticker_kind == "face" and emoji.native_id:
+            return FaceAction(session=session, face_id=emoji.native_id)
+        if emoji.sticker_kind == "mface" and emoji.native_id:
+            return MfaceAction(
+                session=session,
+                emoji_id=emoji.native_id,
+                emoji_package_id=emoji.emoji_package_id,
+                key=emoji.native_key,
+                summary=emoji.native_summary,
+            )
+        return None
 
     async def _decide_reply_intent(
         self,

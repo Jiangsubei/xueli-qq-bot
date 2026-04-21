@@ -123,16 +123,8 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_group_segments_uses_reply_action(self) -> None:
         bot, adapter = self._build_bot()
 
-        await bot._send_group_segments(100, [MessageSegment.image("emoji.png")])
-
-        action = adapter.actions[-1]
-        self.assertIsInstance(action, ReplyAction)
-        self.assertEqual(action.session.scope, "group")
-        self.assertEqual(action.session.channel_id, "100")
-        self.assertEqual(
-            action.segments,
-            ({"type": "image", "data": {"file": "emoji.png"}},),
-        )
+        with self.assertRaises(SendError):
+            await bot._send_group_segments(100, [MessageSegment.image("emoji.png")])
 
     async def test_send_private_msg_uses_platform_neutral_fallback_platform(self) -> None:
         bot, adapter = self._build_bot(platform="api", adapter_name="openapi")

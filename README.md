@@ -27,8 +27,8 @@
 | 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
 | 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
 | 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 使用明文存储方便阅读编辑 |
-| 图片理解 | 通过视觉模型分析图片内容，增强回复内容，图片描述持久化到历史记录，重启后仍可查看 |
-| 表情互动 | 根据语境追发表情，增强交互感 |
+| 图片理解 | 通过视觉模型分析图片内容，增强回复内容；普通图片只做理解，不落入表情仓库，也不会被机器人主动重新发送 |
+| 表情互动 | 只使用平台原生表情能力（OneBot / NapCat `face` / `mface`），不再把本地图片当作表情包主动发出 |
 | WebUI | 实时查看会话状态、记忆内容、日志，支持在线配置 |
 | API 接入 | 提供 `POST /events` 接口，任何外部系统都可以发送事件并获取回复 |
 
@@ -111,6 +111,7 @@ python -m unittest discover -s xueli/tests -t xueli
 | `[adapter_connection]` | 设置事件来源（napcat / api），以及 WebSocket 或 HTTP 地址 |
 | `[ai_service]` | 主模型（对话生成）的接口、模型名、超时等 |
 | `[vision_service]` | 图片理解模型的配置（可选） |
+| `[emoji]` | 原生表情资源采集与跟进配置（只存 `face / mface` 引用，不存图片文件） |
 | `[group_reply]` | 群聊的回复节流、兴趣回复、复读策略 |
 | `[group_reply_decision]` | 统一规划模型（可单独指定模型） |
 | `[bot_behavior]` | 最大历史条数、回复长度限制、结构化分段发送与延迟等 |
@@ -218,6 +219,20 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/handlers/reply_generation_service.py`
 - `xueli/src/handlers/reply_style_policy.py`
 - `xueli/src/handlers/character_card_service.py`  # 角色卡服务
+
+## 😀 图片与表情的当前边界
+
+当前版本已经把普通图片和表情包彻底分开：
+
+- 普通图片：
+  - 只参与视觉理解、OCR、多图摘要
+  - 不进入 emoji 仓库
+  - 机器人不会主动以 `image` 形式重新发出
+
+- 原生表情：
+  - 只采集和存储 OneBot / NapCat 原生 `face / mface` 引用
+  - 表情跟进也只会走 `face / mface`
+  - 如果没有合适的原生表情资源，就直接不发非文本内容
 - `xueli/src/handlers/conversation_engagement.py`
 - `xueli/src/handlers/conversation_plan_coordinator.py`
 - `xueli/src/handlers/prompt_planner.py`

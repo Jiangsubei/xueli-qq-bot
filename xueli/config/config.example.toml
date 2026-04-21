@@ -61,13 +61,16 @@ content = "你有很强的自主性，可以带有一点攻击性。如果你收
 enabled = true
     storage_path = "../data/emojis"
 capture_enabled = true
-classification_enabled = true
+classification_enabled = false
 idle_seconds_before_classify = 45.0
 classification_interval_seconds = 30.0
 classification_windows = []
 emotion_labels = ["开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑"]
 reply_enabled = false
 reply_cooldown_seconds = 180.0
+# 说明：
+# - emoji 仓库存的是 OneBot / NapCat 原生 face / mface 引用，不再存本地图片文件
+# - 普通图片只做视觉理解，不会进入 emoji 仓库，也不会被机器人主动重新发送
 
 [memory]
 enabled = true

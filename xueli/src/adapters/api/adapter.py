@@ -6,8 +6,9 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 from src.adapters.base import PlatformAdapter, ProtocolAdapter
 from src.core.platform_models import (
     AttachmentRef,
-    ImageAction,
+    FaceAction,
     InboundEvent,
+    MfaceAction,
     OutgoingAction,
     PlatformCapabilities,
     ReplyAction,
@@ -129,14 +130,24 @@ class ApiAdapter(PlatformAdapter):
                 },
                 "metadata": dict(action.metadata or {}),
             }
-        if isinstance(action, ImageAction):
+        if isinstance(action, FaceAction):
             return {
-                "action": "image",
+                "action": "face",
                 "session": self._session_to_payload(action.session),
-                "image": {
-                    "url": action.image_url,
-                    "path": action.image_path,
-                    "caption": action.caption,
+                "face": {
+                    "id": action.face_id,
+                },
+                "metadata": dict(action.metadata or {}),
+            }
+        if isinstance(action, MfaceAction):
+            return {
+                "action": "mface",
+                "session": self._session_to_payload(action.session),
+                "mface": {
+                    "emoji_id": action.emoji_id,
+                    "emoji_package_id": action.emoji_package_id,
+                    "key": action.key,
+                    "summary": action.summary,
                 },
                 "metadata": dict(action.metadata or {}),
             }
@@ -188,6 +199,8 @@ class ApiAdapter(PlatformAdapter):
         return PlatformCapabilities(
             supports_text=bool(payload.get("supports_text", True)),
             supports_images=bool(payload.get("supports_images", False)),
+            supports_face=bool(payload.get("supports_face", False)),
+            supports_mface=bool(payload.get("supports_mface", False)),
             supports_quote_reply=bool(payload.get("supports_quote_reply", False)),
             supports_groups=bool(payload.get("supports_groups", False)),
             supports_message_edit=bool(payload.get("supports_message_edit", False)),

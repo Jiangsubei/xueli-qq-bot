@@ -679,6 +679,8 @@ class MessageHandler:
 
         if event.user_id == event.self_id:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "机器人自己的消息，跳过处理")
+        if self.emoji_manager is not None:
+            await self.emoji_manager.capture_native_emoji_references(event=event)
         if event.message_type == MessageType.PRIVATE.value:
             return await self._plan_private_message(event, trace_id=trace_id)
         if event.message_type != MessageType.GROUP.value:
@@ -1103,10 +1105,13 @@ class MessageHandler:
             trace_id=str((plan.reply_context or {}).get("trace_id") or ""),
         )
 
-    async def get_emoji_follow_up_image_path(self, selection) -> Optional[str]:
+    def build_emoji_follow_up_action(self, selection, session):
         if not self.emoji_reply_service or not selection:
             return None
-        return await self.emoji_reply_service.get_image_path(selection)
+        return self.emoji_reply_service.build_follow_up_action(
+            selection=selection,
+            session=session,
+        )
 
     async def mark_emoji_follow_up_sent(self, event: MessageEvent, selection) -> None:
         if self.emoji_reply_service and selection:
