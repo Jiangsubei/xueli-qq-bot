@@ -57,6 +57,7 @@ class BotRuntime:
         self._closed = False
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
+        self._processed_message_ids: set = set()
         self._message_pipeline = SessionMessagePipeline(on_state_change=self._on_pipeline_state_change)
         self._model_router = ModelInvocationRouter(
             base_timeout_seconds=max(1, int(self.config.app.bot_behavior.response_timeout or 60)),
@@ -180,6 +181,14 @@ class BotRuntime:
         self._sync_runtime_counters()
 
     async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
+        msg_id = getattr(event, "message_id", 0)
+        if not hasattr(self, "_processed_message_ids"):
+            self._processed_message_ids = set()
+        if msg_id in self._processed_message_ids:
+            logger.warning("跳过重复消息: message_id=%s", msg_id)
+            return
+        self._processed_message_ids.add(msg_id)
+
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
         plan = None
