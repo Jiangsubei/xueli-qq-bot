@@ -458,6 +458,9 @@ class SQLiteConversationStore:
         session.metadata["latest_message_id"] = str(message_id or "")
         session.dirty_turns += 1
 
+        # 每轮立即写入 SQLite，不等待会话关闭
+        self._persist_turn_sync(session)
+
         closed_user_id = ""
         if closed_session_id:
             closed_session = self._sessions.get(closed_session_id)
@@ -563,7 +566,83 @@ class SQLiteConversationStore:
 
             return await self._persist_session(session)
 
+    def _persist_turn_sync(self, session: ConversationRecord) -> None:
+        """同步地将当前 session 的最新一条 turn 写入 SQLite（每轮立即持久化）。"""
+        if not session.turns:
+            return
+        import sqlite3
+        conn = None
+        try:
+            conn = self._connection()
+            # 只写入 conversations 表的元数据（upsert）
+            metadata_json = json.dumps(session.metadata or {}, ensure_ascii=False)
+            closed_at = session.closed_at or _now_iso()
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO conversations
+                (session_id, dialogue_key, user_id, message_type, group_id,
+                 started_at, updated_at, closed_at, turn_count, latest_message_id, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session.session_id,
+                    session.dialogue_key,
+                    session.user_id,
+                    session.message_type,
+                    session.group_id,
+                    session.started_at,
+                    session.updated_at,
+                    closed_at,
+                    session.turn_count,
+                    session.metadata.get("latest_message_id", ""),
+                    metadata_json,
+                ),
+            )
+            # 只写入最新的那条 turn
+            turn = session.turns[-1]
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO conversation_turns
+                (turn_id, session_id, user, assistant, timestamp,
+                 source_message_id, source_group_id, owner_user_id,
+                 source_message_type, dialogue_key, image_description)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    turn.turn_id,
+                    session.session_id,
+                    turn.user,
+                    turn.assistant,
+                    turn.timestamp,
+                    turn.source_message_id,
+                    turn.source_group_id,
+                    turn.owner_user_id,
+                    turn.source_message_type,
+                    turn.dialogue_key,
+                    turn.image_description,
+                ),
+            )
+            conn.commit()
+            logger.debug(
+                "对话轮次已写入DB：用户=%s，会话=%s，轮次=%s",
+                session.user_id,
+                session.session_id,
+                turn.turn_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "保存对话轮次失败：用户=%s，会话=%s，错误=%s",
+                session.user_id,
+                session.session_id,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            if conn:
+                conn.close()
+
     async def _persist_session(self, session: ConversationRecord) -> Optional[ConversationRecord]:
+        """完整持久化 session（会话关闭时调用，写入所有 turns）。"""
         import sqlite3
         owner_user_id = str(session.user_id or "")
         metadata_json = json.dumps(session.metadata or {}, ensure_ascii=False)

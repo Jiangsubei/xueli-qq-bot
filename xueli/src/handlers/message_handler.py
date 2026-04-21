@@ -398,6 +398,12 @@ class MessageHandler:
         self._sync_active_conversations_metric()
         return conversation
 
+    async def _get_or_restore_conversation(self, key: str) -> Conversation:
+        """获取会话，新建时同步从数据库恢复历史消息。"""
+        conversation = await self.session_manager.get_or_restore(key)
+        self._sync_active_conversations_metric()
+        return conversation
+
     async def _clean_expired_conversations(self) -> None:
         self._ensure_extended_services()
         self.session_manager.clean_expired()

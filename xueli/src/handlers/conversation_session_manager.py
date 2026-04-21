@@ -38,6 +38,16 @@ class ConversationSessionManager:
             self._conversations[key] = conversation
         return conversation
 
+    async def get_or_restore(self, key: str) -> Conversation:
+        """获取会话，若为新建空会话则从数据库恢复历史消息（供异步上下文调用）。"""
+        conversation = self._conversations.get(key)
+        if conversation is None:
+            conversation = Conversation()
+            self._conversations[key] = conversation
+        if not conversation.messages and self._conversation_store:
+            await self.restore(conversation, key)
+        return conversation
+
     def clear(self, key: str) -> bool:
         if key not in self._conversations:
             return False

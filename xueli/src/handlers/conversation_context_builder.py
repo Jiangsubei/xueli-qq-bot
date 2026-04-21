@@ -38,7 +38,7 @@ class ConversationContextBuilder:
         user_message = str(reply_context.get("merged_user_message") or self.host.extract_user_message(context_event)).strip()
         execution_key = get_execution_key(context_event)
         conversation_key = self.host._get_conversation_key(context_event)
-        conversation = self.host._get_conversation(conversation_key)
+        conversation = await self.host._get_or_restore_conversation(conversation_key)
         window_messages = list(reply_context.get("window_messages") or [])
         temporal_context = self.host._build_temporal_context(
             event=context_event,
