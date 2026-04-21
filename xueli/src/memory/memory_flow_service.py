@@ -40,7 +40,9 @@ class MemoryFlowService:
         prepared: "PreparedReplyRequest",
         reply_text: str,
     ) -> None:
-        if not self.memory_manager or not str(prepared.original_user_message or "").strip():
+        has_text = bool(str(prepared.original_user_message or "").strip())
+        has_image = bool(prepared.base64_images)
+        if not self.memory_manager or (not has_text and not has_image):
             return
         try:
             dialogue_key = host._get_conversation_key(event)

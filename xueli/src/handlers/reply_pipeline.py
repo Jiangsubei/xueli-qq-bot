@@ -252,9 +252,6 @@ class ReplyPipeline:
                 prepared.system_prompt or "[空]",
             )
             return
-        formatter = getattr(self.host, "_format_system_prompt_log_with_history", None)
-        if callable(formatter):
-            logger.info(formatter(event, prepared.messages, title=f"[FULL PROMPT][sections={','.join(prepared.active_sections)}]", trace_id=trace_id))
         else:
             logger.info("[FULL PROMPT]\ntrace=%s\n%s", trace_id, prepared.system_prompt or "[空]")
 
