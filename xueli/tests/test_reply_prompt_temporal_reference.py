@@ -16,7 +16,7 @@ class _Host:
 
 
 class ReplyPromptTemporalReferenceTests(unittest.TestCase):
-    def test_continuity_section_exposes_session_gap_and_planner_reference(self) -> None:
+    def test_continuity_section_only_shows_continuity_mode(self) -> None:
         renderer = ReplyPromptRenderer(_Host())
         event = MessageEvent.from_dict(
             {
@@ -44,19 +44,18 @@ class ReplyPromptTemporalReferenceTests(unittest.TestCase):
         rendered = renderer.render(
             event=event,
             message_context=context,
-            prompt_plan=PromptPlan(),
+            prompt_plan=PromptPlan(reply_goal="continue", continuity_mode="resume_recent_topic", notes="像重新接上话题"),
             current_message="早上好",
             planner_reason="适合直接回应",
         )
 
-        self.assertIn("最近消息时间分层：immediate", rendered.system_prompt)
-        self.assertIn("上一轮会话时间分层：long_resume", rendered.system_prompt)
-        self.assertIn("连续性标签：resume_after_break", rendered.system_prompt)
-        self.assertIn("上一轮会话时间语义：", rendered.system_prompt)
-        self.assertIn("重新接上", rendered.system_prompt)
-        self.assertIn("规划参考：", rendered.system_prompt)
-        self.assertIn("简单回一句早安", rendered.system_prompt)
-        self.assertIn("不要照抄", rendered.system_prompt)
+        self.assertIn("回复目标：continue", rendered.system_prompt)
+        self.assertIn("连续性策略：resume_recent_topic", rendered.system_prompt)
+        self.assertIn("像重新接上话题", rendered.system_prompt)
+        # No code-computed bucket info in prompt
+        self.assertNotIn("最近消息时间分层", rendered.system_prompt)
+        self.assertNotIn("连续性标签", rendered.system_prompt)
+        self.assertNotIn("上一轮会话时间", rendered.system_prompt)
 
 
 if __name__ == "__main__":

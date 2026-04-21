@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig, config, is_group_reply_decision_configured
@@ -118,20 +119,22 @@ class ConversationPlanner:
                 else f"用户 {self._format_identity_label(item.get('user_id'), str(item.get('speaker_name') or ''))}"
             )
             text = self._window_display_text(item)
-            lines.append(f"{speaker}: {text}")
+            event_time = float(item.get("event_time") or 0)
+            time_str = datetime.fromtimestamp(event_time).strftime("%m-%d %H:%M") if event_time > 0 else "?"
+            lines.append(f"[{time_str}] {speaker}: {text}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
-                lines.append(f"图片摘要: {merged_description}")
+                lines.append(f"  图片摘要: {merged_description}")
             for image_index, description in enumerate(item.get("per_image_descriptions") or [], 1):
-                lines.append(f"第{image_index}张图片: {description}")
+                lines.append(f"  第{image_index}张图片: {description}")
             if item.get("has_image") and not item.get("vision_available"):
                 failure_count = int(item.get("vision_failure_count", 0) or 0)
                 if failure_count > 0:
-                    lines.append(f"图片理解失败数: {failure_count}")
+                    lines.append(f"  图片理解失败数: {failure_count}")
                 vision_error = str(item.get("vision_error") or "").strip()
                 if vision_error:
-                    lines.append(f"图片理解错误: {vision_error}")
+                    lines.append(f"  图片理解错误: {vision_error}")
         return "\n".join(lines)
 
     def _window_display_text(self, item: Dict[str, Any]) -> str:
@@ -210,17 +213,7 @@ class ConversationPlanner:
         return self._format_identity_label(event.user_id, event.get_sender_display_name())
 
     def _build_companionship_hint_block(self, context: Optional[MessageContext]) -> str:
-        signals = dict(getattr(context, "planning_signals", {}) or {}) if context else {}
-        hints: List[str] = []
-        if bool(signals.get("care_cue_detected")):
-            hints.append("- 观察到当前消息可能包含状态或情绪暴露倾向")
-        if bool(signals.get("continuation_cue_detected")):
-            hints.append("- 观察到当前消息可能在顺着刚才的话题往下说")
-        if bool(signals.get("follow_up_after_assistant")):
-            hints.append("- 观察到用户像是在顺着助手上一句继续聊")
-        if not hints:
-            return ""
-        return "附加观察：\n" + "\n".join(hints)
+        return ""
 
     def _build_user_prompt(
         self,
@@ -255,22 +248,6 @@ class ConversationPlanner:
         ]
         mentioned_names_text = "、".join(mentioned_names) if mentioned_names else "无"
         recent_history_text = context.recent_history_text if context and context.recent_history_text else self._build_recent_history_text(window_messages)
-        temporal_summary = str((context.temporal_context.summary_text if context else "") or "").strip() or "当前缺少足够的时间跨度信息来判断对话连续性。"
-        temporal_context = context.temporal_context if context else None
-        planning_signals = dict(getattr(context, "planning_signals", {}) or {}) if context else {}
-        temporal_lines = [f"时间观察：{temporal_summary}"]
-        if temporal_context:
-            temporal_lines.append(f"最近消息时间分层：{str(temporal_context.recent_gap_bucket or 'unknown')}")
-            temporal_lines.append(f"当前会话时间分层：{str(temporal_context.conversation_gap_bucket or 'unknown')}")
-            if str(temporal_context.session_gap_bucket or "unknown") != "unknown":
-                temporal_lines.append(f"上一轮会话时间分层：{str(temporal_context.session_gap_bucket)}")
-            temporal_lines.append(f"连续性信号标签：{str(temporal_context.continuity_hint or 'unknown')}")
-        temporal_block = "\n".join(temporal_lines)
-        signal_lines = []
-        for key, value in planning_signals.items():
-            signal_lines.append(f"- {key}: {value}")
-        signal_block = "\n".join(signal_lines) if signal_lines else "- 无"
-        companionship_hint_block = self._build_companionship_hint_block(context)
 
         image_context_lines = []
         if has_image_flag:
@@ -289,17 +266,14 @@ class ConversationPlanner:
                 "下面是当前这条私聊消息的判断上下文。",
                 f"当前会话：\n这是和用户 {sender_label} 的私聊。",
                 f"当前消息来自用户 {sender_label}：\n{planner_text}",
-                f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n" + "\n".join(image_context_lines) + f"\n{temporal_block}",
-                "运行时观察信号：\n" + signal_block,
+                f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n" + "\n".join(image_context_lines),
             ]
-            if companionship_hint_block:
-                parts.append(companionship_hint_block)
             parts.extend(
                 [
                     recent_history_text,
                     "补充判断提醒：\n"
-                    "- 上面的时间和上下文信息只是观察结果，不是最终结论\n"
-                    "- 如果运行时信号显示用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
+                    "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
+                    "- 如果用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
                     "- 只有在明显无需响应时才考虑 ignore\n"
                     "- 如果你选择 reply，请同时输出 prompt_plan，告诉下游回复模型该启用哪些上下文层\n"
                     "- 如果你选择 reply，请额外提供一段自然语言 reply_reference，告诉下游回复模型这次更适合怎么接话，但不要直接替它写完整回复\n"
@@ -312,16 +286,13 @@ class ConversationPlanner:
             "下面是当前这条群消息的判断上下文。",
             f"当前会话：\n这是群 {event.group_id} 里的消息。",
             f"当前消息来自用户 {sender_label}：\n{planner_text}",
-            f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n消息里提到了这些名字或别名：{mentioned_names_text}\n" + "\n".join(image_context_lines) + f"\n{temporal_block}",
-            "运行时观察信号：\n" + signal_block,
+            f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n消息里提到了这些名字或别名：{mentioned_names_text}\n" + "\n".join(image_context_lines),
         ]
-        if companionship_hint_block:
-            parts.append(companionship_hint_block)
         parts.extend(
             [
                 recent_history_text,
                 "补充判断提醒：\n"
-                "- 上面的最近群聊记录和时间信息只是帮助你判断当前消息的语境\n"
+                "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
                 "- 请围绕当前消息做判断，不要把前面的话当成当前要回复的内容\n"
                 "- 如果最近记录显示助手刚刚接过话，这只是一个事实信号，不代表一定不能再回\n"
                 "- 如果你选择 reply，请同时输出 prompt_plan，告诉下游回复模型该启用哪些上下文层\n"

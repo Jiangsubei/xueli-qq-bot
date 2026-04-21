@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from src.adapters.base import ProtocolAdapter
 
 from src.core.models import MessageEvent, MessageSegment, MessageType
 from src.core.platform_models import AttachmentRef, InboundEvent, PlatformCapabilities, SenderRef, SessionRef
@@ -84,6 +87,7 @@ def normalize_onebot_message_event(
     *,
     platform: str = "qq",
     adapter: str = "napcat",
+    protocol_adapter: "ProtocolAdapter | None" = None,
 ) -> InboundEvent:
     segments = list(event.message or [])
     normalized_segments: Tuple[Dict[str, Any], ...] = tuple(_segment_to_payload(segment) for segment in segments)
@@ -94,6 +98,12 @@ def normalize_onebot_message_event(
     )
     mentioned_user_ids = tuple(str(user_id) for user_id in event.get_at_qqs())
 
+    raw_text = event.extract_text()
+    if protocol_adapter is not None:
+        clean_text = protocol_adapter.strip_mentions(raw_text)
+    else:
+        clean_text = raw_text
+
     return InboundEvent(
         platform=platform,
         adapter=adapter,
@@ -101,7 +111,7 @@ def normalize_onebot_message_event(
         message_kind=_resolve_message_kind(segments),
         session=_build_session(event, platform=platform),
         sender=_build_sender(event),
-        text=event.extract_text(),
+        text=clean_text,
         message_id=str(event.message_id or ""),
         reply_to_message_id=_extract_reply_to_message_id(segments),
         segments=normalized_segments,
@@ -128,8 +138,9 @@ def attach_normalized_onebot_event(
     *,
     platform: str = "qq",
     adapter: str = "napcat",
+    protocol_adapter: "ProtocolAdapter | None" = None,
 ) -> InboundEvent:
-    inbound_event = normalize_onebot_message_event(event, platform=platform, adapter=adapter)
+    inbound_event = normalize_onebot_message_event(event, platform=platform, adapter=adapter, protocol_adapter=protocol_adapter)
     setattr(event, _INBOUND_EVENT_ATTR, inbound_event)
     return inbound_event
 
@@ -173,8 +184,9 @@ def get_or_normalize_onebot_inbound_event(
     *,
     platform: str = "qq",
     adapter: str = "napcat",
+    protocol_adapter: "ProtocolAdapter | None" = None,
 ) -> InboundEvent:
     inbound_event = get_attached_inbound_event(event)
     if inbound_event is not None:
         return inbound_event
-    return attach_normalized_onebot_event(event, platform=platform, adapter=adapter)
+    return attach_normalized_onebot_event(event, platform=platform, adapter=adapter, protocol_adapter=protocol_adapter)

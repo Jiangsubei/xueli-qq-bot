@@ -142,7 +142,7 @@ class PromptPlanner:
             and context is not None
             and bool(getattr(context, "is_first_turn", False))
             and continuity_hint in {"unknown", "strong_continuation"}
-            and not bool(signals.get("follow_up_after_assistant"))
+            and not bool(signals.get("follows_assistant_recently"))
         ):
             continuity_mode = "resume_recent_topic"
         timeline_detail = "summary"
@@ -172,8 +172,8 @@ class PromptPlanner:
         initiative = "reactive" if chat_mode == "group" else "gentle_follow"
         if reply_goal in {"continue", "recall"}:
             initiative = "gentle_follow"
-        if bool(signals.get("follow_up_after_assistant")):
-            initiative = "proactive_follow" if chat_mode == "private" else "gentle_follow"
+        if bool(signals.get("follows_assistant_recently")) and chat_mode == "private":
+            initiative = "proactive_follow"
         expression_profile = "plain"
         if reply_goal == "comfort":
             expression_profile = "companion"
@@ -205,14 +205,10 @@ class PromptPlanner:
         )
 
     def _default_reply_goal(self, *, chat_mode: str, continuity_hint: str, signals: Dict[str, Any]) -> str:
-        if bool(signals.get("care_cue_detected")):
-            return "comfort"
-        if bool(signals.get("follow_up_after_assistant")):
-            return "continue"
-        if bool(signals.get("continuation_cue_detected")) and continuity_hint in {"soft_continuation", "strong_continuation"}:
-            return "continue"
         if continuity_hint == "old_topic_resume":
             return "recall"
+        if bool(signals.get("follows_assistant_recently")):
+            return "continue"
         if chat_mode == "group":
             return "light_presence"
         return "answer"

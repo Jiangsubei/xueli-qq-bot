@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from src.core.config import PlanningWindowConfig
 from src.core.message_trace import get_execution_key
 from src.core.models import MessageEvent
-from src.handlers.conversation_engagement import build_companionship_signals
+from src.handlers.conversation_engagement import build_message_observations
 from src.handlers.conversation_window_models import BufferedWindow, WindowDispatchResult
 from src.handlers.conversation_window_scheduler import ConversationWindowScheduler
 
@@ -208,7 +208,7 @@ class PlanningWindowService:
             "conversation_turn_count": len(conversation.messages),
         }
         signals.update(
-            build_companionship_signals(
+            build_message_observations(
                 text,
                 current_user_id=event.user_id,
                 previous_speaker_role=previous_role,

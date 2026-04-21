@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from src.core.message_trace import get_execution_key
 from src.core.models import CharacterCardSnapshot, ConversationContextItem
-from src.handlers.conversation_engagement import build_companionship_signals
+from src.handlers.conversation_engagement import build_message_observations
 from src.handlers.conversation_timeline_formatter import ConversationTimelineFormatter
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_style_policy import ReplyStylePolicy
@@ -93,7 +93,7 @@ class ConversationContextBuilder:
             previous_user_id = str(context_event.user_id)
             if conversation.messages:
                 previous_role = str(conversation.messages[-1].get("role") or "").strip().lower()
-            planning_signals = build_companionship_signals(
+            planning_signals = build_message_observations(
                 user_message,
                 current_user_id=context_event.user_id,
                 previous_speaker_role=previous_role,

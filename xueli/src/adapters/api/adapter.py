@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
-from src.adapters.base import PlatformAdapter
+from src.adapters.base import PlatformAdapter, ProtocolAdapter
 from src.core.platform_models import (
     AttachmentRef,
     ImageAction,
@@ -14,9 +14,20 @@ from src.core.platform_models import (
     SenderRef,
     SessionRef,
 )
+from src.core.models import MessageEvent
 
 PayloadEmitter = Callable[[Dict[str, Any]], Awaitable[bool] | bool | None]
 LifecycleHook = Callable[[], Awaitable[None] | None]
+
+
+class _NoOpProtocolAdapter(ProtocolAdapter):
+    """No-op protocol adapter for API platform — text is already clean."""
+
+    def strip_mentions(self, text: str) -> str:
+        return text
+
+    def extract_mentions(self, event: MessageEvent) -> List[str]:
+        return []
 
 
 class ApiAdapter(PlatformAdapter):
@@ -35,6 +46,7 @@ class ApiAdapter(PlatformAdapter):
         self._on_disconnect = on_disconnect
         self._ready = True
         self.sent_payloads: list[Dict[str, Any]] = []
+        self._protocol = _NoOpProtocolAdapter()
 
     async def run(self) -> None:
         self._ready = True
@@ -59,6 +71,9 @@ class ApiAdapter(PlatformAdapter):
 
     def is_ready(self) -> bool:
         return self._ready
+
+    def as_protocol_adapter(self) -> ProtocolAdapter:
+        return self._protocol
 
     async def _run_hook(self, hook: Optional[LifecycleHook]) -> None:
         if hook is None:

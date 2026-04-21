@@ -42,7 +42,7 @@ class PromptPlannerTests(unittest.TestCase):
         self.assertTrue(plan.policy.include_session_restore)
         self.assertTrue(plan.policy.include_precise_recall)
 
-    def test_default_prompt_plan_uses_comfort_goal_when_context_shows_care_cue(self) -> None:
+    def test_default_prompt_plan_falls_back_to_answer_for_private_greeting_without_signals(self) -> None:
         planner = PromptPlanner()
         event = MessageEvent.from_dict(
             {
@@ -51,11 +51,15 @@ class PromptPlannerTests(unittest.TestCase):
                 "message_id": 2,
                 "user_id": 42,
                 "self_id": 999,
-                "raw_message": "我今天有点累",
-                "message": [{"type": "text", "data": {"text": "我今天有点累"}}],
+                "raw_message": "你好呀",
+                "message": [{"type": "text", "data": {"text": "你好呀"}}],
             }
         )
-        context = MessageContext(planning_signals={"care_cue_detected": True})
+        context = MessageContext(
+            planning_signals={},
+            is_first_turn=True,
+            temporal_context=TemporalContext(continuity_hint="unknown"),
+        )
 
         plan = planner.default_prompt_plan(
             event=event,
@@ -63,10 +67,8 @@ class PromptPlannerTests(unittest.TestCase):
             context=context,
         )
 
-        self.assertEqual(plan.reply_goal, "comfort")
-        self.assertEqual(plan.tone_profile, "warm")
-        self.assertEqual(plan.expression_profile, "companion")
-        self.assertIn("先轻轻接住", plan.notes)
+        self.assertEqual(plan.reply_goal, "answer")
+        self.assertEqual(plan.continuity_mode, "resume_recent_topic")
 
     def test_default_prompt_plan_uses_continue_goal_for_follow_up(self) -> None:
         planner = PromptPlanner()
@@ -82,7 +84,7 @@ class PromptPlannerTests(unittest.TestCase):
                 "message": [{"type": "text", "data": {"text": "然后呢"}}],
             }
         )
-        context = MessageContext(planning_signals={"follow_up_after_assistant": True})
+        context = MessageContext(planning_signals={"follows_assistant_recently": True})
 
         plan = planner.default_prompt_plan(
             event=event,

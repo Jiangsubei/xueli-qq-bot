@@ -14,7 +14,7 @@ class ReplyStylePolicyTests(unittest.TestCase):
             temporal_context=TemporalContext(),
             chat_mode="private",
             planner_reason="对方状态不太好",
-            planning_signals={"care_cue_detected": True},
+            planning_signals={},
         )
 
         self.assertIn("先轻轻接住", guide.warmth_guidance)

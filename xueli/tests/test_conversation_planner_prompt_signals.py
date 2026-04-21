@@ -8,7 +8,7 @@ from src.handlers.message_context import MessageContext
 
 
 class ConversationPlannerPromptSignalTests(unittest.TestCase):
-    def test_user_prompt_exposes_temporal_buckets_as_signals(self) -> None:
+    def test_user_prompt_excludes_temporal_buckets(self) -> None:
         planner = ConversationPlanner(ai_client=object())
         event = MessageEvent.from_dict(
             {
@@ -41,12 +41,14 @@ class ConversationPlannerPromptSignalTests(unittest.TestCase):
             context=context,
         )
 
-        self.assertIn("最近消息时间分层：short_resume", prompt)
-        self.assertIn("上一轮会话时间分层：long_resume", prompt)
-        self.assertIn("连续性信号标签：old_topic_resume", prompt)
-        self.assertNotIn("更积极地考虑", prompt)
+        # No code-level temporal buckets in prompt
+        self.assertNotIn("最近消息时间分层", prompt)
+        self.assertNotIn("连续性标签", prompt)
+        self.assertNotIn("上一轮会话时间", prompt)
+        # Model judges continuity itself from timestamps in history text
+        self.assertIn("最近历史", prompt)
 
-    def test_user_prompt_exposes_factual_signal_observations(self) -> None:
+    def test_user_prompt_excludes_observation_signals(self) -> None:
         planner = ConversationPlanner(ai_client=object())
         event = MessageEvent.from_dict(
             {
@@ -65,8 +67,9 @@ class ConversationPlannerPromptSignalTests(unittest.TestCase):
             current_sender_label="42（Group User）",
             recent_history_text="最近历史",
             planning_signals={
-                "continuation_cue_detected": True,
-                "follow_up_after_assistant": True,
+                "is_continuation_candidate": True,
+                "follows_assistant_recently": True,
+                "message_length_bucket": "short",
             },
         )
 
@@ -77,9 +80,10 @@ class ConversationPlannerPromptSignalTests(unittest.TestCase):
             context=context,
         )
 
-        self.assertIn("附加观察", prompt)
-        self.assertIn("可能在顺着刚才的话题往下说", prompt)
-        self.assertIn("像是在顺着助手上一句继续聊", prompt)
+        # No code-level signals passed to planner — model decides from timestamped history
+        self.assertNotIn("is_continuation_candidate", prompt)
+        self.assertNotIn("follows_assistant_recently", prompt)
+        self.assertNotIn("运行时观察信号", prompt)
 
     def test_parse_plan_keeps_reply_reference(self) -> None:
         planner = ConversationPlanner(ai_client=object())

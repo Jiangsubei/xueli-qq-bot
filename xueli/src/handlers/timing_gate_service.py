@@ -95,26 +95,13 @@ class TimingGateService:
         )
 
     def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
-        temporal = context.temporal_context
         lines = [
             f"当前消息类型：{getattr(event, 'message_type', '') or 'private'}",
-            f"planner_action：{getattr(plan, 'action', '')}",
-            f"planner_reason：{getattr(plan, 'reason', '')}",
+            f"planner决定：{getattr(plan, 'reason', '')}",
             f"当前消息：{context.user_message}",
-            f"最近消息时间分层：{str(getattr(temporal, 'recent_gap_bucket', 'unknown') or 'unknown')}",
-            f"当前会话时间分层：{str(getattr(temporal, 'conversation_gap_bucket', 'unknown') or 'unknown')}",
-            f"上一轮会话时间分层：{str(getattr(temporal, 'session_gap_bucket', 'unknown') or 'unknown')}",
-            f"连续性标签：{str(getattr(temporal, 'continuity_hint', 'unknown') or 'unknown')}",
-            f"时间线摘要：{context.rendered_timeline_summary or getattr(temporal, 'summary_text', '')}",
-            "运行时信号：",
         ]
-        signals = dict(context.planning_signals or {})
-        if signals:
-            lines.extend(f"- {key}: {value}" for key, value in signals.items())
-        else:
-            lines.append("- 无")
         if context.rendered_recent_history:
-            lines.append("最近上下文：")
+            lines.append("聊天历史（含时间戳）：")
             lines.append(context.rendered_recent_history)
         return "\n".join(str(line or "").strip() for line in lines if str(line or "").strip())
 

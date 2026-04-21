@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 
 from src.handlers.temporal_context import build_temporal_context
@@ -54,6 +55,63 @@ class TemporalContextTests(unittest.TestCase):
 
         self.assertEqual(private_ctx.recent_gap_bucket, "very_recent")
         self.assertEqual(group_ctx.recent_gap_bucket, "recent")
+
+    def test_missing_time_fields_fallback_to_arrival_time(self) -> None:
+        """模拟 NapCat 未发 time 字段时，两消息都用 time.time() 作为 fallback 的情况。"""
+        now = time.time()
+        # 消息1：到达时间 now
+        # 消息2：3秒后到达，到达时间 now + 3
+        ctx = build_temporal_context(
+            current_event_time=now + 3,
+            previous_message_time=now,
+            conversation_last_time=now,
+        )
+        # 3秒 gap，私聊 < 60s → immediate → strong_continuation
+        self.assertEqual(ctx.recent_gap_bucket, "immediate")
+        self.assertEqual(ctx.continuity_hint, "strong_continuation")
+
+    def test_missing_time_fields_30s_gap_still_strong_continuation(self) -> None:
+        """30秒 gap，私聊阈值 60s，仍然是 strong_continuation。"""
+        now = time.time()
+        ctx = build_temporal_context(
+            current_event_time=now + 30,
+            previous_message_time=now,
+            conversation_last_time=now,
+        )
+        self.assertEqual(ctx.recent_gap_bucket, "immediate")
+        self.assertEqual(ctx.continuity_hint, "strong_continuation")
+
+    def test_missing_time_fields_90s_gap_still_strong_continuation(self) -> None:
+        """90秒 gap，私聊 very_recent(<600s) → strong_continuation。"""
+        now = time.time()
+        ctx = build_temporal_context(
+            current_event_time=now + 90,
+            previous_message_time=now,
+            conversation_last_time=now,
+        )
+        self.assertEqual(ctx.recent_gap_bucket, "very_recent")
+        self.assertEqual(ctx.continuity_hint, "strong_continuation")
+
+    def test_missing_time_fields_700s_gap_becomes_soft_continuation(self) -> None:
+        """700秒(≈12分钟) gap，私聊 very_recent 上界 600s → recent → soft_continuation。"""
+        now = time.time()
+        ctx = build_temporal_context(
+            current_event_time=now + 700,
+            previous_message_time=now,
+            conversation_last_time=now,
+        )
+        self.assertEqual(ctx.recent_gap_bucket, "recent")
+        self.assertEqual(ctx.continuity_hint, "soft_continuation")
+
+    def test_zero_previous_time_gives_unknown_bucket(self) -> None:
+        """previous_message_time = 0 表示没有历史时间，bucket 应为 unknown。"""
+        ctx = build_temporal_context(
+            current_event_time=1_000.0,
+            previous_message_time=0.0,
+            conversation_last_time=0.0,
+        )
+        self.assertEqual(ctx.recent_gap_bucket, "unknown")
+        self.assertEqual(ctx.continuity_hint, "unknown")
 
 
 if __name__ == "__main__":

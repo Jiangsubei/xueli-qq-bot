@@ -11,7 +11,7 @@ from src.core.message_trace import get_execution_key
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.runtime_metrics import RuntimeMetrics
-from src.handlers.conversation_engagement import build_companionship_signals
+from src.handlers.conversation_engagement import build_message_observations
 from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.message_context import MessageContext
@@ -666,7 +666,7 @@ class ConversationPlanCoordinator:
             (item for item in reversed(window_messages) if not item.get("is_latest")),
             {},
         )
-        signals = build_companionship_signals(
+        signals = build_message_observations(
             str(latest_message.get("text_content") or latest_message.get("display_text") or latest_message.get("text") or ""),
             current_user_id=latest_message.get("user_id"),
             previous_speaker_role=previous_message.get("speaker_role"),

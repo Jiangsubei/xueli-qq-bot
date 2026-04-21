@@ -143,7 +143,6 @@ class MessageHandler:
 
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
-        self.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
         self.private_batch_window_seconds = float(getattr(self.app_config.planning_window, "private_window_seconds", 1.2) or 0.0)
         self.group_proactive_window_seconds = float(getattr(self.app_config.planning_window, "group_proactive_window_seconds", 0.45) or 0.0)
         self.group_repeat_lock = asyncio.Lock()
@@ -215,6 +214,20 @@ class MessageHandler:
             self.private_batch_window_seconds = float(getattr(planning_window_config, "private_window_seconds", 1.2) or 0.0)
         if not hasattr(self, "group_proactive_window_seconds"):
             self.group_proactive_window_seconds = float(getattr(planning_window_config, "group_proactive_window_seconds", 0.45) or 0.0)
+
+    @property
+    def protocol_adapter(self) -> Any:
+        """Return the protocol adapter from the host, or a no-op if not available."""
+        host = getattr(self, "host", None)
+        if host is None:
+            return None
+        adapter = getattr(host, "protocol_adapter", None)
+        if adapter is not None:
+            return adapter
+        as_adapter = getattr(host, "as_protocol_adapter", None)
+        if as_adapter is not None:
+            return as_adapter()
+        return None
 
     def _should_label_memory_owner(self) -> bool:
         return self._get_memory_read_scope() == "global"
@@ -766,9 +779,6 @@ class MessageHandler:
 
     def extract_user_message(self, event: MessageEvent) -> str:
         text = self._get_event_text(event)
-        if event.message_type == MessageType.GROUP.value:
-            text = self.at_pattern.sub("", text)
-            text = text.replace(f"@{self._get_assistant_name()}", "")
         return text.strip()
 
     def _build_temporal_context(
@@ -791,11 +801,21 @@ class MessageHandler:
                 previous_message_time = float(normalize_event_time(previous_items[-1].get("event_time", 0.0)) or 0.0)
 
         if previous_message_time <= 0 and conversation.messages:
-            previous_message_time = float(conversation.last_update or 0.0)
+            # Use the second-to-last message as the actual "previous" message.
+            # conversation.messages[-1] is the current message (just added, its time == current_event_time),
+            # so last_update == current_event_time — we must skip it and get the real previous timestamp.
+            msgs = conversation.messages
+            if len(msgs) >= 2:
+                previous_message_time = float(msgs[-2].get("timestamp") or 0.0)
+            else:
+                previous_message_time = float(conversation.last_update or 0.0)
+
         if getattr(conversation, "restored_session_pending", False):
             previous_session_time = float(getattr(conversation, "restored_previous_session_time", 0.0) or 0.0)
-            if previous_message_time <= 0:
-                previous_message_time = float(getattr(conversation, "restored_last_message_time", 0.0) or 0.0)
+            # NOTE: previous_message_time already correctly reflects the last historical
+            # message's event time from conversation.messages[-2]. Do NOT overwrite it
+            # with session-level timestamps (restored_last_message_time / closed_at).
+            # previous_session_time is only used for session_gap_bucket calculation.
 
         return build_temporal_context(
             current_event_time=current_event_time,

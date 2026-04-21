@@ -64,11 +64,9 @@ class MessageSegment:
         return cls(type=data.get("type", ""), data=data.get("data", {}))
 
     def extract_text(self) -> str:
-        """提取消息段中的文本"""
+        """提取消息段中的纯文本。AT 提及段不产出可见文本（由 protocol adapter 负责去除）。"""
         if self.type == "text":
             return self.data.get("text", "")
-        elif self.type == "at":
-            return f"[@{self.data.get('qq', '')}]"
         return ""
 
     def is_image(self) -> bool:

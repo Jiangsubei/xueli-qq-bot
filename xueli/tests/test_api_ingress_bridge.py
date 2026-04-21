@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unittest
 
 from src.adapters.api.adapter import ApiAdapter
@@ -25,7 +24,6 @@ class ApiIngressBridgeTests(unittest.IsolatedAsyncioTestCase):
     def _build_handler(self) -> MessageHandler:
         handler = MessageHandler.__new__(MessageHandler)
         handler.session_manager = ConversationSessionManager()
-        handler.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
         handler.reply_pipeline = _ReplyPipelineStub()
         handler.vision_enabled = lambda: False
         handler._get_assistant_name = lambda: "雪梨"

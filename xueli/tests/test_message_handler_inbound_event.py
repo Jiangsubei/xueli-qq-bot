@@ -23,7 +23,6 @@ class MessageHandlerInboundEventTests(unittest.IsolatedAsyncioTestCase):
     def _build_handler(self) -> MessageHandler:
         handler = MessageHandler.__new__(MessageHandler)
         handler.session_manager = ConversationSessionManager()
-        handler.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
         handler.reply_pipeline = _ReplyPipelineStub()
         group_reply = type("_GroupReplyConfig", (), {"only_reply_when_at": True})()
         handler.app_config = type("_AppConfig", (), {"group_reply": group_reply})()

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import re
@@ -848,7 +849,9 @@ class ReplyPipeline:
         content = str(item.get("content") or "").strip()
         if not content:
             return ""
-        return f"{speaker}: {content}"
+        ts = float(item.get("timestamp") or 0.0)
+        time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts > 0 else "?"
+        return f"[{time_str}] {speaker}: {content}"
 
     def _build_group_window_history_lines(
         self,
@@ -882,21 +885,24 @@ class ReplyPipeline:
 
     def _format_window_message_for_model(self, item: Dict[str, Any], plan: Optional[MessageHandlingPlan] = None) -> str:
         speaker = self._window_speaker_label(item, plan)
+        ts = float(item.get("event_time") or 0.0)
+        time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts > 0 else "?"
+        prefix = f"[{time_str}] "
         text = self._window_display_text(item)
         if text:
-            return f"{speaker}: {text}"
+            return f"{prefix}{speaker}: {text}"
         merged_description = str(item.get("merged_description") or "").strip()
         if merged_description:
-            return f"{speaker}: 图片摘要: {merged_description}"
+            return f"{prefix}{speaker}: 图片摘要: {merged_description}"
         per_image_descriptions = [
             str(value).strip()
             for value in (item.get("per_image_descriptions") or [])
             if str(value).strip()
         ]
         if per_image_descriptions:
-            return f"{speaker}: 图片摘要: " + "；".join(per_image_descriptions)
+            return f"{prefix}{speaker}: 图片摘要: " + "；".join(per_image_descriptions)
         if bool(item.get("has_image")):
-            return f"{speaker}: [图片]"
+            return f"{prefix}{speaker}: [图片]"
         return ""
 
     def _window_display_text(self, item: Dict[str, Any]) -> str:

@@ -40,8 +40,6 @@ class ReplyStylePolicy:
             warmth_guidance = "群聊里保持轻一点的温度，不要过度投入或抢戏。"
         if reply_goal == "comfort":
             warmth_guidance = "先轻轻接住对方的状态，再决定是否补建议。"
-        elif bool(signals.get("care_cue_detected")):
-            warmth_guidance = "语气稍微柔一点，像自然接住对方当前状态。"
         if uncertainty_signals:
             warmth_guidance += " 这次保留一点余地，别把话说得太满。"
 
@@ -57,9 +55,9 @@ class ReplyStylePolicy:
         if normalized_mode == "group":
             tone_guidance = "群聊里优先轻、短、自然，不要像在发表长意见。"
         if reply_goal == "answer":
-            tone_guidance = "优先把问题答清楚，别为了陪聊把答案拖散。"
+            tone_guidance = "先轻接这个问题，再简洁作答，群聊里不要写成正式回答。"
         elif reply_goal == "clarify":
-            tone_guidance = "优先澄清和校正，表达干净，不要外延。"
+            tone_guidance = "先顺一下对方的梗，再简洁澄清，不要写成更正通知。"
         elif reply_goal == "recall":
             tone_guidance = "像自然想起之前聊过的事，不要背档案。"
         elif reply_goal == "light_presence":
@@ -67,18 +65,14 @@ class ReplyStylePolicy:
         elif reply_goal == "comfort":
             tone_guidance = "重点是接住情绪，少一点工具感和说教感。"
 
-        if continuity_hint == "old_topic_resume":
-            tone_guidance += " 这次像是隔了一段时间重新接上旧话题。"
-        elif continuity_hint == "resume_after_break":
-            tone_guidance += " 这次更像停了一阵后重新接上，不要写得像同一轮连着聊。"
         if uncertainty_signals:
             tone_guidance += " 表达更谨慎一点，像自然留有余地，而不是直接下结论。"
 
         expression_guidance = {
-            "plain": "措辞干净自然，不要故意装饰。",
-            "colloquial": "可以更口语一点，但别堆叠语气词。",
-            "companion": "可以更像陪伴式续聊，但不要模板化卖萌。",
-        }.get(expression_profile, "措辞干净自然，不要故意装饰。")
+            "plain": "像朋友随口说的那句话，干净自然，不装。",
+            "colloquial": "像饭桌上接话那样自然随意，口语但不聒噪。",
+            "companion": "像朋友间互相调侃那种语气，接地气但不在表演人设。",
+        }.get(expression_profile, "像朋友随口说的那句话，干净自然，不装。")
         if character_snapshot.tone_preferences:
             expression_guidance += f" 同时参考这些稳定偏好：{'；'.join(character_snapshot.tone_preferences)}。"
         if uncertainty_signals:
@@ -91,8 +85,6 @@ class ReplyStylePolicy:
             opening_style = "开头优先把问题正面接住，别绕圈。"
         elif reply_goal == "light_presence":
             opening_style = "开头轻轻回应当前消息，存在感够就收。"
-        elif continuity_hint == "resume_after_break":
-            opening_style = "开头像重新接上话题，不要假装一直在无缝连聊。"
 
         sentence_shape = "句子自然分成一两层，不要写成说明文。"
         if normalized_mode == "group":

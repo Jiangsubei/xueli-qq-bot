@@ -314,7 +314,6 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         handler.reply_pipeline = ReplyPipeline(handler)
         handler.last_send_time = {}
         handler.rate_limit_lock = asyncio.Lock()
-        handler.at_pattern = re.compile(r"\[CQ:at,qq=\d+\]")
         handler.private_batch_lock = asyncio.Lock()
         handler.private_batch_versions = defaultdict(int)
         handler.private_pending_inputs = defaultdict(list)
