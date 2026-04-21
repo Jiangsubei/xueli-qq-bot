@@ -103,9 +103,19 @@ class ReplyPromptRenderer:
 
     def _reply_target_section(self, *, event: Any, current_message: str) -> str:
         sender = "用户"
+        time_str = ""
         if event is not None:
             sender = str(getattr(event, "user_id", "") or "用户")
-        return f"当前要回复的目标消息来自 {sender}：\n{str(current_message or '').strip() or '[空]'}"
+            event_time = getattr(event, "time", None)
+            if event_time:
+                try:
+                    from datetime import datetime
+
+                    time_str = datetime.fromtimestamp(float(event_time)).strftime("%m-%d %H:%M")
+                except (ValueError, TypeError):
+                    pass
+        prefix = f"[{time_str}] " if time_str else ""
+        return f"当前要回复的目标消息来自 {sender}：\n{prefix}{str(current_message or '').strip() or '[空]'}"
 
     def _continuity_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:
         notes = str(getattr(prompt_plan, "notes", "") or "").strip()
