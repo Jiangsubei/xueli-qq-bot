@@ -113,6 +113,7 @@ class MessageHandler:
                 if self.vision_enabled()
                 else None
             ),
+            conversation_store=getattr(memory_manager, "conversation_store", None) if memory_manager else None,
         )
         self.command_handler = CommandHandler(
             self.session_manager,
@@ -176,11 +177,6 @@ class MessageHandler:
             return config.get_assistant_alias()
         return self.app_config.assistant_profile.alias.strip()
 
-    def _get_memory_read_scope(self) -> str:
-        if self.app_config is config.app:
-            return config.get_memory_read_scope()
-        return self.app_config.memory.read_scope
-
     def _get_memory_base_path(self) -> str:
         if self.memory_manager is not None and hasattr(self.memory_manager, "config"):
             base_path = str(getattr(self.memory_manager.config, "storage_base_path", "") or "").strip()
@@ -229,15 +225,8 @@ class MessageHandler:
             return as_adapter()
         return None
 
-    def _should_label_memory_owner(self) -> bool:
-        return self._get_memory_read_scope() == "global"
-
     def _format_memory_prompt_entry(self, content: str, owner_user_id: str = "") -> str:
-        text = str(content or "").strip()
-        owner = str(owner_user_id or "").strip()
-        if owner and self._should_label_memory_owner():
-            return f"[来源用户 {owner}] {text}"
-        return text
+        return str(content or "").strip()
 
     def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
         identifier = str(user_id or "").strip() or "unknown"
@@ -745,6 +734,7 @@ class MessageHandler:
             "window_event": event,
             "merged_user_message": str(window.merged_user_message or ""),
             "planning_signals": dict(window.planning_signals or {}),
+            "expires_at": float(window.expires_at or 0.0),
         }
 
     def _extract_dispatched_window_info(self, plan: Optional[MessageHandlingPlan]) -> tuple[str, int]:
@@ -759,7 +749,20 @@ class MessageHandler:
             return WindowDispatchResult(status="accepted_only", reason="no_window_dispatch")
         return await self.planning_window_service.mark_window_complete(conversation_key, seq)
 
+    def is_window_stale(self, window: BufferedWindow, *, now: Optional[float] = None) -> bool:
+        """检查窗口是否已过期（stale）。"""
+        if now is None:
+            now = time.time()
+        expires_at = float(window.expires_at or 0.0)
+        if expires_at > 0 and expires_at <= now:
+            return True
+        return False
+
     async def plan_dispatched_window(self, window: BufferedWindow, *, trace_id: str = "") -> tuple[MessageEvent, MessageHandlingPlan]:
+        # stale 检查：窗口已过期则不再处理
+        if self.is_window_stale(window):
+            logger.warning("窗口已过期，跳过处理：seq=%s opened_at=%s", window.seq, window.opened_at)
+            raise asyncio.CancelledError(f"window {window.seq} is stale")
         dispatch_event = window.latest_event if isinstance(window.latest_event, MessageEvent) else None
         if dispatch_event is None:
             raise ValueError("buffered window is missing latest_event")
@@ -995,6 +998,12 @@ class MessageHandler:
         plan: Optional[MessageHandlingPlan] = None,
         trace_id: str = "",
     ) -> ReplyResult:
+        # stale 检查：回复生成前检查窗口是否已过期
+        reply_context = dict(getattr(plan, "reply_context", None) or {})
+        window_expires_at = float(reply_context.get("expires_at", 0.0) or 0.0)
+        if window_expires_at > 0 and time.time() > window_expires_at:
+            logger.warning("回复生成前检测到窗口已过期：expires_at=%s", window_expires_at)
+            return ReplyResult(text="", segments=[], source="stale_suppressed")
         if plan and isinstance(plan.reply_context, dict):
             direct_reply_text = str(plan.reply_context.get("direct_reply_text") or "").strip()
             if direct_reply_text:

@@ -149,16 +149,14 @@ class BotBootstrapper:
         else:
             logger.warning("记忆提取模型不可用：专用模型与主模型均未配置完成")
         logger.info(
-            "记忆配置：自动提取=%s，每%s轮提取一次，读取范围=%s，重排模型=%s",
+            "记忆配置：自动提取=%s，每%s轮提取一次，重排模型=%s",
             memory_config.auto_extract,
             memory_config.extract_every_n_turns,
-            memory_config.read_scope,
             memory_rerank_client_config.get("model"),
         )
 
         manager_config = MemoryManagerConfig(
             storage_base_path=memory_config.storage_path,
-            memory_read_scope=memory_config.read_scope,
             retrieval_config=RetrievalConfig(
                 bm25_top_k=memory_config.bm25_top_k,
                 rerank_enabled=is_memory_rerank_configured(app_config),

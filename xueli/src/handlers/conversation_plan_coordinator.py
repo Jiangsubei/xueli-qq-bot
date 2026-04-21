@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.core.config import GroupReplyConfig, config
 from src.core.message_trace import get_execution_key
@@ -45,6 +44,7 @@ class ConversationPlanCoordinator:
         image_count_getter: Optional[ImageCountGetter] = None,
         image_file_ids_getter: Optional[ImageFileIdsGetter] = None,
         context_window_size: int = 10,
+        conversation_store: Optional[Any] = None,
     ) -> None:
         self.planner = planner
         self.session_manager = session_manager
@@ -57,17 +57,16 @@ class ConversationPlanCoordinator:
         self.image_count_getter = image_count_getter
         self.image_file_ids_getter = image_file_ids_getter
         self.context_window_size = max(0, int(context_window_size or 0))
+        self._conversation_store = conversation_store
 
         self.group_plan_locks: Dict[str, asyncio.Lock] = {}
         max_parallel = max(1, int(self.group_reply_config.plan_request_max_parallel or 1))
         self.group_plan_max_parallel = max_parallel
         self.group_plan_semaphore = asyncio.Semaphore(max_parallel)
 
-        self.group_message_history: Dict[str, Deque[Dict[str, Any]]] = {}
-        self._history_limit_floor = 50
-
     async def close(self) -> None:
-        self.group_message_history.clear()
+        """No-op: group history is persisted in SQLite; no in-memory state to clear."""
+        pass
 
     def build_planner_message_info(
         self,
@@ -190,7 +189,7 @@ class ConversationPlanCoordinator:
         trace_id: str = "",
     ) -> MessageContext:
         history_key = self._group_history_key(event)
-        history_items = self._get_recent_group_history(history_key)
+        history_items = await self._get_recent_group_history(history_key)
         current_message = await self._build_current_message(event=event, user_message=user_message, trace_id=trace_id)
         window_messages = self._compose_window_messages(history_items, current_message)
         execution_key = get_execution_key(event)
@@ -255,7 +254,7 @@ class ConversationPlanCoordinator:
             )
         finally:
             if window_messages:
-                self._record_group_user_message(group_id, window_messages[-1])
+                await self._record_group_user_message(group_id, window_messages[-1])
 
         reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
@@ -294,7 +293,7 @@ class ConversationPlanCoordinator:
             )
         finally:
             for item in list(window.messages or []):
-                self._record_group_user_message(group_id, item)
+                await self._record_group_user_message(group_id, item)
 
         reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
@@ -340,13 +339,13 @@ class ConversationPlanCoordinator:
             return reply_context
         finally:
             if window_messages:
-                self._record_group_user_message(group_id, window_messages[-1])
+                await self._record_group_user_message(group_id, window_messages[-1])
 
     async def record_assistant_reply(self, group_id: Optional[int], message: str) -> None:
         text = str(message or "").strip()
         if group_id is None or not text:
             return
-        group_key = str(group_id)
+        group_key = f"group:{group_id}"  # 与 add_turn 的 _dialogue_key 格式保持一致
         item = {
             "message_id": 0,
             "user_id": "",
@@ -374,7 +373,8 @@ class ConversationPlanCoordinator:
             "vision_source": "",
             "vision_error": "",
         }
-        self._append_group_history(group_key, item)
+        if self._conversation_store is not None:
+            await self._conversation_store.add_group_message(group_key, item)
 
     def _get_plan_request_interval(self) -> float:
         return max(0.0, float(self.group_reply_config.plan_request_interval or 0))
@@ -382,33 +382,20 @@ class ConversationPlanCoordinator:
     def _get_context_window_size(self) -> int:
         return self.context_window_size
 
-    def _max_history_buffer_size(self) -> int:
-        return max(self._history_limit_floor, self._get_context_window_size() + 10)
-
-    def _history_deque(self, group_id: str) -> Deque[Dict[str, Any]]:
-        history = self.group_message_history.get(group_id)
-        maxlen = self._max_history_buffer_size()
-        if history is None or history.maxlen != maxlen:
-            preserved = list(history or [])
-            history = deque(preserved[-maxlen:], maxlen=maxlen)
-            self.group_message_history[group_id] = history
-        return history
-
-    def _append_group_history(self, group_id: str, item: Dict[str, Any]) -> None:
-        self._history_deque(group_id).append(dict(item))
-
     def _event_time(self, event: MessageEvent) -> float:
         return normalize_event_time(getattr(event, "time", 0.0)) or time.time()
 
     def _message_event_time(self, item: Optional[Dict[str, Any]]) -> float:
         return normalize_event_time((item or {}).get("event_time", 0.0))
 
-    def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
+    async def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
         count = self._get_context_window_size()
         if count <= 0:
             return []
-        history = list(self._history_deque(group_id))
-        return [dict(item) for item in history[-count:]]
+        if self._conversation_store is None:
+            return []
+        messages = await self._conversation_store.get_recent_group_messages(group_id, limit=count)
+        return messages
 
     def _group_history_key(self, event: MessageEvent) -> str:
         inbound_event = get_attached_inbound_event(event)
@@ -526,10 +513,16 @@ class ConversationPlanCoordinator:
             window_messages.append(latest)
         return window_messages
 
-    def _record_group_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
+    async def _record_group_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
+        if self._conversation_store is None:
+            return
+        # group_id 是 _group_history_key(event) 的结果，格式为 "qq:group:{id}" 或 "group:{id}"
+        # 统一转换为 "group:{id}" 格式，与 add_turn 的 _dialogue_key 保持一致
+        parts = group_id.split(":")
+        normalized = f"group:{parts[-1]}" if parts[-1].isdigit() else group_id
         persisted = dict(current_message)
         persisted.pop("is_latest", None)
-        self._append_group_history(group_id, persisted)
+        await self._conversation_store.add_group_message(normalized, persisted)
 
     async def _build_buffered_window_context(
         self,
@@ -539,7 +532,7 @@ class ConversationPlanCoordinator:
         trace_id: str = "",
     ) -> MessageContext:
         history_key = self._group_history_key(event)
-        history_items = self._get_recent_group_history(history_key)
+        history_items = await self._get_recent_group_history(history_key)
         buffered_messages = await self._enrich_buffered_window_messages(list(window.messages or []), trace_id=trace_id)
         window_messages = self._compose_buffered_window_messages(history_items, buffered_messages)
         latest_message = next(

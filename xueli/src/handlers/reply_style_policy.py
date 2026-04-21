@@ -37,6 +37,8 @@ class ReplyStylePolicy:
 
         warmth_guidance = "保持自然礼貌，不要过冷。"
         if normalized_mode == "group":
+            # 群聊总闸门：强化克制
+            verbosity_guidance = "群聊优先极短回复，一句到两句就够，不要堆内容。"
             warmth_guidance = "群聊里保持轻一点的温度，不要过度投入或抢戏。"
         if reply_goal == "comfort":
             warmth_guidance = "先轻轻接住对方的状态，再决定是否补建议。"
@@ -53,7 +55,8 @@ class ReplyStylePolicy:
 
         tone_guidance = "口吻自然，像在正常聊天。"
         if normalized_mode == "group":
-            tone_guidance = "群聊里优先轻、短、自然，不要像在发表长意见。"
+            # 群聊总闸门：强化克制
+            tone_guidance = "群聊里像随口接话，不要像发表正式意见，不要长篇大论。"
         if reply_goal == "answer":
             tone_guidance = "先轻接这个问题，再简洁作答，群聊里不要写成正式回答。"
         elif reply_goal == "clarify":
@@ -95,6 +98,9 @@ class ReplyStylePolicy:
             sentence_shape = "一句到两句就够，信息到位就收。"
 
         followup_shape = "默认不必强行追问，除非顺手接一句更自然。"
+        if normalized_mode == "group":
+            # 群聊总闸门：强化克制
+            followup_shape = "默认不追问、不补发，除非顺手接一句更自然。"
         if initiative == "proactive_follow":
             followup_shape = "如果顺势自然，可以在结尾补一个轻追问或半步延展。"
         elif initiative == "reactive":
@@ -119,7 +125,18 @@ class ReplyStylePolicy:
         if expression_profile == "companion":
             anti_patterns.append("不要模板化卖萌")
         if normalized_mode == "group":
-            anti_patterns.append("不要抢别人的话头")
+            # 群聊总闸门：强化克制
+            anti_patterns.extend([
+                "不要抢别人的话头",
+                "不要连续补发多段内容",
+                "不要在文本后继续刷存在感",
+            ])
+        elif normalized_mode == "private":
+            # 私聊路径：相对宽松但仍有克制
+            anti_patterns.extend([
+                "不要一上来写太长的回复",
+                "不要连续补发多段内容",
+            ])
         if reply_goal == "comfort":
             anti_patterns.append("不要一上来讲道理")
         if planner_reason.strip():

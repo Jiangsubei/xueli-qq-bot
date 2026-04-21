@@ -151,7 +151,6 @@ class MemoryRerankConfig:
 class MemoryConfig:
     enabled: bool = False
     storage_path: str = "../data/memories"
-    read_scope: str = "user"
     bm25_top_k: int = 100
     rerank_top_k: int = 20
     pre_rerank_top_k: int = 12
@@ -325,7 +324,6 @@ class Config:
         "BEHAVIOR": ("behavior", "content"),
         "MEMORY_ENABLED": ("memory", "enabled"),
         "MEMORY_STORAGE_PATH": ("memory", "storage_path"),
-        "MEMORY_READ_SCOPE": ("memory", "read_scope"),
         "MEMORY_BM25_TOP_K": ("memory", "bm25_top_k"),
         "MEMORY_RERANK_TOP_K": ("memory", "rerank_top_k"),
         "MEMORY_RERANK_API_BASE": ("memory_rerank", "api_base"),
@@ -425,9 +423,6 @@ class Config:
 
     def get_assistant_alias(self) -> str:
         return self._app.assistant_profile.alias.strip()
-
-    def get_memory_read_scope(self) -> str:
-        return self._app.memory.read_scope
 
     def get_group_reply_decision_extra_params(self) -> Dict[str, Any]:
         value = self._app.group_reply_decision.extra_params
@@ -752,7 +747,6 @@ class Config:
         config = MemoryConfig(
             enabled=self._bool_value(section, "memory", "enabled", default=False),
             storage_path=self._optional_string(section, "memory", "storage_path", default="../data/memories"),
-            read_scope=self._literal_string(section, "memory", "read_scope", allowed={"user", "global"}, default="user"),
             bm25_top_k=self._bounded_int(section, "memory", "bm25_top_k", default=100, minimum=1),
             rerank_top_k=self._bounded_int(section, "memory", "rerank_top_k", default=20, minimum=1),
             pre_rerank_top_k=self._bounded_int(section, "memory", "pre_rerank_top_k", default=12, minimum=1),
@@ -800,7 +794,6 @@ class Config:
             config = MemoryConfig(
                 enabled=config.enabled,
                 storage_path=config.storage_path,
-                read_scope=config.read_scope,
                 bm25_top_k=config.bm25_top_k,
                 rerank_top_k=min(rerank_top_k, config.bm25_top_k),
                 pre_rerank_top_k=min(pre_rerank_top_k, config.bm25_top_k),

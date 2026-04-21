@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 import signal
 import sys
 from dataclasses import replace
@@ -26,11 +27,6 @@ from src.core.runtime_metrics import RuntimeMetrics
 from src.core.webui_runtime_registry import register_runtime, unregister_runtime
 from src.core.webui_snapshot import WebUISnapshotPublisher
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
 logger = logging.getLogger(__name__)
 
 
@@ -156,11 +152,6 @@ class BotRuntime:
                 event=event,
                 handler=self._handle_pipeline_message,
             )
-            logger.info(
-                "消息已入队：%s key=%s",
-                format_trace_log(trace_id=trace_id, session_key=execution_key, message_id=message_id),
-                execution_key,
-            )
 
         self._handlers_registered = True
 
@@ -204,31 +195,20 @@ class BotRuntime:
         try:
             logger.info("开始处理消息：%s", trace_log)
             while True:
-                logger.info("开始规划：%s", trace_log)
+                logger.debug("开始规划：%s", trace_log)
                 if plan is None:
                     plan = await asyncio.wait_for(
                         self.message_handler.plan_message(current_event, trace_id=trace_id),
                         timeout=max(1, response_timeout),
                     )
                 logger.info(
-                    "规划结果：%s action=%s source=%s reason=%s reply_reference=%s",
+                    "规划结果：%s action=%s source=%s reason=%s",
                     trace_log,
                     plan.action,
                     plan.source,
                     plan.reason,
-                    str(getattr(plan, "reply_reference", "") or "").strip(),
                 )
-                self._log_plan_preview(plan, trace_log)
-                if self._should_log_message_summary():
-                    logger.info(
-                        "消息计划：动作=%s，来源=%s，原因=%s，用户=%s，群=%s",
-                        plan.action,
-                        plan.source,
-                        plan.reason,
-                        current_event.user_id,
-                        current_event.group_id,
-                    )
-
+                logger.debug("规划原始：%s reply_reference=%s", trace_log, str(getattr(plan, "reply_reference", "") or "").strip())
                 if not plan.should_reply:
                     next_dispatch = await self.message_handler.complete_window_dispatch(plan)
                     if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
@@ -236,18 +216,17 @@ class BotRuntime:
                         continue
                     return
 
-                logger.info("开始节奏判断：%s", trace_log)
+                logger.debug("开始节奏判断：%s", trace_log)
                 plan = await asyncio.wait_for(
                     self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
                     timeout=max(1, response_timeout),
                 )
                 logger.info(
-                    "节奏判断结果：%s action=%s source=%s reason=%s reply_reference=%s",
+                    "节奏判断结果：%s action=%s source=%s reason=%s",
                     trace_log,
                     plan.action,
                     plan.source,
                     plan.reason,
-                    str(getattr(plan, "reply_reference", "") or "").strip(),
                 )
                 if not plan.should_reply:
                     next_dispatch = await self.message_handler.complete_window_dispatch(plan)
@@ -260,7 +239,7 @@ class BotRuntime:
                     current_event.user_id if current_event.message_type == MessageType.PRIVATE.value else current_event.group_id
                 )
                 await self.message_handler.check_rate_limit(target_id)
-                logger.info("开始生成回复：%s", trace_log)
+                logger.debug("开始生成回复：%s", trace_log)
                 reply_result = await asyncio.wait_for(
                     self.message_handler.get_ai_response(current_event, plan=plan, trace_id=trace_id),
                     timeout=max(1, response_timeout),
@@ -315,6 +294,17 @@ class BotRuntime:
                     logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 
     async def _send_response(self, event: MessageEvent, reply: Any, plan: Any = None, trace_id: str = "") -> bool:
+        # stale 检查：发送前检查窗口是否已过期或已被 superseded
+        reply_context = dict(getattr(plan, "reply_context", None) or {}) if plan else {}
+        window_expires_at = float(reply_context.get("expires_at", 0.0) or 0.0)
+        if window_expires_at > 0 and time.time() > window_expires_at:
+            trace_log = format_trace_log(
+                trace_id=trace_id,
+                session_key=get_execution_key(event),
+                message_id=getattr(event, "message_id", 0),
+            )
+            logger.warning("发送前检测到窗口已过期，跳过发送：%s", trace_log)
+            return False
         message = str(getattr(reply, "text", reply) or "").strip()
         is_repeat_echo = getattr(plan, "source", None) == "repeat_echo"
         raw_segments = list(getattr(reply, "segments", None) or [])
@@ -812,16 +802,12 @@ class BotRuntime:
         self._sync_status_cache()
 
     def _log_plan_preview(self, plan: Any, trace_log: str) -> None:
-        if not plan:
-            return
-        source = str(getattr(plan, "source", "") or "").strip().lower()
-        if source not in {"planner", "fallback"}:
-            return
+        # Already logged inline at INFO; this is kept for raw_decision dump at DEBUG
         raw_decision = getattr(plan, "raw_decision", None)
         if raw_decision is None:
             return
-        logger.info(
-            "规划原始结果：%s reply_reference=%s preview=%s",
+        logger.debug(
+            "规划原始：%s reply_reference=%s preview=%s",
             trace_log,
             preview_text_for_log(str(getattr(plan, "reply_reference", "") or "").strip()),
             preview_json_for_log(raw_decision),

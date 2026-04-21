@@ -172,8 +172,6 @@ class PromptPlanner:
         initiative = "reactive" if chat_mode == "group" else "gentle_follow"
         if reply_goal in {"continue", "recall"}:
             initiative = "gentle_follow"
-        if bool(signals.get("follows_assistant_recently")) and chat_mode == "private":
-            initiative = "proactive_follow"
         expression_profile = "plain"
         if reply_goal == "comfort":
             expression_profile = "companion"
@@ -207,7 +205,7 @@ class PromptPlanner:
     def _default_reply_goal(self, *, chat_mode: str, continuity_hint: str, signals: Dict[str, Any]) -> str:
         if continuity_hint == "old_topic_resume":
             return "recall"
-        if bool(signals.get("follows_assistant_recently")):
+        if signals.get("follows_assistant_recently"):
             return "continue"
         if chat_mode == "group":
             return "light_presence"

@@ -69,10 +69,6 @@ GROUP_STRATEGY_OPTIONS = [
     {"value": "at_only", "label": "\u4ec5@\u56de\u590d", "help": "\u53ea\u6709\u88ab\u70b9\u540d\u65f6\u624d\u8bf4\u8bdd\uff0c\u66f4\u5b89\u9759\u4e00\u4e9b\u3002"},
     {"value": "quiet", "label": "\u5b89\u9759\u6a21\u5f0f", "help": "\u5c3d\u91cf\u5c11\u63d2\u8bdd\uff0c\u53ea\u4fdd\u7559\u6700\u57fa\u672c\u7684\u5b58\u5728\u611f\u3002"},
 ]
-MEMORY_SCOPE_OPTIONS = [
-    {"value": "user", "label": "\u53ea\u770b\u81ea\u5df1", "help": "\u53ea\u8bfb\u53d6\u5f53\u524d\u7528\u6237\u81ea\u5df1\u7684\u8bb0\u5fc6\uff0c\u66f4\u79c1\u5bc6\u4e5f\u66f4\u7a33\u59a5\u3002"},
-    {"value": "global", "label": "\u4e00\u8d77\u770b", "help": "\u4f1a\u628a\u5171\u4eab\u8bb0\u5fc6\u4e5f\u4e00\u8d77\u5e26\u4e0a\uff0c\u65b9\u4fbf\u7406\u89e3\u66f4\u591a\u4e0a\u4e0b\u6587\u3002"},
-]
 FIELD_HELP = {
     "network": {
         "adapter": "选择当前接入的 adapter，例如 napcat 或 api/openapi。",
@@ -353,19 +349,26 @@ def _load_emoji_gallery(app_config) -> List[Dict[str, Any]]:
     gallery: List[Dict[str, Any]] = []
     for emoji_id, payload in sorted(raw_items.items(), key=lambda entry: _sort_key(entry[1]), reverse=True):
         item = payload if isinstance(payload, dict) else {}
-        resolved = _resolve_emoji_image_path(storage_path, item.get("image_path", ""))
-        if not resolved:
+        emoji_type = str(item.get("emoji_type", "legacy") or "legacy")
+
+        # P4: legacy 类型只显示标记，不参与活跃列表
+        if emoji_type == "legacy":
             continue
-        stamp = int(resolved.stat().st_mtime_ns)
+
+        resolved = _resolve_emoji_image_path(storage_path, item.get("image_path", ""))
+        stamp = int(resolved.stat().st_mtime_ns) if resolved else 0
         gallery.append(
             {
                 "emoji_id": str(item.get("emoji_id") or emoji_id),
+                "emoji_type": emoji_type,
                 "description": str(item.get("description") or "").strip(),
+                "summary": str(item.get("primary_emotion") or "").strip(),
                 "emotion_status": str(item.get("emotion_status") or "unknown").strip() or "unknown",
                 "primary_emotion": str(item.get("primary_emotion") or "").strip(),
                 "usage_count": _safe_int(item.get("usage_count")),
                 "disabled": bool(item.get("disabled", False)),
-                "image_url": f"{reverse('emoji-media', args=[emoji_id])}?v={stamp}",
+                "image_url": f"{reverse('emoji-media', args=[emoji_id])}?v={stamp}" if resolved else None,
+                "last_seen_at": str(item.get("last_seen_at") or item.get("first_seen_at") or ""),
             }
         )
     return gallery
@@ -725,8 +728,6 @@ def _collect_memory_items(app_config) -> List[Dict[str, Any]]:
             for user_id in manager.storage.get_user_ids():
                 memories = await manager.storage.get_user_memories(user_id)
                 records.extend(_serialize_memory_item(memory, kind="ordinary", access_policy=access_policy) for memory in memories)
-            global_memories = await manager.storage.get_global_memories()
-            records.extend(_serialize_memory_item(memory, kind="ordinary", access_policy=access_policy) for memory in global_memories)
             return records
 
         return _runner()
@@ -745,8 +746,6 @@ def _collect_memory_items(app_config) -> List[Dict[str, Any]]:
         for user_id in storage.get_user_ids():
             memories = await storage.get_user_memories(user_id)
             records.extend(_serialize_memory_item(memory, kind="ordinary", access_policy=access_policy) for memory in memories)
-        global_memories = await storage.get_global_memories()
-        records.extend(_serialize_memory_item(memory, kind="ordinary", access_policy=access_policy) for memory in global_memories)
         return records
 
     return asyncio.run(_runner())
@@ -1103,10 +1102,8 @@ def build_dashboard_context() -> Dict[str, Any]:
         },
         "memory_form": {
             "enabled": bool(app_config.memory.enabled),
-            "read_scope": app_config.memory.read_scope,
             "auto_extract": bool(app_config.memory.auto_extract),
             "extract_every_n_turns": app_config.memory.extract_every_n_turns,
-            "read_scope_options": MEMORY_SCOPE_OPTIONS,
         },
         "memory_advanced_form": {
             "bm25_top_k": app_config.memory.bm25_top_k,
@@ -1499,7 +1496,6 @@ def save_memory_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     _, raw = _load_config_document()
     memory = dict(raw.get("memory") or {})
     memory["enabled"] = _coerce_bool(payload.get("enabled"), default=bool(memory.get("enabled", False)))
-    memory["read_scope"] = str(payload.get("read_scope") or memory.get("read_scope") or "user").strip()
     memory["auto_extract"] = _coerce_bool(payload.get("auto_extract"), default=bool(memory.get("auto_extract", True)))
     memory["bm25_top_k"] = _coerce_int(payload.get("bm25_top_k"), default=_safe_int(memory.get("bm25_top_k"), 100))
     memory["rerank_top_k"] = _coerce_int(payload.get("rerank_top_k"), default=_safe_int(memory.get("rerank_top_k"), 20))

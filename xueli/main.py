@@ -7,6 +7,28 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ---------------------------------------------------------------------------
+# Logging configuration - 按模块分层
+# ---------------------------------------------------------------------------
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+# 各模块详细程度配置
+logging.getLogger("src.core.model_invocation_router").setLevel(logging.DEBUG)   # 状态机流水账 → DEBUG
+logging.getLogger("src.handlers.reply_pipeline").setLevel(logging.DEBUG)        # FULL PROMPT 详情 → DEBUG
+logging.getLogger("src.memory").setLevel(logging.DEBUG)                        # 后台记忆活动 → DEBUG
+logging.getLogger("src.core.bootstrap").setLevel(logging.WARNING)                # 启动后静默，只留 WARNING
+logging.getLogger("src.services").setLevel(logging.WARNING)                     # AI/图片/视觉服务 WARNING
+logging.getLogger("src.adapters").setLevel(logging.WARNING)                    # 协议适配 WARNING
+logging.getLogger("websockets").setLevel(logging.WARNING)                      # WebSocket 连接 WARNING
+logging.getLogger("jieba").setLevel(logging.WARNING)                          # 结巴分词 WARNING
+# ---------------------------------------------------------------------------
+
 from src.core.runtime_supervisor import BotRuntimeSupervisor
 from src.core.webui_runtime_registry import register_runtime_control, unregister_runtime
 from src.adapters.api.runtime import create_api_runtime_server_from_env
@@ -63,12 +85,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32" and sys.version_info < (3, 16):
-        try:
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        except AttributeError:
-            pass
-
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

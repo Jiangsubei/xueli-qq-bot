@@ -41,29 +41,6 @@
           </span>
         </label>
 
-        <div class="config-item-card strategy-picker-field">
-          <span class="config-item-head">
-            <span class="config-item-title-stack">
-              <span class="config-item-title">读取范围</span>
-              <span class="config-item-desc">决定回忆时只看自己，还是把共享记忆也带上。</span>
-            </span>
-            <span class="field-help" tabindex="0" data-help="{{ field_help.memory.read_scope }}">?</span>
-          </span>
-          <input type="hidden" name="read_scope" id="memoryReadScopeInput" value="{{ memory_form.read_scope }}">
-          <button class="strategy-trigger" id="memoryScopeTrigger" type="button" aria-expanded="false" aria-controls="memoryScopeCard">
-            <span class="strategy-trigger-label" id="memoryScopeTriggerLabel">{% for option in memory_form.read_scope_options %}{% if option.value == memory_form.read_scope %}{{ option.label }}{% endif %}{% endfor %}</span>
-            <i class="fa-solid fa-chevron-down"></i>
-          </button>
-          <div class="strategy-card hidden" id="memoryScopeCard">
-            {% for option in memory_form.read_scope_options %}
-            <button class="strategy-option{% if option.value == memory_form.read_scope %} is-selected{% endif %}" type="button" data-scope-value="{{ option.value }}" data-scope-label="{{ option.label }}">
-              <span class="strategy-option-main">{{ option.label }}</span>
-              <span class="strategy-help" tabindex="0" data-help="{{ option.help }}">?</span>
-            </button>
-            {% endfor %}
-          </div>
-        </div>
-
         <label class="config-item-card">
           <span class="config-item-head">
             <span class="config-item-title-stack">

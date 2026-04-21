@@ -71,7 +71,19 @@ class ConversationContextBuilder:
 
         base64_images: List[str] = []
         vision_analysis = self.host.reply_pipeline._extract_reusable_vision_analysis(event=context_event, plan=plan)
-        if self.host._has_image_input(context_event) and not vision_analysis and self.host.vision_enabled():
+        has_images = self.host._has_image_input(context_event)
+        image_count = self.host._get_image_count(context_event) if has_images else 0
+        # P3: 多图/截图场景主意图排序
+        # 用户主文本优先；截图/OCR 文本次之；视觉摘要再次；逐图细节最后
+        # 只有当用户明确问图时才展开逐图细节
+        is_image_centric_query = False
+        if has_images and user_message:
+            normalized_msg = user_message.lower()
+            is_image_centric_query = any(
+                keyword in normalized_msg
+                for keyword in ["图", "图片", "照片", "截图", "啥区别", "有什么区别", "怎么样", "啥样"]
+            )
+        if has_images and not vision_analysis and self.host.vision_enabled():
             try:
                 base64_images = await self.host.download_images(context_event)
                 if base64_images:

@@ -320,7 +320,7 @@ class ReplyPipeline:
                     query=query,
                     top_k=max(1, min(top_k, 10)),
                     include_conversations=True,
-                    read_scope=self._get_memory_read_scope(),
+                    read_scope="user",
                 )
                 memory_lines = []
                 for index, item in enumerate(payload.get("memories", [])[:top_k], start=1):
@@ -483,7 +483,7 @@ class ReplyPipeline:
                 include_conversations=self._layer_enabled(prompt_plan, "include_recent_history", default=True),
                 include_sections=include_sections,
                 section_intensity=section_intensity,
-                read_scope=self._get_memory_read_scope(),
+                read_scope="user",
                 access_context=access_context,
             )
         except asyncio.CancelledError:
@@ -554,7 +554,7 @@ class ReplyPipeline:
             important = await self.host.memory_manager.get_important_memories(
                 user_id=user_id,
                 limit=5,
-                read_scope=self._get_memory_read_scope(),
+                read_scope="user",
                 access_context=access_context,
             )
         except asyncio.CancelledError:
@@ -612,12 +612,6 @@ class ReplyPipeline:
     def _normalize_memory_line(self, line: str) -> str:
         return re.sub(r"\s+", " ", str(line or "").strip()).lower()
 
-    def _get_memory_read_scope(self) -> str:
-        getter = getattr(self.host, "_get_memory_read_scope", None)
-        if callable(getter):
-            return str(getter())
-        return getattr(self.host.app_config.memory, "read_scope", "user")
-
     def _build_memory_access_context(self, event: MessageEvent):
         builder = getattr(self.host.memory_manager, "build_access_context", None)
         if not callable(builder):
@@ -626,7 +620,7 @@ class ReplyPipeline:
             user_id=str(event.user_id),
             message_type=event.message_type or MessageType.PRIVATE.value,
             group_id=str(event.group_id or ""),
-            read_scope=self._get_memory_read_scope(),
+            read_scope="user",
         )
 
     def _assistant_display_name(self) -> str:
@@ -1001,16 +995,34 @@ class ReplyPipeline:
         lines: List[str] = []
         if original_text:
             lines.append(f"用户原文: {original_text}" if include_original_label else original_text)
+
+        # P3: 视觉置信度检查 + 避免矛盾
+        vision_success_count = int((vision_analysis or {}).get("vision_success_count", 0) or 0)
+        vision_failure_count = int((vision_analysis or {}).get("vision_failure_count", 0) or 0)
         merged = str((vision_analysis or {}).get("merged_description", "") or "").strip()
         details = [str(item).strip() for item in (vision_analysis or {}).get("per_image_descriptions", []) if str(item).strip()]
+
+        # 任一图片分析失败时，只输出一次统一的不确定说明
+        if vision_failure_count > 0 and vision_success_count == 0:
+            lines.append("[图片未成功识别]")
+            return "\n".join(lines).strip()
+
+        # 低置信视觉描述：使用更谨慎的表达
         if merged:
-            lines.append("图片摘要: " + merged)
+            # 检查是否是低置信描述（简单判断：描述过短或包含不确定词汇）
+            is_low_confidence = len(merged) < 10 or any(
+                word in merged for word in ["好像", "可能是", "大概", "似乎", "也许"]
+            )
+            if is_low_confidence:
+                lines.append("图片摘要（仅供参考）: " + merged)
+            else:
+                lines.append("图片摘要: " + merged)
         elif details:
-            lines.append("图片摘要: " + "；".join(details))
-        if not lines and merged:
+            # P3: 只有当用户明确在问图时才展开逐图细节
+            # 这里简化处理：如果只有细节摘要，说明视觉分析置信度不够
+            lines.append("[图片]")  # 不输出具体描述，避免错误猜测
+        elif not lines and merged:
             lines.append("图片摘要: " + merged)
-        elif not lines and details:
-            lines.append("图片摘要: " + "；".join(details))
         return "\n".join(lines).strip()
 
     def _build_fallback_response(self, *, event: MessageEvent, original_user_message: str, vision_analysis: Dict[str, Any]) -> Optional[str]:

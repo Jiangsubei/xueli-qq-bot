@@ -29,7 +29,6 @@ class MemoryRetrievalCoordinator:
         conversation_store: ConversationStore,
         retriever: TwoStageRetriever,
         index_coordinator: MemoryIndexCoordinator,
-        memory_read_scope: str,
         access_policy: MemoryAccessPolicy,
         session_restore_service: Optional[SessionRestoreService] = None,
         conversation_recall_service: Optional[ConversationRecallService] = None,
@@ -43,7 +42,6 @@ class MemoryRetrievalCoordinator:
         self.index_coordinator = index_coordinator
         self.session_restore_service = session_restore_service
         self.conversation_recall_service = conversation_recall_service
-        self.memory_read_scope = memory_read_scope
         self.access_policy = access_policy
         self.runtime_metrics = runtime_metrics
         self.prompt_budgets = {
@@ -57,18 +55,10 @@ class MemoryRetrievalCoordinator:
         }
 
     def normalize_read_scope(self, read_scope: Optional[str] = None) -> str:
-        value = read_scope if read_scope is not None else self.memory_read_scope
-        return self.access_policy.normalize_read_scope(value)
+        return "user"
 
     def get_scope_user_ids(self, user_id: str, read_scope: Optional[str] = None) -> List[str]:
-        normalized_scope = self.normalize_read_scope(read_scope)
-        if normalized_scope == "user":
-            return [str(user_id)]
-
-        user_ids = {str(user_id)}
-        user_ids.update(self.storage.get_user_ids())
-        user_ids.update(self.important_memory_store.get_user_ids())
-        return sorted(uid for uid in user_ids if uid)
+        return [str(user_id)]
 
     def get_search_result_score(self, result: SearchResult) -> float:
         if result.combined_score is not None:
@@ -499,7 +489,7 @@ class MemoryRetrievalCoordinator:
     ) -> RetrievalContext:
         context = self._resolve_access_context(
             user_id=owner_user_id,
-            read_scope=access_context.read_scope if access_context else self.memory_read_scope,
+            read_scope=access_context.read_scope if access_context else "user",
             access_context=access_context,
         )
         return RetrievalContext(
@@ -525,7 +515,7 @@ class MemoryRetrievalCoordinator:
             )
         return self.access_policy.build_context(
             requester_user_id=str(user_id),
-            read_scope=read_scope or self.memory_read_scope,
+            read_scope=read_scope or "user",
         )
 
     async def _load_accessible_ordinary_memories(
@@ -548,18 +538,6 @@ class MemoryRetrievalCoordinator:
                     accessible.append(memory)
                 else:
                     denied += 1
-
-        for memory in await self.storage.get_global_memories():
-            if self._should_skip_memory(memory.metadata):
-                continue
-            if self.access_policy.is_accessible(
-                owner_user_id=str(memory.owner_user_id or ""),
-                metadata=memory.metadata,
-                context=context,
-            ):
-                accessible.append(memory)
-            else:
-                denied += 1
 
         if denied:
             self._inc_memory_access_denied(denied)

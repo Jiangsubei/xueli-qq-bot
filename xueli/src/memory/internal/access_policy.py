@@ -68,7 +68,7 @@ class MemoryAccessPolicy:
 
     def normalize_read_scope(self, value: Optional[str]) -> str:
         normalized = str(value or "user").strip().lower()
-        return normalized if normalized in {"user", "global"} else "user"
+        return normalized if normalized == "user" else "user"
 
     def build_context(
         self,
@@ -147,7 +147,7 @@ class MemoryAccessPolicy:
         if owner == requester:
             return True
 
-        return context.read_scope == "global"
+        return False
 
     def is_shared(self, metadata: Optional[Dict[str, Any]]) -> bool:
         prepared = self.normalize_memory_record(content="", metadata=metadata)

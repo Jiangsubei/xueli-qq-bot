@@ -106,7 +106,7 @@ class DashboardViewTests(SimpleTestCase):
             'memory': {
                 'enabled': True,
                 'storage_path': 'memories',
-                'read_scope': 'global',
+                'read_scope': 'user',
                 'bm25_top_k': 100,
                 'rerank_top_k': 20,
                 'pre_rerank_top_k': 12,
@@ -250,7 +250,7 @@ class DashboardViewTests(SimpleTestCase):
                 {
                     'enabled': True,
                     'auto_extract': True,
-                    'read_scope': 'global',
+                    'read_scope': 'user',
                     'bm25_top_k': 18,
                     'rerank_top_k': 9,
                     'extract_every_n_turns': 4,
@@ -283,7 +283,7 @@ class DashboardViewTests(SimpleTestCase):
                 {
                     'enabled': True,
                     'auto_extract': True,
-                    'read_scope': 'global',
+                    'read_scope': 'user',
                     'bm25_top_k': 24,
                     'rerank_top_k': 12,
                     'extract_every_n_turns': 5,
@@ -490,7 +490,7 @@ class DashboardViewTests(SimpleTestCase):
                 {
                     'enabled': True,
                     'auto_extract': True,
-                    'read_scope': 'global',
+                    'read_scope': 'user',
                     'bm25_top_k': 24,
                     'rerank_top_k': 12,
                     'extract_every_n_turns': 5,

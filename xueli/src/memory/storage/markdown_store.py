@@ -260,8 +260,6 @@ class MarkdownMemoryStore:
         self.archive_users_path = self.archive_path / "users"
         self.archive_users_path.mkdir(exist_ok=True)
 
-        self.global_file = self.base_path / "global.md"
-        self.archive_global_file = self.archive_path / "global.md"
         self.ordinary_decay_enabled = ordinary_decay_enabled
         self.ordinary_half_life_days = max(float(ordinary_half_life_days), 0.1)
         self.ordinary_forget_threshold = float(ordinary_forget_threshold)
@@ -550,7 +548,7 @@ class MarkdownMemoryStore:
             incoming_importance = self._safe_float(incoming_metadata.get("importance"), current_importance)
             boosted_importance = min(5.0, max(current_importance, incoming_importance) + 1.0)
             mem.metadata["importance"] = boosted_importance
-            logger.debug("记忆已增强：用户=%s，提及次数=%s，重要度=%.1f", mem.owner_user_id or "global", mention_count, boosted_importance)
+            logger.debug("记忆已增强：用户=%s，提及次数=%s，重要度=%.1f", mem.owner_user_id or "", mention_count, boosted_importance)
 
     async def _read_memories_async(self, file_path: Path, owner_user_id: str = "") -> List[MemoryItem]:
         if not file_path.exists():
@@ -609,12 +607,6 @@ class MarkdownMemoryStore:
         await self._sync_archive_file(self._get_archive_user_file(user_id), archived, f"user:{user_id}")
         return active
 
-    async def get_global_memories(self) -> List[MemoryItem]:
-        memories = await self._read_memories_async(self.global_file)
-        active, archived = self._partition_memories_by_decay(memories)
-        await self._sync_archive_file(self.archive_global_file, archived, "global")
-        return active
-
     async def get_archived_user_memories(self, user_id: str) -> List[MemoryItem]:
         """返回用户的软归档记忆，不修改原始文件。"""
         memories = await self._read_memories_async(self._get_user_file(user_id), owner_user_id=user_id)
@@ -622,21 +614,11 @@ class MarkdownMemoryStore:
         await self._sync_archive_file(self._get_archive_user_file(user_id), archived, f"user:{user_id}")
         return archived
 
-    async def get_archived_global_memories(self) -> List[MemoryItem]:
-        """返回全局软归档记忆，不修改原始文件。"""
-        memories = await self._read_memories_async(self.global_file)
-        _, archived = self._partition_memories_by_decay(memories)
-        await self._sync_archive_file(self.archive_global_file, archived, "global")
-        return archived
-
     async def get_all_memories(self, user_id: str) -> List[MemoryItem]:
-        return await self.get_user_memories(user_id) + await self.get_global_memories()
+        return await self.get_user_memories(user_id)
 
     async def replace_user_memories(self, user_id: str, memories: List[MemoryItem]) -> bool:
         return await self._write_memories_async(self._get_user_file(user_id), memories)
-
-    async def replace_global_memories(self, memories: List[MemoryItem]) -> bool:
-        return await self._write_memories_async(self.global_file, memories)
 
     async def add_memory(
         self,
@@ -647,7 +629,7 @@ class MarkdownMemoryStore:
         metadata: Optional[Dict] = None,
     ) -> Optional[MemoryItem]:
         mem_id = f"mem_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(content) % 10000:04d}"
-        target_file = self._get_user_file(user_id) if user_id else self.global_file
+        target_file = self._get_user_file(str(user_id or ""))
         memories = await self._read_memories_async(target_file)
         now_iso = _now_iso()
         normalized_content = content.strip()
@@ -679,12 +661,12 @@ class MarkdownMemoryStore:
         success = await self._write_memories_async(target_file, memories)
 
         if success:
-            logger.debug("已新增记忆：用户=%s", user_id or "global")
+            logger.debug("已新增记忆：用户=%s", user_id or "")
             return mem
         return None
 
     async def delete_memory(self, mem_id: str, user_id: Optional[str] = None) -> bool:
-        target_file = self._get_user_file(user_id) if user_id else self.global_file
+        target_file = self._get_user_file(str(user_id or ""))
         memories = await self._read_memories_async(target_file)
         new_memories = [m for m in memories if m.id != mem_id]
         if len(new_memories) == len(memories):
@@ -692,7 +674,7 @@ class MarkdownMemoryStore:
         return await self._write_memories_async(target_file, new_memories)
 
     async def update_memory(self, mem_id: str, content: str, user_id: Optional[str] = None) -> bool:
-        target_file = self._get_user_file(user_id) if user_id else self.global_file
+        target_file = self._get_user_file(str(user_id or ""))
         memories = await self._read_memories_async(target_file)
         for mem in memories:
             if mem.id == mem_id:
@@ -702,7 +684,7 @@ class MarkdownMemoryStore:
         return False
 
     async def search_memories_by_keyword(self, keyword: str, user_id: Optional[str] = None) -> List[MemoryItem]:
-        memories = await self.get_all_memories(user_id) if user_id else await self.get_global_memories()
+        memories = await self.get_all_memories(str(user_id or ""))
         keyword_lower = keyword.lower()
         return [mem for mem in memories if keyword_lower in mem.content.lower()]
 

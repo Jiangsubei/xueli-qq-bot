@@ -204,6 +204,24 @@ class ConversationWindowScheduler:
         now: float,
     ) -> tuple[Optional[BufferedWindow], int]:
         dropped_count = 0
+
+        # 群聊：检查 processing window 是否已被更新的 window superseded
+        if state.processing is not None and str(state.processing.chat_mode or "").strip().lower() == "group":
+            if self._is_window_superseded(state, conversation_key, now):
+                dropped_window = state.processing
+                dropped_window.window_reason = "superseded"
+                state.processing = None
+                waiter = self._dispatch_waiters.pop((conversation_key, dropped_window.seq), None)
+                if waiter is not None and not waiter.done():
+                    waiter.set_result(
+                        WindowDispatchResult(
+                            status="dropped",
+                            window=dropped_window,
+                            reason="superseded",
+                            dropped_count=dropped_count,
+                        )
+                    )
+
         while state.queued_windows:
             next_window = state.queued_windows[0]
             expires_at = float(next_window.expires_at or 0.0)
@@ -229,6 +247,29 @@ class ConversationWindowScheduler:
         dispatch.window_reason = "dispatched"
         state.processing = dispatch
         return dispatch, dropped_count
+
+    def _is_window_superseded(self, state: ConversationWindowState, conversation_key: str, now: float) -> bool:
+        """群聊专用：检查当前 processing window 是否已被更新的 active/queued window 替代。"""
+        if state.processing is None:
+            return False
+        processing_seq = int(state.processing.seq or 0)
+        processing_opened_at = float(state.processing.opened_at or 0.0)
+
+        # 检查是否有更新的 queued window
+        for queued_window in state.queued_windows:
+            queued_seq = int(queued_window.seq or 0)
+            if queued_seq > processing_seq:
+                return True
+
+        # 检查是否有更新的 active buffer（已在处理过程中有新消息到达）
+        # active buffer 的 opened_at 会比 processing 更新
+        # 注意：这里需要通过 conversation_key 查找对应的 state
+        # 由于 _states 是内部状态，可以通过 active_buffer 判断
+        # 如果有新的 active_buffer 且其 opened_at 更晚，则表示有新消息
+        # 但 processing 是在 queued 之后，所以这里只检查 queued 是否更新
+        # 实际上 active_buffer 不会出现在 processing 阶段
+        # 所以只需检查 queued 是否有更新的 seq 即可（上面已处理）
+        return False
 
     def _replace_close_task_locked(self, *, conversation_key: str, task: asyncio.Task[Any]) -> None:
         previous = self._close_tasks.get(conversation_key)

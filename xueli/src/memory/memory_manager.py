@@ -26,7 +26,7 @@ from src.memory.retrieval.bm25_index import BM25Index, SearchResult
 from src.memory.retrieval.two_stage_retriever import RetrievalConfig, TwoStageRetriever
 from src.memory.person_fact_service import PersonFactService
 from src.memory.session_restore_service import SessionRestoreService
-from src.memory.storage.conversation_store import ConversationStore
+from src.memory.storage.sqlite_conversation_store import SQLiteConversationStore
 from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
 from src.memory.storage.markdown_store import MemoryItem, MarkdownMemoryStore
 from src.memory.storage.person_fact_store import PersonFactItem, PersonFactStore
@@ -39,7 +39,6 @@ class MemoryManagerConfig:
     """Memory manager configuration."""
 
     storage_base_path: str = "memories"
-    memory_read_scope: str = "user"
     retrieval_config: RetrievalConfig = field(default_factory=RetrievalConfig)
     extraction_config: ExtractionConfig = field(default_factory=ExtractionConfig)
     ordinary_decay_enabled: bool = True
@@ -85,7 +84,7 @@ class MemoryManager:
         self.person_fact_store = PersonFactStore(
             base_path=os.path.join(self.config.storage_base_path, "person_facts")
         )
-        self.conversation_store = ConversationStore(
+        self.conversation_store = SQLiteConversationStore(
             base_path=os.path.join(self.config.storage_base_path, "conversations"),
         )
         self.chat_summary_service = ChatSummaryService(
@@ -131,7 +130,6 @@ class MemoryManager:
             index_coordinator=self.index_coordinator,
             session_restore_service=self.session_restore_service,
             conversation_recall_service=self.conversation_recall_service,
-            memory_read_scope=self.config.memory_read_scope,
             access_policy=self.access_policy,
             runtime_metrics=self.runtime_metrics,
             prompt_budgets={
@@ -189,14 +187,8 @@ class MemoryManager:
             requester_user_id=str(user_id),
             message_type=message_type,
             group_id=str(group_id or ""),
-            read_scope=read_scope or self.config.memory_read_scope,
+            read_scope=read_scope or "user",
         )
-
-    def _normalize_memory_read_scope(self, read_scope: Optional[str] = None) -> str:
-        return self.retrieval_coordinator.normalize_read_scope(read_scope)
-
-    def _get_scope_user_ids(self, user_id: str, read_scope: Optional[str] = None) -> List[str]:
-        return self.retrieval_coordinator.get_scope_user_ids(user_id, read_scope)
 
     def _get_search_result_score(self, result: SearchResult) -> float:
         return self.retrieval_coordinator.get_search_result_score(result)
@@ -640,22 +632,6 @@ class MemoryManager:
                     changed += 1
             if rewritten:
                 await self.storage.replace_user_memories(user_id, memories)
-
-        global_memories = await self.storage.get_global_memories()
-        rewritten_global = False
-        for memory in global_memories:
-            normalized = self.access_policy.normalize_memory_record(
-                content=memory.content,
-                owner_user_id=str(memory.owner_user_id or ""),
-                metadata=self._merge_tags_into_metadata(memory.tags, memory.metadata),
-                source=memory.source,
-            )
-            if normalized != (memory.metadata or {}):
-                memory.metadata = normalized
-                rewritten_global = True
-                changed += 1
-        if rewritten_global:
-            await self.storage.replace_global_memories(global_memories)
 
         for user_id in self.important_memory_store.get_user_ids():
             memories = await self.important_memory_store.get_memories(user_id, min_priority=1)
