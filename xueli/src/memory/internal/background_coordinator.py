@@ -327,7 +327,7 @@ class MemoryBackgroundCoordinator:
                 await self._finalize_session(
                     user_id=owner_user_id,
                     session_id=session_id,
-                    extract_pending=True,
+                    extract_pending=False,
                 )
             except Exception as exc:
                 logger.error(
