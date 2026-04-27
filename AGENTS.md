@@ -1,119 +1,131 @@
 # AGENTS.md
 
-## 项目核心理念
+## 常用命令
 
-`xueli` 是一个轻量项目。
+```bash
+# 安装依赖
+pip install -r requirements.txt
 
-目标不是做成“大而全机器人平台”，而是逐步演进为：
+# 运行全部单元测试
+python -m unittest discover -s xueli/tests -t xueli
 
-`轻量对话内核 + 薄多平台 adapter + 开放 API 接入层`
+# 运行单个测试文件
+python -m unittest discover -s xueli/tests -t xueli -p test_conversation_planner.py
 
-做任何改动前，先判断这件事是否符合下面几个原则：
+# 启动 (Windows)
+start.bat
+# 或 PowerShell
+./start.ps1
 
-1. 核心运行逻辑要尽量小、清楚、可读。
-2. 私聊和群聊尽量走统一 conversation 主链，而不是分裂出两套业务逻辑。
-3. `PromptPlan` 是 planning 和 reply generation 之间的核心契约。
-4. adapter 负责平台差异，core 不应该被 QQ / NapCat 细节反向污染。
-5. 优先做可复用、平台无关的抽象，而不是平台特供逻辑。
+# 启动 (Linux/macOS)
+bash start.sh
+```
 
-一句话判断标准：
+- 没有配置 lint / typecheck / formatter 工具，不要运行 `ruff`、`mypy`、`pylint` 等。
+- 测试基于 `unittest`，不要假设 `pytest` 存在。
+- 测试通过 `-t xueli` 将 `xueli/` 设为 Python 路径根，测试内 import 使用 `src.*`（而非 `xueli.src.*`）。
+- `xueli/config/config.toml` 是本地私有配置（已 gitignore），首次使用需从 `config.example.toml` 复制。
 
-如果 QQ 明天消失，这段逻辑是否依然有意义、可被 HTTP / WebSocket / 其他平台复用？
+## 架构核心理念
 
-如果答案是否定的，它大概率不该进入 core。
+`xueli` 目标是 `轻量对话内核 + 薄多平台 adapter + 开放 API 接入层`。
 
-## 代码规范
+判断标准：**如果 QQ 明天消失，这段逻辑是否依然有意义、可被 HTTP / WebSocket / 其他平台复用？** 答案否定则不该进入 core。
 
-### 命名与结构
+### 主消息处理链
 
-1. 优先使用中性命名，如 `conversation_*`、`adapter_*`、`platform_*`。
-2. 不要继续扩散 `group_*`、`napcat_*` 这类只适合旧阶段的业务命名，除非它确实属于兼容边界。
-3. 新能力优先通过 service / builder / coordinator 拆分，不要把 `MessageHandler` 和 `ReplyPipeline` 重新堆胖。
-4. `ReplyPipeline` 更像 prompt compiler；不要再把回复后副作用塞回去。
-5. 回复后的记忆动作应优先放在 `MemoryFlowService` 一类流程层，而不是 prompt/LLM 组织层。
+```
+MessageHandler
+  └── PlanningWindowService (缓冲窗口调度)
+        └── ConversationPlanner (reply/wait/ignore 决策 + PromptPlan)
+              └── TimingGateService (时机判断 continue/wait/no_reply)
+                    └── ConversationContextBuilder (构建上下文)
+                          └── ReplyPipeline (PromptPlan + 上下文 → 最终回复)
+                                └── ReplyGenerationService (AI 生成)
+                                      └── MemoryFlowService (记忆写入)
+```
 
-### 设计原则
+群聊的 planner / timing gate 调用由 `ConversationPlanCoordinator` 编排，涉及 buffer window 合并、engagement 判断和调度并发控制。
 
-1. 优先小步演进，不要无必要大重写。
-2. 优先兼容现有运行路径，除非当前任务明确要求升级接口。
-3. 抽象必须服务当前代码，而不是为了“未来可能会用到”提前过度设计。
-4. 公共契约变更时，要同步更新测试、日志和相关序列化使用点。
-5. 更看重清晰边界和集成稳定性，而不是一次性塞很多新概念。
+### 核心契约：PromptPlan
 
-### 测试与验证
+`PromptPlan` 是 planner 输出给 reply pipeline 的核心结构，包含 `action` (reply/wait/ignore)、`reply_reference`（自然语言方向提示，仅为软指导）、各上下文层开关等。改 `PromptPlan` 是高风险操作，必须同步更新 planner、reply pipeline、prompt renderer 和测试。
 
-1. 改动核心链路时，优先补或改集成测试。
-2. 如果改动影响 `PromptPlan`、planner、reply pipeline、memory flow、runtime，必须验证对应测试。
-3. 当前仓库默认可依赖 `unittest`；如果环境里没有 `pytest`，不要假设它存在。
-4. 如果某个测试只是在适配旧实现，且已经不符合新主链路，应同步迁移测试，而不是只为了兼容旧断言保留坏设计。
+### 三大提示词模板
 
-## 如何改动
+- `xueli/prompts/zh-CN/planner.prompt` — 判断 reply/wait/ignore，输出 PromptPlan
+- `xueli/prompts/zh-CN/timing_gate.prompt` — 判断 continue/wait/no_reply
+- `xueli/prompts/zh-CN/reply.prompt` — 根据 PromptPlan + 上下文生成最终回复
 
-### 改动前
+模板通过 `PromptTemplateLoader` 加载，动态 section 由 `ReplyPromptRenderer`、`ReplyStylePolicy` 等在代码内注入。改 reply prompt 应优先改 section / renderer / style policy，不要退回大段字符串硬拼。
 
-1. 先读相关入口代码，确认改动落点。
-2. 先判断这是 core 逻辑、adapter 逻辑，还是 WebUI / 配置逻辑。
-3. 先找已有契约和测试，不要直接跳进去加分支。
+### Adapter 隔离
 
-### 改动时
+平台适配器在 `src/adapters/` 下：
+- `napcat/adapter.py` — QQ/NapCat WebSocket
+- `napcat/normalizer.py` — **OneBot → InboundEvent 协议归一化**（从 core 迁出，见下）
+- `api/adapter.py` — HTTP API 运行时
 
-1. 优先沿现有主链路改：`MessageHandler -> PlanningWindowService -> ConversationPlanner -> TimingGateService -> ConversationContextBuilder -> ReplyPipeline/ReplyPromptRenderer -> ReplyGenerationService -> MemoryFlowService`
-2. 如果改 planner，就同时考虑 `PromptPlan`、timing、prompt renderer、测试是否要一起变。
-3. 如果改 reply prompt，就优先改 section / renderer / style policy，不要退回大段字符串硬拼。
-4. 如果改 memory，就优先区分”检索能力”和”流程编排”，不要把写回逻辑散落回 handler/pipeline。
-5. 如果改 adapter，尽量把影响锁在 adapter 边界，不要把平台字段一路传进 core。
-6. 对话记录必须每轮立即持久化，不依赖会话关闭；记忆提取必须按阈值触发，关闭时不再强制提取。
+Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core。
 
-### 改动后
+**OneBot 归一化已从 core 迁出**：`normalize_onebot_message_event` / `attach_normalized_onebot_event` 现在位于 `adapters/napcat/normalizer.py`。`core/platform_normalizers.py` 仅保留平台无关的 helper 和向后兼容的 re-export。新 adapter 应实现自己的 `attach_inbound_event()` 并由 `dispatcher.py` 优先调用。
 
-1. 运行受影响测试。
-2. 如改了主链路、配置方式、核心约定，同步更新文档。
-3. 保持日志、类型、测试、实现四者一致，不要只改其中一部分。
+### 记忆系统
 
-## 注意事项
+- `memory_manager.py` — 总管理器
+- `memory_flow_service.py` — 记忆写入流程编排（回复后记忆动作统一在此层）
+- `person_fact_service.py` / `chat_summary_service.py` / `conversation_recall_service.py` — 各记忆类型
+- `session_restore_service.py` — 重启后会话恢复
+- `storage/` — SQLite + Markdown 明文持久化
+- `extraction/` — LLM 记忆提取（支持 emotional_tone 情绪标记）
+- `retrieval/` — BM25 初排 + 向量语义联想 + 两阶段重排
+- `internal/` — 内部工具（含 MemoryBackgroundCoordinator 离线消化）
 
-### 应该做什么
+两种模式：**按阈值触发**（`extract_every_n_turns`）和**关闭时不强制提取**。对话记录必须每轮立即持久化，不依赖会话关闭。
 
-1. 应该优先保持 runtime core 可读。
-2. 应该优先抽服务、收边界、补测试。
-3. 应该优先让 private/group 共用一套 conversation 逻辑。
-4. 应该优先把平台差异留在 adapter。
-5. 应该优先做“当前就能提升稳定性和可维护性”的改动。
+拟人化记忆特性：
+- **动态遗忘**：检索命中的记忆自动回写 `last_recalled_at`/`mention_count`，用进废退
+- **软遗忘**：归档记忆仍可被索引检索（分数打折 50%）
+- **情绪标记**：提取时 LLM 标注 `emotional_tone`，检索时情绪加权匹配
+- **重构输出**：普通记忆注入 prompt 时加转述指令
+- **离线消化**：每 6 小时 LLM 扫描近期记忆归纳模式（`insight_type: digested`）
+- **向量联想**：`VectorIndex`（字符 n-gram 余弦相似度）与 BM25 混合检索，零外部依赖
 
-### 不该做什么
+## 关键约束
 
-1. 不要引入重型 plugin runtime。
-2. 不要把仓库拆成很多进程或很多 repo，除非任务明确要求。
-3. 不要为了 WebUI 方便，把核心逻辑写进 WebUI service。
-4. 不要把平台特定业务逻辑直接塞进 core。
-5. 不要为了兼容旧结构，继续扩散已经准备收敛掉的命名和边界。
-6. 不要在没有测试兜底的情况下，静默重写核心链路。
+1. 私聊和群聊共用一条 conversation 主链，不要分裂两套业务逻辑。
+2. `ReplyPipeline` 定位是 prompt compiler，回复后副作用（记忆写入）应走 `MemoryFlowService`，不要塞回 pipeline。
+3. 命名优先使用 `conversation_*`、`adapter_*`、`platform_*` 等中性命名，不要扩散 `group_*`、`napcat_*`。
+4. 会话永不过期，重启后从历史存储恢复并保留原始时间信息。
+5. 结构化分段发送是主路径（模型输出字符串数组）；正则分句仅作兜底。
+6. 普通图片只做视觉理解，不入 emoji 仓库；原生表情只存 `face / mface` 引用。
+7. WebUI 基于 Django 5.2，核心逻辑不要为 WebUI 方便写进 WebUI service。
+8. `data/` 目录已 gitignore，是运行时产物，不提交。
+9. `group_reply_decision` 配置未完整填写时，群聊退回规则路径（通常只在被 @ 时回复）。
 
-### 高风险改动提醒
+## 高风险改动
 
-下面这些改动默认视为高风险，必须连带检查测试和相关调用点：
+以下模块改动必须连带检查测试和所有调用点：
 
-1. `PromptPlan`
-2. `ConversationPlanner`
-3. `TimingGateService`
-4. `ReplyPipeline` / `ReplyPromptRenderer`
-5. `MessageHandler`
-6. `MemoryManager` / `MemoryFlowService`
-7. `BotRuntime` 主消息处理链
+- `PromptPlan` / `ConversationPlanner` / `TimingGateService`
+- `ReplyPipeline` / `ReplyPromptRenderer`
+- `MessageHandler`
+- `MemoryManager` / `MemoryFlowService`
+- `BotRuntime` 主消息处理链
+- 三大 prompt 模板文件
 
-### 当前工作倾向
+## 改动流程
 
-当前更鼓励的方向：
+1. 先读相关入口代码，判断是 core / adapter / WebUI 逻辑。
+2. 找已有契约和测试。
+3. 沿现有主链路改，不要新开分支路径。
+4. 改后运行受影响测试；如改了契约、配置方式、主链路，同步更新测试和文档。
+5. 保持日志、类型、测试、实现四者一致。
 
-1. 命名收敛
-2. service extraction
-3. integration coverage
-4. platform-neutral models
-5. 保持主链路清晰
+## 编码习惯与已知陷阱
 
-当前不鼓励的方向：
-
-1. 广铺新概念但没有测试
-2. 只为了“架构好看”做大规模重写
-3. 增加新的平台耦合
-4. 增加只在单一聊天平台成立的业务规则
+- **文件写入必须原子化**：所有持久化存储（Markdown/JSON）必须写 `.tmp` → `os.replace()`，禁止直接覆写目标文件。已修复的 4 处：`markdown_store`、`important_memory_store`、`person_fact_store`、`character_card_service`。
+- **async 函数中 `except Exception` 必须在前面加 `except asyncio.CancelledError: raise`**：Python 3.9+ 中 `CancelledError` 继承自 `Exception`，不加守卫会破坏 asyncio 取消协议。
+- **禁止用 `asyncio.CancelledError` 作业务流程控制**：应使用自定义异常（如 `StaleWindowError`），避免与任务取消混淆。
+- **`Future.set_result()` 不要在持有 `asyncio.Lock` 时调用**：回调链路可能尝试获取同一把锁导致死锁。应收集 waiter → 锁外 resolve。
+- **禁止在 `async` 上下文中使用同步阻塞 I/O**：`Path.read_text()` / `Path.write_text()` 应通过 `asyncio.to_thread()` 包裹，或使用 `aiofiles`。

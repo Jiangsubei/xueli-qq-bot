@@ -817,9 +817,9 @@ class ConversationPlanCoordinator:
                     window_messages=window_messages,
                     context=context,
                 )
-            if cooldown > 0:
-                await asyncio.sleep(cooldown)
-            return plan
+        if cooldown > 0:
+            await asyncio.sleep(cooldown)
+        return plan
 
     def _format_window_speaker(self, item: Dict[str, Any]) -> str:
         role = str(item.get("speaker_role") or "user").strip().lower()

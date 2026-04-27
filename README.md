@@ -26,7 +26,7 @@
 | 提示词模板体系 | `planner / timing gate / reply` 主提示词已拆成模板文件，便于维护和调试 |
 | 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
 | 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
-| 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 使用明文存储方便阅读编辑 |
+| 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 明文存储；具有动态遗忘（用进废退）、软遗忘（归档记忆可打折召回）、情绪标记、离线消化归纳和向量语义联想等拟人化记忆特性 |
 | 图片理解 | 通过视觉模型分析图片内容，增强回复内容；普通图片只做理解，不落入表情仓库，也不会被机器人主动重新发送 |
 | 表情互动 | 只使用平台原生表情能力（OneBot / NapCat `face` / `mface`），不再把本地图片当作表情包主动发出 |
 | WebUI | 实时查看会话状态、记忆内容、日志，支持在线配置 |
@@ -199,6 +199,7 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/adapters/registry.py`
 - `xueli/src/adapters/napcat/adapter.py`
 - `xueli/src/adapters/napcat/connection.py`
+- `xueli/src/adapters/napcat/normalizer.py`  # OneBot → InboundEvent 协议归一化
 - `xueli/src/adapters/api/adapter.py`
 - `xueli/src/adapters/api/runtime.py`
 
@@ -252,6 +253,17 @@ export API_RUNTIME_PORT=8765
 
 ### 记忆系统
 
+记忆存储基于 Markdown 明文 + SQLite，支持三层记忆（人物事实 / 重要记忆 / 普通记忆），并具有以下拟人化特性：
+
+- **动态遗忘（用进废退）** — 普通记忆按指数衰减公式计算有效重要度，检索命中的记忆自动强化（`last_recalled_at` + `mention_count`），长时间不用则自然衰减归档
+- **软遗忘** — 归档记忆仍可被 BM25 索引检索到，但分数打折（50%），AI 偶尔能说"我好像快忘了…"
+- **情绪标记** — 记忆提取时 LLM 推断对话情绪的 `emotional_tone`，检索时根据用户当前情绪加权匹配（相同情绪 +10%，互补情绪 +5%）
+- **重构输出** — 注入 prompt 时对普通记忆加"用你自己的话自然融入"转述指令，避免背诵感
+- **离线消化** — 每 6 小时自动扫描近期记忆，通过 LLM 归纳模式/趋势/变化，生成 insight 存入重要记忆
+- **语义向量联想** — 基于字符 n-gram 的轻量向量索引，与 BM25 混合检索（权重 0.6:0.4），零外部依赖
+
+核心模块：
+
 - `xueli/src/memory/memory_manager.py`
 - `xueli/src/memory/memory_flow_service.py`
 - `xueli/src/memory/memory_dispute_resolver.py`  # 记忆纠错裁决
@@ -265,6 +277,8 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/memory/storage/important_memory_store.py`
 - `xueli/src/memory/storage/markdown_store.py`
 - `xueli/src/memory/storage/person_fact_store.py`
+- `xueli/src/memory/retrieval/vector_index.py`  # 轻量向量语义索引
+- `xueli/src/memory/internal/background_coordinator.py`  # 后台提取 + 离线消化
 
 ---
 

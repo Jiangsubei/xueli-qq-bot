@@ -39,7 +39,7 @@ class ConversationWindowScheduler:
             state.last_activity_at = now
 
             if state.processing is None and state.queued_windows:
-                dispatch, dropped = self._dispatch_next_locked(
+                dispatch, dropped, _ = self._dispatch_next_locked(
                     state=state,
                     conversation_key=conversation_key,
                     now=now,
@@ -99,7 +99,7 @@ class ConversationWindowScheduler:
                 return WindowDispatchResult(status="accepted_only", reason="not_processing")
             state.processing = None
             state.last_activity_at = time.time()
-            dispatch, dropped = self._dispatch_next_locked(
+            dispatch, dropped, _ = self._dispatch_next_locked(
                 state=state,
                 conversation_key=conversation_key,
                 now=time.time(),
@@ -159,6 +159,7 @@ class ConversationWindowScheduler:
         queue_expire_seconds: float,
         merge_builder: MergeBuilder,
     ) -> None:
+        waiters_to_resolve: list[tuple[asyncio.Future[Any], WindowDispatchResult]] = []
         try:
             if window_seconds > 0:
                 await asyncio.sleep(window_seconds)
@@ -176,25 +177,26 @@ class ConversationWindowScheduler:
                 active.window_reason = "window_closed"
                 state.queued_windows.append(active)
                 state.active_buffer = None
-                dispatch, dropped = self._dispatch_next_locked(
+                dispatch, dropped, pending_waiters = self._dispatch_next_locked(
                     state=state,
                     conversation_key=conversation_key,
                     now=now,
                 )
-                if dispatch is None:
-                    return
-                waiter = self._dispatch_waiters.pop((conversation_key, dispatch.seq), None)
-                if waiter is not None and not waiter.done():
-                    waiter.set_result(
-                        WindowDispatchResult(
+                if dispatch is not None:
+                    waiter = self._dispatch_waiters.pop((conversation_key, dispatch.seq), None)
+                    if waiter is not None and not waiter.done():
+                        waiters_to_resolve.append((waiter, WindowDispatchResult(
                             status="dispatch_window",
                             window=dispatch,
                             reason="dispatched",
                             dropped_count=dropped,
-                        )
-                    )
+                        )))
+                waiters_to_resolve.extend(pending_waiters)
         except asyncio.CancelledError:
             raise
+        for waiter, result in waiters_to_resolve:
+            if not waiter.done():
+                waiter.set_result(result)
 
     def _dispatch_next_locked(
         self,
@@ -202,10 +204,10 @@ class ConversationWindowScheduler:
         state: ConversationWindowState,
         conversation_key: str,
         now: float,
-    ) -> tuple[Optional[BufferedWindow], int]:
+    ) -> tuple[Optional[BufferedWindow], int, list[tuple[asyncio.Future[Any], WindowDispatchResult]]]:
         dropped_count = 0
+        waiters: list[tuple[asyncio.Future[Any], WindowDispatchResult]] = []
 
-        # 群聊：检查 processing window 是否已被更新的 window superseded
         if state.processing is not None and str(state.processing.chat_mode or "").strip().lower() == "group":
             if self._is_window_superseded(state, conversation_key, now):
                 dropped_window = state.processing
@@ -213,14 +215,12 @@ class ConversationWindowScheduler:
                 state.processing = None
                 waiter = self._dispatch_waiters.pop((conversation_key, dropped_window.seq), None)
                 if waiter is not None and not waiter.done():
-                    waiter.set_result(
-                        WindowDispatchResult(
-                            status="dropped",
-                            window=dropped_window,
-                            reason="superseded",
-                            dropped_count=dropped_count,
-                        )
-                    )
+                    waiters.append((waiter, WindowDispatchResult(
+                        status="dropped",
+                        window=dropped_window,
+                        reason="superseded",
+                        dropped_count=dropped_count,
+                    )))
 
         while state.queued_windows:
             next_window = state.queued_windows[0]
@@ -230,23 +230,21 @@ class ConversationWindowScheduler:
                 dropped.window_reason = "dropped_expired"
                 waiter = self._dispatch_waiters.pop((conversation_key, dropped.seq), None)
                 if waiter is not None and not waiter.done():
-                    waiter.set_result(
-                        WindowDispatchResult(
-                            status="dropped",
-                            window=dropped,
-                            reason="dropped_expired",
-                            dropped_count=dropped_count + 1,
-                        )
-                    )
+                    waiters.append((waiter, WindowDispatchResult(
+                        status="dropped",
+                        window=dropped,
+                        reason="dropped_expired",
+                        dropped_count=dropped_count + 1,
+                    )))
                 dropped_count += 1
                 continue
             break
         if state.processing is not None or not state.queued_windows:
-            return None, dropped_count
+            return None, dropped_count, waiters
         dispatch = state.queued_windows.popleft()
         dispatch.window_reason = "dispatched"
         state.processing = dispatch
-        return dispatch, dropped_count
+        return dispatch, dropped_count, waiters
 
     def _is_window_superseded(self, state: ConversationWindowState, conversation_key: str, now: float) -> bool:
         """群聊专用：检查当前 processing window 是否已被更新的 active/queued window 替代。"""

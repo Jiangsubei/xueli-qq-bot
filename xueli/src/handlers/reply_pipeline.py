@@ -91,7 +91,9 @@ class ReplyPipeline:
         self.style_policy = ReplyStylePolicy()
         self.renderer = ReplyPromptRenderer(host, style_policy=self.style_policy)
         self.reply_generation_service = ReplyGenerationService(host, self)
-        self.memory_flow_service = getattr(host, "memory_flow_service", None) or MemoryFlowService(getattr(host, "memory_manager", None))
+        self.memory_flow_service = getattr(host, "memory_flow_service", None)
+        if self.memory_flow_service is None and getattr(host, "memory_manager", None) is not None:
+            self.memory_flow_service = MemoryFlowService(getattr(host, "memory_manager", None))
 
     async def prepare_request(
         self,
@@ -215,6 +217,8 @@ class ReplyPipeline:
         except AIAPIError as exc:
             logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
             return ReplyResult(text="", segments=[], source="error_suppressed")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
             return ReplyResult(text="处理消息时出错，请稍后再试。", segments=["处理消息时出错，请稍后再试。"], source="fallback")
@@ -258,12 +262,13 @@ class ReplyPipeline:
     def _persist_reply_result(self, event: MessageEvent, prepared: PreparedReplyRequest, response: AIResponse) -> None:
         prepared.conversation.add_message("user", prepared.history_user_message, message_id=str(event.message_id or ""))
         prepared.conversation.add_message("assistant", response.content, message_id=str(event.message_id or ""))
-        self.memory_flow_service.on_reply_generated(
-            host=self.host,
-            event=event,
-            prepared=prepared,
-            reply_text=response.content,
-        )
+        if self.memory_flow_service is not None:
+            self.memory_flow_service.on_reply_generated(
+                host=self.host,
+                event=event,
+                prepared=prepared,
+                reply_text=response.content,
+            )
 
     def build_memory_tools(self) -> List[Dict[str, Any]]:
         if not self.host.memory_manager:
@@ -354,7 +359,7 @@ class ReplyPipeline:
     ) -> AIResponse:
         tools = self.build_memory_tools()
         request_messages = list(messages)
-        if tools:
+        if tools and request_messages:
             request_messages[0] = {
                 "role": "system",
                 "content": self.augment_system_prompt_for_tools(str(request_messages[0].get("content", "")), tools),

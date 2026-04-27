@@ -5,9 +5,9 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from src.adapters.base import PlatformAdapter, ProtocolAdapter, _ONEBOT_AT_PATTERN
 from src.adapters.napcat.connection import NapCatConnection
+from src.adapters.napcat.normalizer import attach_normalized_onebot_event
 from src.core.models import MessageEvent, MessageSegment
 from src.core.platform_models import FaceAction, InboundEvent, MfaceAction, OutgoingAction, ReplyAction, SessionRef
-from src.core.platform_normalizers import attach_normalized_onebot_event
 
 
 class NapCatProtocolAdapter(ProtocolAdapter):
@@ -74,6 +74,9 @@ class NapCatAdapter(PlatformAdapter):
 
     def as_protocol_adapter(self) -> Optional[ProtocolAdapter]:
         return self._protocol
+
+    def build_mention_payload(self, user_id: str) -> Dict[str, Any]:
+        return MessageSegment.at(user_id).to_dict()
 
     def _action_to_payload(self, action: OutgoingAction) -> Dict[str, Any]:
         if isinstance(action, ReplyAction):

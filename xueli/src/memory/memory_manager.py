@@ -24,6 +24,7 @@ from src.memory.internal import (
 )
 from src.memory.retrieval.bm25_index import BM25Index, SearchResult
 from src.memory.retrieval.two_stage_retriever import RetrievalConfig, TwoStageRetriever
+from src.memory.retrieval.vector_index import VectorIndex
 from src.memory.person_fact_service import PersonFactService
 from src.memory.session_restore_service import SessionRestoreService
 from src.memory.storage.sqlite_conversation_store import SQLiteConversationStore
@@ -74,9 +75,11 @@ class MemoryManager:
             ordinary_forget_threshold=self.config.ordinary_forget_threshold,
         )
         self.bm25_index = BM25Index()
+        self.vector_index = VectorIndex()
         self.retriever = TwoStageRetriever(
             bm25_index=self.bm25_index,
             config=self.config.retrieval_config,
+            vector_index=self.vector_index,
         )
         self.important_memory_store = ImportantMemoryStore(
             base_path=os.path.join(self.config.storage_base_path, "important")
@@ -149,6 +152,9 @@ class MemoryManager:
             task_manager=self.task_manager,
             auto_extract_memory=self.config.auto_extract_memory,
             on_memory_changed=self.index_coordinator.mark_dirty,
+            storage=self.storage,
+            important_memory_store=self.important_memory_store,
+            llm_callback=llm_callback,
         )
 
     async def initialize(self):
@@ -161,6 +167,7 @@ class MemoryManager:
             self._inc_memory_compactions(compaction_count)
         await self._sync_existing_person_facts()
         await self.index_coordinator.initialize()
+        self.background_coordinator.start_digestion()
         logger.debug("记忆管理器初始化完成")
 
     async def rebuild_index(self, user_id: str):
@@ -270,7 +277,7 @@ class MemoryManager:
         group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
-        return await self.retrieval_coordinator.search_memories_with_context(
+        result = await self.retrieval_coordinator.search_memories_with_context(
             user_id=user_id,
             query=query,
             top_k=top_k,
@@ -286,6 +293,10 @@ class MemoryManager:
                 access_context=access_context,
             ),
         )
+        used_memory_ids: List[str] = result.pop("used_memory_ids", [])
+        if used_memory_ids:
+            self._schedule_mark_recalled(user_id, used_memory_ids)
+        return result
 
     async def build_prompt_context(
         self,
@@ -299,7 +310,7 @@ class MemoryManager:
         group_id: Optional[str] = None,
         access_context: Optional[MemoryAccessContext] = None,
     ) -> Dict[str, Any]:
-        return await self.retrieval_coordinator.build_prompt_context(
+        result = await self.retrieval_coordinator.build_prompt_context(
             user_id=user_id,
             query=query,
             include_sections=include_sections,
@@ -313,6 +324,10 @@ class MemoryManager:
                 access_context=access_context,
             ),
         )
+        used_memory_ids: List[str] = result.pop("used_memory_ids", [])
+        if used_memory_ids:
+            self._schedule_mark_recalled(user_id, used_memory_ids)
+        return result
 
     async def search_important_memories(
         self,
@@ -358,6 +373,40 @@ class MemoryManager:
 
     async def get_user_memories(self, user_id: str) -> List[MemoryItem]:
         return await self.storage.get_user_memories(user_id)
+
+    async def mark_recalled_memories(self, user_id: str, memory_ids: List[str]) -> int:
+        """标记记忆被召回使用，增加使用痕迹。
+
+        按 ID 前缀路由到对应存储层：
+        - imp_* → ImportantMemoryStore
+        - mem_* / 其他 → MarkdownMemoryStore
+        返回总更新条目数。
+        """
+        if not memory_ids:
+            return 0
+
+        ordinary_ids = [mid for mid in memory_ids if not str(mid).startswith("imp_")]
+        important_ids = [mid for mid in memory_ids if str(mid).startswith("imp_")]
+
+        total = 0
+        if ordinary_ids:
+            total += await self.storage.mark_recalled(user_id, ordinary_ids)
+            if ordinary_ids:
+                self.mark_index_dirty(user_id)
+        if important_ids:
+            total += await self.important_memory_store.mark_recalled(user_id, important_ids)
+        return total
+
+    def _schedule_mark_recalled(self, user_id: str, memory_ids: List[str]) -> None:
+        async def _mark():
+            try:
+                updated = await self.mark_recalled_memories(user_id, memory_ids)
+                if updated:
+                    logger.debug("记忆召回回写完成：用户=%s，更新条目=%s", user_id, updated)
+            except Exception as exc:
+                logger.debug("记忆召回回写失败（非致命）：用户=%s，错误=%s", user_id, exc)
+
+        self.task_manager.create_task(_mark(), name=f"memory-mark-recalled-{user_id}")
 
     async def get_person_facts(
         self,

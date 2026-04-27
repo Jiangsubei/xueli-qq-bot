@@ -65,3 +65,7 @@ class PlatformAdapter(ABC):
     def as_protocol_adapter(self) -> Optional[ProtocolAdapter]:
         """Return a ProtocolAdapter view of this adapter, or None if not supported."""
         return None
+
+    def build_mention_payload(self, user_id: str) -> Dict[str, Any]:
+        """Build a platform-specific mention/at segment payload."""
+        return {"type": "mention", "data": {"user_id": str(user_id)}}

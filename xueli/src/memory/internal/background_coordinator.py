@@ -2,17 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, List, Optional
+from datetime import datetime, timedelta
+from typing import Callable, Dict, List, Optional, Any
 
 from src.memory.extraction.memory_extractor import MemoryExtractor
 from src.memory.chat_summary_service import ChatSummaryService
 from src.memory.person_fact_service import PersonFactService
 from src.memory.storage.conversation_store import ConversationStore
-from src.memory.storage.markdown_store import MemoryItem
+from src.memory.storage.markdown_store import MarkdownMemoryStore, MemoryItem
+from src.memory.storage.important_memory_store import ImportantMemoryItem, ImportantMemoryStore
 
 from .task_manager import MemoryTaskManager
 
 logger = logging.getLogger(__name__)
+
+_INSIGHT_SYSTEM_PROMPT = (
+    "你是一个记忆分析器。你的任务是从用户的多段近期记忆中发现模式、趋势或值得注意的变化。\n"
+    "你应该只关注确凿的、能从记忆证据中直接推断的发现。不要脑补。\n"
+    "输出一个 JSON 对象，格式为：\n"
+    "{\"has_insight\": true/false, \"content\": \"总结性描述\", \"confidence\": 0.85}\n"
+    "has_insight: 是否发现了值得记录的模式\n"
+    "content: 一条简洁的总结性描述，可以直接存入记忆\n"
+    "confidence: 对这个发现的置信度，0-1\n"
+    "如果最近记忆中没有明显模式，输出 has_insight: false"
+)
 
 
 class MemoryBackgroundCoordinator:
@@ -28,6 +41,9 @@ class MemoryBackgroundCoordinator:
         on_memory_changed: Callable[[str], None],
         summary_service: Optional[ChatSummaryService] = None,
         person_fact_service: Optional[PersonFactService] = None,
+        storage: Optional[MarkdownMemoryStore] = None,
+        important_memory_store: Optional[ImportantMemoryStore] = None,
+        llm_callback: Optional[Callable[[str, List[Dict[str, str]]], Any]] = None,
     ) -> None:
         self.conversation_store = conversation_store
         self.extractor = extractor
@@ -36,6 +52,11 @@ class MemoryBackgroundCoordinator:
         self.task_manager = task_manager
         self.auto_extract_memory = auto_extract_memory
         self.on_memory_changed = on_memory_changed
+        self.storage = storage
+        self.important_memory_store = important_memory_store
+        self.llm_callback = llm_callback
+        self._digestion_task: Optional[asyncio.Task] = None
+        self._digestion_stop: Optional[asyncio.Event] = None
 
     async def _sync_person_facts(self, user_id: str) -> None:
         if not self.person_fact_service:
@@ -318,6 +339,7 @@ class MemoryBackgroundCoordinator:
         await self.task_manager.flush()
 
     async def close(self) -> None:
+        self.stop_digestion()
         closed_session_ids = self.conversation_store.close_all_sessions()
         for session_id in closed_session_ids:
             owner_user_id = self.conversation_store.get_session_owner(session_id)
@@ -339,6 +361,130 @@ class MemoryBackgroundCoordinator:
                 )
         await self.flush_conversation_buffers()
         await self.task_manager.cancel_all()
+
+    def start_digestion(self, interval_hours: float = 6.0) -> None:
+        """启动周期性记忆消化任务。"""
+        if self._digestion_task is not None and not self._digestion_task.done():
+            return
+        if not self.storage or not self.important_memory_store or not self.llm_callback:
+            logger.debug("记忆消化缺少必要组件，未启动")
+            return
+
+        self._digestion_stop = asyncio.Event()
+
+        async def run_loop():
+            logger.info("记忆消化任务已启动：间隔=%.1f小时", interval_hours)
+            while not self._digestion_stop.is_set():
+                try:
+                    await asyncio.wait_for(self._digestion_stop.wait(), timeout=interval_hours * 3600)
+                except asyncio.TimeoutError:
+                    pass
+                if self._digestion_stop.is_set():
+                    break
+                try:
+                    await self._run_digestion_cycle()
+                except Exception as exc:
+                    logger.warning("记忆消化循环异常：%s", exc, exc_info=True)
+
+        self._digestion_task = asyncio.create_task(run_loop())
+
+    def stop_digestion(self) -> None:
+        """停止周期性记忆消化任务。"""
+        if self._digestion_stop:
+            self._digestion_stop.set()
+        if self._digestion_task and not self._digestion_task.done():
+            self._digestion_task.cancel()
+        self._digestion_task = None
+        self._digestion_stop = None
+
+    async def _run_digestion_cycle(self) -> None:
+        """执行一轮记忆消化：扫描所有用户，尝试发现模式并存入重要记忆。"""
+        user_ids = self.storage.get_user_ids()
+        if not user_ids:
+            return
+
+        logger.debug("记忆消化开始扫描：用户数=%s", len(user_ids))
+        insight_count = 0
+        for user_id in user_ids:
+            try:
+                insight = await self._generate_insight(user_id)
+                if insight is not None:
+                    await self.important_memory_store.add_memory(
+                        user_id=user_id,
+                        content=insight,
+                        source="periodic_digestion",
+                        priority=2,
+                        metadata={"insight_type": "digested", "insight_source": "periodic_digestion"},
+                    )
+                    insight_count += 1
+                    logger.info("记忆消化发现 insight：用户=%s，内容=%s", user_id, insight[:80])
+            except Exception as exc:
+                logger.debug("记忆消化处理用户 %s 失败：%s", user_id, exc)
+
+        if insight_count > 0:
+            logger.info("记忆消化本轮完成：发现 %s 条 insight", insight_count)
+
+    async def _generate_insight(self, user_id: str) -> Optional[str]:
+        """使用 LLM 从近期记忆中生成 insight。返回 insight 文本或 None。"""
+        memories = await self.storage.get_user_memories(user_id)
+        if len(memories) < 3:
+            return None
+
+        now = datetime.now()
+        recent = [
+            m for m in memories
+            if self._days_ago(m.updated_at, now) <= 7
+        ]
+        if len(recent) < 3:
+            return None
+
+        memory_lines = [f"- [{m.updated_at[:10]}] {m.content}" for m in recent[-20:]]
+        user_prompt = "以下是用户最近的记忆列表。请分析其中是否存在值得记录的模式、趋势或变化：\n" + "\n".join(memory_lines)
+
+        try:
+            messages = [
+                {"role": "system", "content": _INSIGHT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+            response = await asyncio.wait_for(
+                self.llm_callback(_INSIGHT_SYSTEM_PROMPT, [messages[-1]]),
+                timeout=30.0,
+            )
+            content = str(getattr(response, "content", "") or "")
+            return self._parse_insight_response(content)
+        except asyncio.TimeoutError:
+            logger.debug("记忆消化 LLM 超时：用户=%s", user_id)
+            return None
+        except Exception as exc:
+            logger.debug("记忆消化 LLM 失败：用户=%s，错误=%s", user_id, exc)
+            return None
+
+    def _parse_insight_response(self, content: str) -> Optional[str]:
+        import json
+        import re as _re
+        text = str(content or "").strip()
+        text = _re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=_re.IGNORECASE | _re.MULTILINE).strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        if not data.get("has_insight", False):
+            return None
+        insight_text = str(data.get("content", "")).strip()
+        confidence = float(data.get("confidence", 0.0) or 0.0)
+        if not insight_text or confidence < 0.7:
+            return None
+        return insight_text
+
+    @staticmethod
+    def _days_ago(timestamp: str, now: datetime) -> float:
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            return (now - dt).total_seconds() / 86400.0
+        except (TypeError, ValueError):
+            return 999.0
 
     def _resolve_session_id(
         self,

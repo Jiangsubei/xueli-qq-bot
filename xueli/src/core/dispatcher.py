@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional
 from src.core.models import MessageEvent, MessageType, OneBotEvent
 from src.core.platform_bridge import build_message_event_from_inbound
 from src.core.platform_models import InboundEvent
-from src.core.platform_normalizers import attach_normalized_onebot_event
+from src.core.platform_normalizers import attach_normalized_onebot_event, build_generic_inbound_event, get_attached_inbound_event
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,13 @@ class EventDispatcher:
         return self.stats.copy()
 
     def _attach_default_inbound_event(self, event: MessageEvent) -> InboundEvent:
+        # Prefer the platform adapter's normalizer when available.
+        adapter = getattr(self, "_adapter", None)
+        if adapter is not None and hasattr(adapter, "attach_inbound_event"):
+            result = adapter.attach_inbound_event(event)
+            if result is not None:
+                return result
+        # Fallback: OneBot-specific normalization (legacy path for QQ/NapCat).
         return attach_normalized_onebot_event(
             event,
             platform=self.platform,

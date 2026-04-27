@@ -80,6 +80,12 @@ class BotRuntimeSupervisor:
             await self._wait_until_started(bot, task)
         except Exception:
             self._state = "error"
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
             raise
 
         self._state = "running"

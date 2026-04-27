@@ -34,18 +34,23 @@ class ExtractionConfig:
         "普通记忆：\n"
         "用于那些不一定是长期稳定事实，但对后续陪伴式对话有明显帮助的信息。例如用户最近在做什么、最近遇到了什么事、最近在推进什么任务、"
         "最近关注什么、最近情绪或状态如何，或者接下来几轮到最近一段时间里大概率还会继续聊到的内容。\n"
-        "如果用户只是说“对”“就是这个”“按你刚刚说的来”这种依赖上下文的话，你可以结合前面的助手发言来理解，"
+        "如果用户只是说\u201c对\u201d\u201c就是这个\u201d\u201c按你刚刚说的来\u201d这种依赖上下文的话，你可以结合前面的助手发言来理解，"
         "但最后提取出来的记忆，仍然必须是关于用户的事实、状态、近况或需求，而不是助手的建议本身。\n"
         "但你仍然要控制提取质量：\n"
         "不是所有聊天内容都值得记忆。不要把寒暄、口头禅、一次性应答、没有后续价值的零碎句子、纯流水账内容提取成记忆。"
-        "只有当一段内容能够概括成“以后继续聊天时可能有帮助的信息”时，才考虑提取。\n"
+        "只有当一段内容能够概括成\u201c以后继续聊天时可能有帮助的信息\u201d时，才考虑提取。\n"
         "你会在对话里看到稳定的 turn 标记，例如 T12、T13。你输出的每一条记忆，都必须标注它来自哪个 turn，可以写成 Tn，或者 Tn-Tm。\n"
-        "如果这段对话里没有值得保存的内容，你只需要输出“无”。\n"
+        "如果这段对话里没有值得保存的内容，你只需要输出\u201c无\u201d。\n"
+        "另外，如果对话中能感受到明确的情绪基调，你可以在记忆内容之前单独输出一行 [TONE:标签] 来标记这段对话的整体情绪氛围。"
+        "标签从以下选择：[开心, 喜欢, 惊讶, 无语, 委屈, 生气, 伤心, 嘲讽, 害怕, 困惑, 平静]。"
+        "同一段对话可以多次改变 TONE，后面的记忆会继承最近的一个 TONE。如果不需要特别标注情绪，不输出 TONE 行即可。\n"
         "输出时不要解释，不要分析，也不要加多余的话。每条记忆单独占一行，并严格使用下面两种格式之一：\n"
         "普通记忆：[NORMAL:1-5][Tn] 用户123: 记忆内容\n"
         "普通记忆：[NORMAL:1-5][Tn-Tm] 用户123: 记忆内容\n"
         "重要记忆：[IMPORTANT][Tn] 用户123: 记忆内容\n"
-        "重要记忆：[IMPORTANT][Tn-Tm] 用户123: 记忆内容"
+        "重要记忆：[IMPORTANT][Tn-Tm] 用户123: 记忆内容\n"
+        "TONE 行（可选）：[TONE:开心]\n"
+        "TONE 行（可选）：[TONE:伤心]"
     )
     reflection_system_prompt: str = (
         "你是一个冷静的记忆反思器。你的任务不是生成新记忆，而是判断一条新记忆与旧记忆之间是否存在真正冲突。\n"
@@ -69,6 +74,7 @@ class ExtractedMemory:
     source_turn_end: int
     is_important: bool = False
     importance: int = 3
+    emotional_tone: str = ""
 
 
 @dataclass
@@ -168,6 +174,8 @@ class MemoryExtractor:
             return
 
         turns = self._session_turns.setdefault(session_key, [])
+        if len(turns) >= 200:
+            turns[:-199] = []
         self._session_owner[session_key] = str(user_id)
         self._session_dialogue_key[session_key] = str(dialogue_key or "")
         turns.append(
@@ -281,6 +289,8 @@ class MemoryExtractor:
                 anchor_turns=anchor_turns,
                 related_dialogue=related_dialogue,
             )
+            if item.emotional_tone:
+                metadata["emotional_tone"] = item.emotional_tone
             reflection = await self._reflect_on_memory_conflict(
                 user_id=user_id,
                 item=item,
@@ -550,12 +560,22 @@ class MemoryExtractor:
     def _parse_extraction_response(self, content: str) -> List[ExtractedMemory]:
         memories: List[ExtractedMemory] = []
         lines = content.split("|") if "|" in content else content.splitlines()
+        current_tone = ""
         for raw_line in lines:
             line = str(raw_line or "").strip()
             if not line or line.startswith("#"):
                 continue
             if self._is_explicit_no_memory_response(line):
                 continue
+
+            tone_match = re.match(r"^\[TONE:([^\]]+)\]$", line, re.IGNORECASE)
+            if tone_match:
+                tone_label = tone_match.group(1).strip()
+                valid_tones = {"开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑", "平静"}
+                if tone_label in valid_tones:
+                    current_tone = tone_label
+                continue
+
             line = re.sub(r"^(?:普通记忆|重要记忆)\s*[：:]\s*", "", line)
             line = re.sub(r"^(?:[\-\*\u2022]\s*|\d+[\.\)、]\s*)+", "", line)
             line = re.sub(r"^(?:普通记忆|重要记忆)\s*[：:]\s*", "", line)
@@ -602,6 +622,7 @@ class MemoryExtractor:
                     source_turn_end=anchor_range[1],
                     is_important=is_important,
                     importance=importance,
+                    emotional_tone=current_tone,
                 )
             )
         return memories

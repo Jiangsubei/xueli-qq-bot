@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 from collections import Counter
 from dataclasses import asdict
@@ -133,12 +135,14 @@ class CharacterCardService:
 
     def _load_payload(self, user_id: str) -> Dict[str, object]:
         file_path = self._file_path(user_id)
-        if not file_path.exists():
-            return {"explicit_feedback": [], "stable_signals": [], "snapshot": {}}
         try:
             return json.loads(file_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (FileNotFoundError, json.JSONDecodeError):
             return {"explicit_feedback": [], "stable_signals": [], "snapshot": {}}
 
     def _save_payload(self, user_id: str, payload: Dict[str, object]) -> None:
-        self._file_path(user_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        file_path = self._file_path(user_id)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, file_path)

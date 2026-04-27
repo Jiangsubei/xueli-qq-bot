@@ -294,6 +294,7 @@ class BotBootstrapper:
     def _parse_ws_endpoint(self) -> tuple[str, int]:
         ws_url = self.config.app.adapter_connection.ws_url
         normalized = ws_url.split("://", 1)[1] if "://" in ws_url else ws_url
+        normalized = normalized.split("/", 1)[0]
         if ":" in normalized:
             host, port_str = normalized.rsplit(":", 1)
             return host, int(port_str)

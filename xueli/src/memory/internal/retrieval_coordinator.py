@@ -17,6 +17,44 @@ from .index_coordinator import MemoryIndexCoordinator
 
 logger = logging.getLogger(__name__)
 
+_EMOTION_KEYWORDS: Dict[str, List[str]] = {
+    "开心": ["开心", "高兴", "快乐", "哈哈", "嘻嘻", "嘿嘿", "太好", "不错", "好耶", "nice", "爽", "棒", "congrats", "恭喜"],
+    "喜欢": ["喜欢", "爱", "好喜欢", "可爱", "心动", "萌"],
+    "惊讶": ["惊讶", "震惊", "天哪", "卧槽", "我靠", "居然", "没想到", "什么", "真的假的", "不会吧"],
+    "无语": ["无语", "无奈", "服了", "醉了", "...", "……", "哎", "唉"],
+    "委屈": ["委屈", "难过", "被冤枉", "冤枉", "不是我", "误会", "怪我"],
+    "生气": ["生气", "愤怒", "恼火", "气死", "可恶", "靠", "草", "特么", "tm", "妈的", "fuck", "滚"],
+    "伤心": ["伤心", "哭了", "难过", "崩溃", "绝望", "心疼", "抑郁", "孤独", "寂寞"],
+    "嘲讽": ["嘲讽", "呵呵", "呵呵哒", "行吧", "你厉害", "真行", "厉害哦", "哦"],
+    "害怕": ["害怕", "恐怖", "可怕", "吓人", "不敢", "害怕", "担心", "紧张", "焦虑"],
+    "困惑": ["困惑", "迷惑", "不懂", "为啥", "为什么", "咋回事", "什么情况", "搞不懂", "不理解"],
+    "平静": ["平静", "还行", "没事", "没什么", "随便", "都行", "无所谓"],
+}
+
+_EMOTION_MOOD_MAP: Dict[str, str] = {
+    "开心": "开心",
+    "喜欢": "喜欢",
+    "惊讶": "惊讶",
+    "无语": "无语",
+    "委屈": "委屈",
+    "生气": "生气",
+    "伤心": "伤心",
+    "嘲讽": "嘲讽",
+    "害怕": "害怕",
+    "困惑": "困惑",
+    "平静": "平静",
+}
+
+
+def classify_message_mood(text: str) -> str:
+    """基于关键词匹配快速分类消息情绪，返回标签或空字符串。"""
+    normalized = str(text or "").lower()
+    for emotion, keywords in _EMOTION_KEYWORDS.items():
+        for kw in keywords:
+            if kw in normalized:
+                return emotion
+    return ""
+
 
 class MemoryRetrievalCoordinator:
     """Handle memory scope, retrieval, and prompt-context assembly."""
@@ -278,6 +316,13 @@ class MemoryRetrievalCoordinator:
             "dynamic": self._trim_entries(dynamic_memories, self._budget_for_intensity("dynamic", section_intensity["dynamic"])),
         }
 
+        used_memory_ids: List[str] = []
+        for section_key in ("user_important", "addressing", "shared", "dynamic"):
+            for entry in sections.get(section_key, []):
+                memory_id = str(entry.get("memory_id", "")).strip()
+                if memory_id:
+                    used_memory_ids.append(memory_id)
+
         scene_hits = len(sections["addressing"]) + len(sections["shared"])
         if scene_hits:
             self._inc_memory_scene_rule_hits(scene_hits)
@@ -292,6 +337,7 @@ class MemoryRetrievalCoordinator:
             "session_restore": sections["session_restore"],
             "precise_recall": sections["precise_recall"],
             "dynamic_memories": sections["dynamic"],
+            "used_memory_ids": used_memory_ids,
         }
 
     def _budget_for_intensity(self, section: str, intensity: str) -> int:
@@ -603,6 +649,8 @@ class MemoryRetrievalCoordinator:
                 if len(scored) >= dynamic_limit:
                     break
 
+        if scored:
+            self._apply_emotion_boost(scored, query=query)
         scored.sort(
             key=lambda item: (
                 self._dynamic_scene_bucket(item[1], context=context),
@@ -744,11 +792,13 @@ class MemoryRetrievalCoordinator:
         content = str(metadata.get("summary") or getattr(memory, "content", "")).strip()
         owner_user_id = str(getattr(memory, "owner_user_id", "") or metadata.get("owner_user_id") or "")
         source = str(getattr(memory, "source", "") or metadata.get("source", "")).strip()
+        memory_id = str(getattr(memory, "id", "") or metadata.get("id") or "")
         label_owner = owner_user_id and owner_user_id != requester_user_id
         if section == "shared" and label_owner:
             content = f"[来源用户 {owner_user_id}] {content}"
         return {
             "content": content,
+            "memory_id": memory_id,
             "memory_owner": owner_user_id,
             "owner_user_id": owner_user_id,
             "source": source,
@@ -782,7 +832,6 @@ class MemoryRetrievalCoordinator:
             ("=== 当前场景共享规则 / 共享重要记忆 ===", sections.get("shared", [])),
             ("=== 最近相关会话恢复 ===", sections.get("session_restore", [])),
             ("=== 相关旧对话精准定位 ===", sections.get("precise_recall", [])),
-            ("=== 动态相关普通记忆 ===", sections.get("dynamic", [])),
         ]
         for title, entries in section_specs:
             if not entries:
@@ -791,6 +840,14 @@ class MemoryRetrievalCoordinator:
             for index, entry in enumerate(entries, 1):
                 parts.append(f"{index}. {entry.get('content', '')}")
             parts.append("")
+
+        dynamic = sections.get("dynamic", [])
+        if dynamic:
+            parts.append("=== 相关过往信息（请用你自己的话自然融入回复，不要逐字引用） ===")
+            for index, entry in enumerate(dynamic, 1):
+                parts.append(f"{index}. {entry.get('content', '')}")
+            parts.append("")
+
         return "\n".join(parts).strip()
 
     async def _load_history_messages(self, *, dynamic_memories: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -881,6 +938,39 @@ class MemoryRetrievalCoordinator:
         query_chars = set(normalized_query)
         content_chars = set(normalized_content)
         return len(query_chars & content_chars) / max(len(query_chars), 1)
+
+    def _apply_emotion_boost(
+        self,
+        scored: List[Tuple[float, Dict[str, Any]]],
+        *,
+        query: str,
+    ) -> None:
+        """根据用户消息情绪对记忆条目进行情感加权。"""
+        user_mood = classify_message_mood(query)
+        if not user_mood:
+            return
+        for idx, (score, entry) in enumerate(scored):
+            mem_tone = str((entry.get("metadata") or {}).get("emotional_tone", "")).strip()
+            if not mem_tone:
+                continue
+            if mem_tone == user_mood:
+                scored[idx] = (score * 1.1, entry)
+            elif self._emotion_is_complementary(user_mood, mem_tone):
+                scored[idx] = (score * 1.05, entry)
+
+    @staticmethod
+    def _emotion_is_complementary(mood_a: str, mood_b: str) -> bool:
+        pairs = {
+            ("伤心", "委屈"),
+            ("委屈", "伤心"),
+            ("害怕", "困惑"),
+            ("困惑", "害怕"),
+            ("开心", "喜欢"),
+            ("喜欢", "开心"),
+            ("生气", "无语"),
+            ("无语", "生气"),
+        }
+        return (mood_a, mood_b) in pairs
 
     def _inc_memory_read(self, *, shared: bool = False) -> None:
         if self.runtime_metrics:

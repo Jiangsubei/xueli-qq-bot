@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -101,8 +102,29 @@ class FactEvidenceStore:
         except json.JSONDecodeError:
             return {"records": [], "signals": []}
 
+    async def _load_payload_async(self, user_id: str) -> dict:
+        return await asyncio.to_thread(self._load_payload, user_id)
+
     def _save_payload(self, user_id: str, payload: dict) -> None:
         self._file_path(user_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    async def _save_payload_async(self, user_id: str, payload: dict) -> None:
+        await asyncio.to_thread(self._save_payload, user_id, payload)
+
+    async def add_record_async(self, record: FactEvidenceRecord) -> FactEvidenceRecord:
+        return await asyncio.to_thread(self.add_record, record)
+
+    async def build_signal_async(
+        self,
+        *,
+        user_id: str,
+        record: FactEvidenceRecord,
+        ttl_hours: float,
+    ) -> SoftUncertaintySignal:
+        return await asyncio.to_thread(self.build_signal, user_id=user_id, record=record, ttl_hours=ttl_hours)
+
+    async def get_active_signals_async(self, user_id: str, *, limit: int = 3) -> List[SoftUncertaintySignal]:
+        return await asyncio.to_thread(self.get_active_signals, user_id, limit=limit)
 
     def _parse_datetime(self, value: str) -> Optional[datetime]:
         try:

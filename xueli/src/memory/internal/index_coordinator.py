@@ -6,6 +6,7 @@ from typing import Dict
 
 from src.memory.retrieval.bm25_index import BM25Index
 from src.memory.retrieval.two_stage_retriever import TwoStageRetriever
+from src.memory.retrieval.vector_index import VectorIndex
 from src.memory.storage.markdown_store import MarkdownMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class MemoryIndexCoordinator:
         self.storage = storage
         self.bm25_index = bm25_index
         self.retriever = retriever
+        self.vector_index = getattr(retriever, "vector_index", None)
         self.auto_build_index = auto_build_index
         self.index_built: Dict[str, bool] = {}
         self.index_dirty: Dict[str, bool] = {}
@@ -38,11 +40,21 @@ class MemoryIndexCoordinator:
     async def rebuild_index(self, user_id: str) -> bool:
         try:
             memories = await self.storage.get_user_memories(user_id)
+            archived = await self.storage.get_archived_user_memories_raw(user_id)
+            for arch_mem in archived:
+                if not any(m.id == arch_mem.id for m in memories):
+                    arch_mem.metadata["_index_archived"] = True
+                    memories.append(arch_mem)
             success = self.bm25_index.build_index(user_id, memories)
+            if self.vector_index and memories:
+                self.vector_index.build_index(user_id, memories)
             if success:
                 self.index_built[user_id] = True
                 self.index_dirty[user_id] = False
-                logger.debug("索引重建完成：用户=%s，记忆数=%s", user_id, len(memories))
+                if archived:
+                    logger.debug("索引重建完成：用户=%s，记忆数=%s（含%s条归档）", user_id, len(memories), len(archived))
+                else:
+                    logger.debug("索引重建完成：用户=%s，记忆数=%s", user_id, len(memories))
             return success
         except Exception as exc:
             logger.error("索引重建失败：用户=%s，错误=%s", user_id, exc)

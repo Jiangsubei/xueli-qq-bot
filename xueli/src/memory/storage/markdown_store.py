@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiofiles
+import os
 
 logger = logging.getLogger(__name__)
 _ANCHOR_METADATA_KEYS = {
@@ -577,9 +578,13 @@ class MarkdownMemoryStore:
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 blocks = [mem.to_markdown_block() for mem in memories]
+                content = "\n\n".join(blocks)
 
-                async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
-                    await f.write("\n\n".join(blocks))
+                tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+                async with aiofiles.open(tmp_path, "w", encoding="utf-8") as f:
+                    await f.write(content)
+
+                os.replace(tmp_path, file_path)
                 return True
             except OSError as e:
                 logger.error("写入记忆文件失败：文件=%s，错误=%s", file_path, e)
@@ -688,5 +693,40 @@ class MarkdownMemoryStore:
         keyword_lower = keyword.lower()
         return [mem for mem in memories if keyword_lower in mem.content.lower()]
 
+    async def mark_recalled(self, user_id: str, memory_ids: List[str]) -> int:
+        """标记记忆被召回使用，增量更新 last_recalled_at 和 mention_count。
+
+        仅写回标记，不做衰减分区（避免摊销到每次读取）。
+        归档记忆命中时自动恢复为活跃。
+        返回实际更新的条目数。
+        """
+        target_file = self._get_user_file(user_id)
+        memories = await self._read_memories_async(target_file, owner_user_id=user_id)
+        if not memories:
+            return 0
+
+        now_iso = _now_iso()
+        updated = 0
+
+        for mem in memories:
+            if mem.id not in memory_ids:
+                continue
+            mem.updated_at = now_iso
+            mem.metadata["last_recalled_at"] = now_iso
+            mention_count = int(mem.metadata.get("mention_count", 1) or 1) + 1
+            mem.metadata["mention_count"] = mention_count
+            if mem.metadata.get("archived", False):
+                mem.metadata["archived"] = False
+            updated += 1
+
+        if updated == 0:
+            return 0
+
+        success = await self._write_memories_async(target_file, memories)
+        return updated if success else 0
+
+    async def get_archived_user_memories_raw(self, user_id: str) -> List[MemoryItem]:
+        """直接读取归档文件中的记忆（不做衰减分区）。"""
+        return await self._read_memories_async(self._get_archive_user_file(user_id), owner_user_id=user_id)
 
 

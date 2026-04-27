@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,9 +71,15 @@ class PersonFactStore:
     def __init__(self, base_path: str = "memories/person_facts") -> None:
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
+        self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
         return self.base_path / f"{user_id}.json"
+
+    def _get_file_lock(self, file_path: str) -> asyncio.Lock:
+        if file_path not in self._locks:
+            self._locks[file_path] = asyncio.Lock()
+        return self._locks[file_path]
 
     def get_user_ids(self) -> List[str]:
         return sorted(path.stem for path in self.base_path.glob("*.json"))
@@ -92,18 +100,22 @@ class PersonFactStore:
 
     async def replace_facts(self, user_id: str, facts: List[PersonFactItem]) -> bool:
         file_path = self._get_user_file(user_id)
+        lock = self._get_file_lock(str(file_path))
         payload = {
             "user_id": str(user_id),
             "updated_at": _now_iso(),
             "facts": [item.to_dict() for item in facts],
         }
-        try:
-            async with aiofiles.open(file_path, "w", encoding="utf-8") as handle:
-                await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
-            return True
-        except Exception as exc:
-            logger.warning("写入人物事实失败：用户=%s，错误=%s", user_id, exc)
-            return False
+        async with lock:
+            try:
+                tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+                async with aiofiles.open(tmp_path, "w", encoding="utf-8") as handle:
+                    await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                os.replace(tmp_path, file_path)
+                return True
+            except Exception as exc:
+                logger.warning("写入人物事实失败：用户=%s，错误=%s", user_id, exc)
+                return False
 
     async def clear_facts(self, user_id: str) -> bool:
         file_path = self._get_user_file(user_id)

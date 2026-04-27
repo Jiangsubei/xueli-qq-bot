@@ -54,6 +54,11 @@ from src.services.vision_client import VisionClient
 logger = logging.getLogger(__name__)
 
 
+class StaleWindowError(Exception):
+    """Raised when a buffered window is expired and should be skipped."""
+    pass
+
+
 class MessageHandler:
     """High-level message orchestration layer."""
 
@@ -184,7 +189,9 @@ class MessageHandler:
                 return base_path
         memory_config = getattr(self.app_config, "memory", None)
         base_path = str(getattr(memory_config, "storage_path", "") or "").strip()
-        return base_path or "../data/memories"
+        if base_path:
+            return base_path
+        return str(Path(self.app_config._config_path).parent / "data" / "memories") if hasattr(self.app_config, "_config_path") else "../data/memories"
 
     def _ensure_extended_services(self) -> None:
         planning_window_config = getattr(self.app_config, "planning_window", PlanningWindowConfig())
@@ -768,7 +775,7 @@ class MessageHandler:
         # stale 检查：窗口已过期则不再处理
         if self.is_window_stale(window):
             logger.warning("窗口已过期，跳过处理：seq=%s opened_at=%s", window.seq, window.opened_at)
-            raise asyncio.CancelledError(f"window {window.seq} is stale")
+            raise StaleWindowError(f"window {window.seq} is stale")
         dispatch_event = window.latest_event if isinstance(window.latest_event, MessageEvent) else None
         if dispatch_event is None:
             raise ValueError("buffered window is missing latest_event")
@@ -939,10 +946,6 @@ class MessageHandler:
                 await asyncio.sleep(interval - (now - last_time))
             self.last_send_time[target_id] = time.time()
             return True
-
-    async def check_group_plan_rate_limit(self, group_id: Optional[int]) -> bool:
-        del group_id
-        return True
 
     async def _load_memory_context(
         self,

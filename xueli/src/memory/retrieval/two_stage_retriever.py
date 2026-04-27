@@ -16,6 +16,7 @@ from src.memory_limits import MIN_RERANK_CANDIDATE_MAX_CHARS, MIN_RERANK_TOTAL_P
 
 from ..storage.markdown_store import MemoryItem
 from .bm25_index import BM25Index, SearchResult
+from .vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -286,10 +287,13 @@ class TwoStageRetriever:
         self,
         bm25_index: BM25Index,
         config: Optional[RetrievalConfig] = None,
+        vector_index: Optional[VectorIndex] = None,
     ):
         self.bm25_index = bm25_index
         self.config = config or RetrievalConfig()
+        self.vector_index = vector_index
         self._reranker: Optional[BaseReranker] = None
+        self._vector_weight = 0.4
 
     def initialize_reranker(self):
         if not self.config.rerank_enabled:
@@ -333,6 +337,33 @@ class TwoStageRetriever:
             top_k=recall_k,
             min_score=self.config.bm25_min_score,
         )
+
+        vector_results: Dict[str, float] = {}
+        if self.vector_index:
+            try:
+                vec_hits = self.vector_index.search(user_id=user_id, query=query, top_k=recall_k)
+                for mem, score in vec_hits:
+                    if mem.id not in vector_results:
+                        vector_results[mem.id] = score
+                    else:
+                        vector_results[mem.id] = max(vector_results[mem.id], score)
+            except Exception as exc:
+                logger.debug("向量检索失败（非致命）：%s", exc)
+
+        if vector_results:
+            bm25_map: Dict[str, Tuple[MemoryItem, float]] = {mem.id: (mem, score) for mem, score in candidates}
+            for mem_id, vec_score in vector_results.items():
+                if mem_id not in bm25_map:
+                    for mem, _ in candidates:
+                        if mem.id == mem_id:
+                            bm25_map[mem_id] = (mem, 0.0)
+                            break
+                if mem_id in bm25_map:
+                    _, bm25_score = bm25_map[mem_id]
+                    fused_score = bm25_score * (1.0 - self._vector_weight) + vec_score * self._vector_weight
+                    bm25_map[mem_id] = (bm25_map[mem_id][0], fused_score)
+            candidates = list(bm25_map.values())
+            candidates.sort(key=lambda item: item[1], reverse=True)
 
         if not candidates:
             logger.debug("记忆召回为空：用户=%s", user_id)
@@ -418,13 +449,16 @@ class TwoStageRetriever:
         normalized_bm25 = self._normalize_bm25_score(bm25_score)
         scene_score = self._compute_scene_score(metadata=metadata, retrieval_context=retrieval_context)
         recency_score = self._compute_recency_score(getattr(memory, "updated_at", "") or getattr(memory, "created_at", ""))
-        return (
+        score = (
             normalized_bm25 * self.config.local_bm25_weight
             + importance * self.config.local_importance_weight
             + mention_count * self.config.local_mention_weight
             + recency_score * self.config.local_recency_weight
             + scene_score * self.config.local_scene_weight
         )
+        if metadata.get("_index_archived", False):
+            score *= 0.5
+        return score
 
     def _compute_scene_score(
         self,

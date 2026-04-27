@@ -6,8 +6,10 @@ keeping richer metadata in an inline JSON comment for migration and policy use.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -78,9 +80,15 @@ class ImportantMemoryStore:
     def __init__(self, base_path: str = "memories/important"):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
+        self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
         return self.base_path / f"{user_id}.md"
+
+    def _get_file_lock(self, file_path: str) -> asyncio.Lock:
+        if file_path not in self._locks:
+            self._locks[file_path] = asyncio.Lock()
+        return self._locks[file_path]
 
     def get_user_ids(self) -> List[str]:
         return sorted(file_path.stem for file_path in self.base_path.glob("*.md"))
@@ -224,25 +232,29 @@ class ImportantMemoryStore:
 
     async def _write_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
         file_path = self._get_user_file(user_id)
-        try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = []
-            for memory in memories:
-                display_time = memory.created_at
-                try:
-                    display_time = datetime.fromisoformat(memory.created_at).strftime("%Y-%m-%d %H:%M")
-                except ValueError:
-                    pass
-                lines.append(
-                    f"- [{display_time}] [P{memory.priority}] {memory.content}<!-- {self._build_payload(memory)} -->"
-                )
+        lock = self._get_file_lock(str(file_path))
+        async with lock:
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                lines = []
+                for memory in memories:
+                    display_time = memory.created_at
+                    try:
+                        display_time = datetime.fromisoformat(memory.created_at).strftime("%Y-%m-%d %H:%M")
+                    except ValueError:
+                        pass
+                    lines.append(
+                        f"- [{display_time}] [P{memory.priority}] {memory.content}<!-- {self._build_payload(memory)} -->"
+                    )
 
-            async with aiofiles.open(file_path, "w", encoding="utf-8") as file:
-                await file.write("\n".join(lines))
-            return True
-        except Exception as exc:
-            logger.error("写入重要记忆失败：用户=%s，错误=%s", user_id, exc)
-            return False
+                tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+                async with aiofiles.open(tmp_path, "w", encoding="utf-8") as file:
+                    await file.write("\n".join(lines))
+                os.replace(tmp_path, file_path)
+                return True
+            except Exception as exc:
+                logger.error("写入重要记忆失败：用户=%s，错误=%s", user_id, exc)
+                return False
 
     async def add_memory(
         self,
@@ -320,8 +332,10 @@ class ImportantMemoryStore:
             if score >= min_score:
                 matched.append(
                     ImportantMemoryItem(
+                        id=memory.id,
                         content=memory.content,
                         created_at=memory.created_at,
+                        updated_at=memory.updated_at,
                         source=memory.source,
                         priority=memory.priority,
                         score=score,
@@ -382,3 +396,31 @@ class ImportantMemoryStore:
 
     async def replace_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
         return await self._write_memories(user_id, memories)
+
+    async def mark_recalled(self, user_id: str, memory_ids: List[str]) -> int:
+        """标记重要记忆被召回使用。
+
+        更新 last_recalled_at 和 mention_count。
+        返回实际更新的条目数。
+        """
+        memories = await self._read_memories(user_id)
+        if not memories:
+            return 0
+
+        now_iso = datetime.now().isoformat()
+        updated = 0
+
+        for memory in memories:
+            if memory.id not in memory_ids:
+                continue
+            memory.updated_at = now_iso
+            memory.metadata["last_recalled_at"] = now_iso
+            mention_count = int(memory.metadata.get("mention_count", 1) or 1) + 1
+            memory.metadata["mention_count"] = mention_count
+            updated += 1
+
+        if updated == 0:
+            return 0
+
+        success = await self._write_memories(user_id, memories)
+        return updated if success else 0

@@ -118,7 +118,7 @@ class MemoryFlowService:
                 decision = self.dispute_resolver.resolve_from_memory_metadata(metadata)
                 if decision.level == "ignore":
                     continue
-                record = self.evidence_store.add_record(
+                record = await self.evidence_store.add_record_async(
                     FactEvidenceRecord(
                         record_id="",
                         user_id=user_id,
@@ -136,7 +136,7 @@ class MemoryFlowService:
                     )
                 )
                 if decision.level == "high_confidence":
-                    self.evidence_store.build_signal(
+                    await self.evidence_store.build_signal_async(
                         user_id=user_id,
                         record=record,
                         ttl_hours=self.dispute_config.signal_ttl_hours,

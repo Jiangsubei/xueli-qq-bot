@@ -30,7 +30,11 @@ class Role(Enum):
 
 @dataclass
 class MessageSegment:
-    """消息段"""
+    """OneBot/NapCat 消息段格式（text / image / at / face / reply / mface）。
+
+    注意：`MessageSegment` 本质是 OneBot 协议的 array 消息格式。平台无关的
+    消息表示应使用 ``AttachmentRef`` 与 ``InboundEvent.segments``（见 platform_models.py）。
+    """
     type: str
     data: Dict[str, Any] = field(default_factory=dict)
 
@@ -156,7 +160,11 @@ class MessageSegment:
 
 @dataclass
 class OneBotEvent:
-    """OneBot 事件基类"""
+    """OneBot 协议事件基类。
+
+    .. deprecated:: adapter-layer
+        新代码应优先使用 ``InboundEvent``（platform_models.py）作为平台无关的事件载体。
+    """
     post_type: str
     time: int = field(default_factory=lambda: int(time.time()))
     self_id: int = 0
@@ -181,17 +189,23 @@ class OneBotEvent:
 
 @dataclass
 class MessageEvent(OneBotEvent):
-    """消息事件"""
+    """OneBot/NapCat 消息事件。
+
+    .. deprecated:: adapter-layer
+        此类深度耦合 OneBot 协议细节（CQ 码、QQ 号、font、anonymous 等）。
+        新代码应优先使用平台无关的 ``InboundEvent``（见 platform_models.py），
+        通过 adapter 的 ``attach_inbound_event()`` 进行协议归一化。
+    """
     message_type: str = ""
     sub_type: str = ""
     message_id: int = 0
     user_id: int = 0
     message: List[MessageSegment] = field(default_factory=list)
     raw_message: str = ""
-    font: int = 0
+    font: int = 0  # OneBot-specific; deprecated
     # 群聊特有
     group_id: Optional[int] = None
-    anonymous: Optional[Dict[str, Any]] = None
+    anonymous: Optional[Dict[str, Any]] = None  # OneBot-specific; deprecated
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MessageEvent":

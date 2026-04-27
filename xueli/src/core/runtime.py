@@ -18,6 +18,7 @@ from src.core.message_trace import build_trace_id, format_trace_log, get_executi
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import SendError, classify_pipeline_error
 from src.core.platform_models import InboundEvent, ReplyAction, SessionRef
+from src.handlers.message_handler import StaleWindowError
 from src.core.reply_send_orchestrator import ReplyPartPlan, ReplySendOrchestrator
 from src.core.platform_normalizers import get_attached_inbound_event
 from src.core.session_message_pipeline import SessionMessagePipeline
@@ -274,6 +275,12 @@ class BotRuntime:
                     continue
                 logger.info("消息处理结束：%s", trace_log)
                 return
+        except (StaleWindowError, asyncio.CancelledError):
+            logger.info("窗口过期或任务被取消：%s", trace_log)
+            try:
+                await self.message_handler.complete_window_dispatch(plan)
+            except Exception:
+                logger.debug("过期窗口释放调度失败：%s", trace_log, exc_info=True)
         except asyncio.TimeoutError:
             logger.error("处理消息事件超时：%s timeout=%ss", trace_log, response_timeout)
             self.runtime_metrics.record_error(message_error=True)
@@ -758,8 +765,10 @@ class BotRuntime:
             user_id=resolved_user_id,
         )
 
-    @staticmethod
-    def _build_mention_segment(session: SessionRef, user_id: Any) -> Dict[str, Any]:
+    def _build_mention_segment(self, session: SessionRef, user_id: Any) -> Dict[str, Any]:
+        adapter = getattr(self, "adapter", None)
+        if adapter is not None and hasattr(adapter, "build_mention_payload"):
+            return adapter.build_mention_payload(str(user_id))
         if session.platform == "qq":
             return MessageSegment.at(user_id).to_dict()
         return {"type": "mention", "data": {"user_id": str(user_id)}}

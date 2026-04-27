@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -58,7 +60,17 @@ class ConversationSessionManager:
         return self.clear(self.get_key(event))
 
     def clean_expired(self) -> None:
-        pass
+        """移除超过 6 小时无活动且无消息的空闲会话。"""
+        now = time.time()
+        stale_keys = []
+        for key, conv in self._conversations.items():
+            age_seconds = now - conv.last_update
+            if not conv.messages and age_seconds > 6 * 3600:
+                stale_keys.append(key)
+        for key in stale_keys:
+            self._conversations.pop(key, None)
+        if stale_keys:
+            logger.debug("清理了 %s 个过期会话", len(stale_keys))
 
     def count_active(self) -> int:
         return len(self._conversations)
@@ -73,6 +85,8 @@ class ConversationSessionManager:
             sessions = await self._conversation_store.get_conversations(
                 self._extract_user_id_from_key(key), limit=3
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("加载历史会话失败：%s，错误=%s", key, exc)
             return
