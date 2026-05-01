@@ -13,6 +13,7 @@ if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = aiohttp
 
 from src.core.models import PromptSectionPolicy, PromptPlan, TemporalContext
+from src.handlers.message_context import MessageContext
 from src.handlers.reply_pipeline import ReplyPipeline
 
 
@@ -64,16 +65,20 @@ class ReplyPipelinePromptPlanTests(unittest.TestCase):
 
         prompt = pipeline.build_response_system_prompt(
             event=None,
-            person_fact_context="1. 用户长期在准备考研",
-            persistent_memory_context="",
-            session_restore_context="1. 上一轮会话摘要",
-            precise_recall_context="1. 更早旧对话定位",
-            dynamic_memory_context="1. 动态记忆",
-            is_first_turn=False,
-            recent_history_text="最近历史",
-            current_message="继续聊这个",
-            temporal_context=temporal_context,
-            prompt_plan=prompt_plan,
+            message_context=MessageContext(
+                user_message="继续聊这个",
+                temporal_context=temporal_context,
+                recent_history_text="最近历史",
+                rendered_recent_history="最近历史",
+                rendered_timeline_summary=temporal_context.summary_text,
+                person_fact_context="1. 用户长期在准备考研",
+                persistent_memory_context="",
+                session_restore_context="1. 上一轮会话摘要",
+                precise_recall_context="1. 更早旧对话定位",
+                dynamic_memory_context="1. 动态记忆",
+                is_first_turn=False,
+                prompt_plan=prompt_plan,
+            ),
         )
 
         self.assertIn("回复目标：recall", prompt)

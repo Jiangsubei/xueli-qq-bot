@@ -35,6 +35,13 @@ class ReplyPromptRenderer:
         current_message: str,
         planner_reason: str = "",
     ) -> RenderedPrompt:
+        """Render reply.prompt template with 10 section blocks.
+
+        Template variables (see reply.prompt header for full docs):
+          identity_block, constraint_block, scene_block, continuity_block,
+          planner_reference_block, vision_block, person_facts_block,
+          precise_recall_block, dynamic_memory_block, final_style_block
+        """
         plan = prompt_plan or PromptPlan()
         chat_mode = str(getattr(event, "message_type", "") or MessageType.PRIVATE.value).strip().lower()
         style_guide = self.style_policy.build(

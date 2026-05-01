@@ -16,7 +16,15 @@ from src.core.dispatcher import EventContext, EventDispatcher
 from src.core.log_text import preview_json_for_log, preview_text_for_log
 from src.core.message_trace import build_trace_id, format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter
-from src.core.pipeline_errors import SendError, classify_pipeline_error
+from src.core.pipeline_errors import (
+    ImageProcessingError,
+    MemoryOperationError,
+    ModelParseError,
+    ModelRequestError,
+    PipelineExecutionError,
+    SendError,
+    classify_pipeline_error,
+)
 from src.core.platform_models import InboundEvent, ReplyAction, SessionRef
 from src.handlers.message_handler import StaleWindowError
 from src.core.reply_send_orchestrator import ReplyPartPlan, ReplySendOrchestrator
@@ -181,6 +189,25 @@ class BotRuntime:
         self._message_tasks.clear()
         self._sync_runtime_counters()
 
+    async def _try_dispatch_next_window(self, plan, *, trace_id: str = ""):
+        """Try to dispatch the next buffered window. Returns (event, plan) or (None, None) if done."""
+        next_dispatch = await self.message_handler.complete_window_dispatch(plan)
+        if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
+            return await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+        return None, None
+
+    async def _release_window_on_error(self, plan, trace_log: str) -> None:
+        try:
+            await self.message_handler.complete_window_dispatch(plan)
+        except Exception:
+            logger.debug("释放窗口调度失败：%s", trace_log, exc_info=True)
+
+    async def _send_error_fallback(self, current_event, text: str, trace_log: str, trace_id: str) -> None:
+        try:
+            await self._send_response(current_event, text, trace_id=trace_id)
+        except Exception as fallback_exc:
+            logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
+
     async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
         msg_id = getattr(event, "message_id", 0)
         if not hasattr(self, "_processed_message_ids"):
@@ -220,9 +247,8 @@ class BotRuntime:
                 )
                 logger.debug("规划原始：%s reply_reference=%s", trace_log, str(getattr(plan, "reply_reference", "") or "").strip())
                 if not plan.should_reply:
-                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
-                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
-                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                    current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
+                    if current_event is not None:
                         continue
                     return
 
@@ -239,9 +265,8 @@ class BotRuntime:
                     plan.reason,
                 )
                 if not plan.should_reply:
-                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
-                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
-                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                    current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
+                    if current_event is not None:
                         continue
                     return
 
@@ -256,9 +281,8 @@ class BotRuntime:
                 )
                 if not reply_result or not reply_result.text:
                     logger.info("回复为空，跳过发送：%s", trace_log)
-                    next_dispatch = await self.message_handler.complete_window_dispatch(plan)
-                    if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
-                        current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                    current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
+                    if current_event is not None:
                         continue
                     return
 
@@ -269,45 +293,29 @@ class BotRuntime:
                     logger.info("发送完成：%s", trace_log)
                     await self.message_handler.record_group_reply_sent(current_event, reply_result.text)
                     await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
-                next_dispatch = await self.message_handler.complete_window_dispatch(plan)
-                if next_dispatch.status == "dispatch_window" and next_dispatch.window is not None:
-                    current_event, plan = await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
+                current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
+                if current_event is not None:
                     continue
                 logger.info("消息处理结束：%s", trace_log)
                 return
         except (StaleWindowError, asyncio.CancelledError):
             logger.info("窗口过期或任务被取消：%s", trace_log)
-            try:
-                await self.message_handler.complete_window_dispatch(plan)
-            except Exception:
-                logger.debug("过期窗口释放调度失败：%s", trace_log, exc_info=True)
+            await self._release_window_on_error(plan, trace_log)
         except asyncio.TimeoutError:
             logger.error("处理消息事件超时：%s timeout=%ss", trace_log, response_timeout)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
-            try:
-                await self.message_handler.complete_window_dispatch(plan)
-            except Exception:
-                logger.debug("超时后释放窗口调度失败：%s", trace_log, exc_info=True)
+            await self._release_window_on_error(plan, trace_log)
             if plan is not None and plan.should_reply:
-                try:
-                    await self._send_response(current_event, "抱歉，这次处理超时了，请稍后再试。", trace_id=trace_id)
-                except Exception as fallback_exc:
-                    logger.error("发送超时兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
-        except Exception as exc:
+                await self._send_error_fallback(current_event, "抱歉，这次处理超时了，请稍后再试。", trace_log, trace_id)
+        except (SendError, ModelRequestError, ModelParseError, ImageProcessingError, MemoryOperationError, PipelineExecutionError) as exc:
             category = classify_pipeline_error(exc)
             logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
-            try:
-                await self.message_handler.complete_window_dispatch(plan)
-            except Exception:
-                logger.debug("异常后释放窗口调度失败：%s", trace_log, exc_info=True)
+            await self._release_window_on_error(plan, trace_log)
             if plan is not None and plan.should_reply:
-                try:
-                    await self._send_response(current_event, "抱歉，这次处理消息时出了点问题。", trace_id=trace_id)
-                except Exception as fallback_exc:
-                    logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
+                await self._send_error_fallback(current_event, "抱歉，这次处理消息时出了点问题。", trace_log, trace_id)
 
     async def _send_response(self, event: MessageEvent, reply: Any, plan: Any = None, trace_id: str = "") -> bool:
         # stale 检查：发送前检查窗口是否已过期或已被 superseded

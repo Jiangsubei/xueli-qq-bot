@@ -404,7 +404,7 @@ class MemoryManager:
                 if updated:
                     logger.debug("记忆召回回写完成：用户=%s，更新条目=%s", user_id, updated)
             except Exception as exc:
-                logger.debug("记忆召回回写失败（非致命）：用户=%s，错误=%s", user_id, exc)
+                logger.error("记忆召回回写失败（非致命）：用户=%s，错误=%s", user_id, exc)
 
         self.task_manager.create_task(_mark(), name=f"memory-mark-recalled-{user_id}")
 

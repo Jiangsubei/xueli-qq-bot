@@ -68,11 +68,9 @@ class ConversationPlanner:
         return names
 
     def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
-        identifier = str(user_id or "").strip() or "unknown"
-        name = str(display_name or "").strip()
-        if name and name != identifier:
-            return f"{identifier}（{name}）"
-        return identifier
+        from src.handlers.identity_utils import format_identity_label
+
+        return format_identity_label(user_id, display_name)
 
     def _build_assistant_identity_text(self) -> str:
         assistant_name = self._assistant_name()
@@ -93,21 +91,14 @@ class ConversationPlanner:
         return self.prompt_planner.decision_output_schema()
 
     def _build_system_prompt(self, chat_mode: str) -> str:
-        chat_mode_label = "私聊" if chat_mode == "private" else "群聊"
-        scene_guidance = (
-            "私聊里请更关注：这句是否完整、是否像直接提问、是否像情绪暴露、是否像隔了一段时间重新接话。"
-            "如果只是首次开场或自然打招呼，不要默认写成强连续续聊。"
-            if chat_mode == "private"
-            else (
-                "群聊里请更关注：当前消息是否自然指向助手、现在接话会不会打断别人、是否只需要简短回复。\n"
-                "如果是用户之间互聊、或没有明确指向助手，需要判断此时接话是否合适，会不会显得突兀。"
-                "选 reply 后，prompt_plan 应使用 light_presence，reply_reference 应简短自然，不要长篇大论。"
-            )
-        )
+        """Render planner.prompt template.
+
+        Template variables: chat_mode_label, decision_output_schema.
+        All scene guidance is fixed text inside the template.
+        """
         return self.template_loader.render(
             "planner.prompt",
-            chat_mode_label=chat_mode_label,
-            scene_guidance=scene_guidance,
+            chat_mode_label="私聊" if chat_mode == "private" else "群聊",
             decision_output_schema=self._decision_output_schema(),
         )
 

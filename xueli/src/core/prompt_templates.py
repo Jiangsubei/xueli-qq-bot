@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from string import Formatter
@@ -7,7 +8,13 @@ from typing import Any
 
 
 class PromptTemplateLoader:
-    """Lightweight file-based prompt template loader."""
+    """Lightweight file-based prompt template loader.
+
+    Supports #-prefixed comment lines in .prompt files — they are stripped
+    during load() and never appear in rendered output.
+    """
+
+    _COMMENT_PATTERN = re.compile(r"^\s*#")
 
     def __init__(self, *, locale: str = "zh-CN") -> None:
         self.locale = locale
@@ -22,7 +29,8 @@ class PromptTemplateLoader:
         template_path = self.templates_dir / name
         if not template_path.exists():
             raise FileNotFoundError(f"Prompt template not found: {template_path}")
-        return template_path.read_text(encoding="utf-8")
+        raw = template_path.read_text(encoding="utf-8")
+        return self._normalize_spacing(self._strip_comments(raw))
 
     def render(self, name: str, **fields: Any) -> str:
         template = self.load(name)
@@ -37,6 +45,15 @@ class PromptTemplateLoader:
             raise KeyError(f"Prompt template '{name}' missing fields: {', '.join(missing)}")
         rendered = template.format(**fields)
         return self._normalize_spacing(rendered)
+
+    @staticmethod
+    def _strip_comments(text: str) -> str:
+        """Remove #-prefixed comment lines from template text."""
+        lines = [
+            line for line in str(text or "").splitlines()
+            if not PromptTemplateLoader._COMMENT_PATTERN.match(line)
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def _normalize_spacing(text: str) -> str:

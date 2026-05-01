@@ -6,8 +6,7 @@ import logging
 import os
 import re
 import time
-from collections import defaultdict, deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.config import (
     AppConfig,
@@ -43,6 +42,7 @@ from src.handlers.message_context import MessageContext
 from src.handlers.planning_window_service import PlanningWindowService
 from src.handlers.conversation_window_models import BufferedWindow, WindowDispatchResult
 from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
+from src.handlers.repeat_echo_service import RepeatEchoService
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 from src.handlers.timing_gate_service import TimingGateService
 from src.memory.memory_flow_service import MemoryFlowService
@@ -147,13 +147,13 @@ class MessageHandler:
         self.reply_pipeline = ReplyPipeline(self)
         self.planning_window_service = PlanningWindowService(self, self.app_config.planning_window)
 
+        self.repeat_echo_service = RepeatEchoService(self.app_config, self.runtime_metrics)
+        self.repeat_echo_service.set_lock(asyncio.Lock())
+
         self.last_send_time: Dict[str, float] = {}
         self.rate_limit_lock = asyncio.Lock()
         self.private_batch_window_seconds = float(getattr(self.app_config.planning_window, "private_window_seconds", 1.2) or 0.0)
         self.group_proactive_window_seconds = float(getattr(self.app_config.planning_window, "group_proactive_window_seconds", 0.45) or 0.0)
-        self.group_repeat_lock = asyncio.Lock()
-        self._group_repeat_history: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
-        self._group_repeat_cooldowns: Dict[tuple[int, str], float] = {}
 
         self._sync_active_conversations_metric()
 
@@ -236,11 +236,9 @@ class MessageHandler:
         return str(content or "").strip()
 
     def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
-        identifier = str(user_id or "").strip() or "unknown"
-        name = str(display_name or "").strip()
-        if name and name != identifier:
-            return f"{identifier}（{name}）"
-        return identifier
+        from src.handlers.identity_utils import format_identity_label
+
+        return format_identity_label(user_id, display_name)
 
     def _build_assistant_identity_text(self) -> str:
         assistant_name = self._get_assistant_name()
@@ -279,24 +277,6 @@ class MessageHandler:
         if self.app_config.behavior.content:
             parts.append(self.app_config.behavior.content)
         return "\n\n".join(parts) if parts else "你是一个友好、可靠、有帮助的 AI 助手。"
-
-    def _build_memory_tools(self) -> List[Dict[str, Any]]:
-        return self.reply_pipeline.build_memory_tools()
-
-    def _augment_system_prompt_for_tools(self, system_prompt: str, tools: List[Dict[str, Any]]) -> str:
-        return self.reply_pipeline.augment_system_prompt_for_tools(system_prompt, tools)
-
-    async def _execute_tool_call(self, tool_call: Dict[str, Any], user_id: str) -> Dict[str, Any]:
-        return await self.reply_pipeline.execute_tool_call(tool_call, user_id)
-
-    async def _chat_with_tools(
-        self,
-        messages: List[Dict[str, Any]],
-        user_id: str,
-        temperature: float = 0.7,
-        event: Optional[MessageEvent] = None,
-    ) -> AIResponse:
-        return await self.reply_pipeline.chat_with_tools(messages=messages, user_id=user_id, temperature=temperature, event=event)
 
     def _format_prompt_message_content(self, content: Any) -> str:
         if isinstance(content, str):
@@ -415,31 +395,13 @@ class MessageHandler:
         self._ensure_extended_services()
         self.session_manager.clean_expired()
         await self._cleanup_private_batch_state()
-        self._cleanup_group_repeat_state()
+        if hasattr(self, "repeat_echo_service") and self.repeat_echo_service is not None:
+            self.repeat_echo_service.cleanup()
         self._sync_active_conversations_metric()
 
     async def _cleanup_private_batch_state(self) -> None:
         active_keys = list(getattr(self.session_manager, "_conversations", {}).keys())
         await self.planning_window_service.cleanup(active_keys=active_keys)
-
-    def _cleanup_group_repeat_state(self) -> None:
-        now = time.time()
-        max_window = max(20.0, float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0))
-        history_cutoff = max_window * 3
-        stale_groups: List[int] = []
-        for group_id, history in self._group_repeat_history.items():
-            while history and now - float(history[0].get("time", 0.0) or 0.0) > history_cutoff:
-                history.popleft()
-            if not history:
-                stale_groups.append(group_id)
-        for group_id in stale_groups:
-            self._group_repeat_history.pop(group_id, None)
-
-        stale_cooldowns = [
-            key for key, until in self._group_repeat_cooldowns.items() if float(until or 0.0) <= now
-        ]
-        for key in stale_cooldowns:
-            self._group_repeat_cooldowns.pop(key, None)
 
     def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
         return self.conversation_plan_coordinator.format_group_window_context(reply_context)
@@ -470,58 +432,15 @@ class MessageHandler:
     def _group_planner_available(self) -> bool:
         return is_group_reply_decision_configured(self.app_config)
 
-    def _normalize_repeat_echo_text(self, text: str) -> str:
-        return re.sub(r"\s+", " ", str(text or "").strip())
-
-    def _is_repeat_echo_candidate(self, event: MessageEvent, text: str) -> bool:
-        if event.message_type != MessageType.GROUP.value or event.group_id is None:
-            return False
-        if not self.app_config.group_reply.repeat_echo_enabled:
-            return False
-        if self._is_direct_mention(event) or self._has_image_input(event):
-            return False
-        normalized = self._normalize_repeat_echo_text(text)
-        if not normalized or normalized.startswith("/"):
-            return False
-        return 2 <= len(normalized) <= 20
-
     async def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
-        display_text = self._normalize_repeat_echo_text(self.extract_user_message(event))
-        if not self._is_repeat_echo_candidate(event, display_text):
+        display_text = self.repeat_echo_service._normalize_text(self.extract_user_message(event))
+        if not self.repeat_echo_service.is_candidate(
+            event, display_text,
+            is_direct_mention=self._is_direct_mention(event),
+            has_image=self._has_image_input(event),
+        ):
             return None
-
-        async with self.group_repeat_lock:
-            now = time.time()
-            group_id = int(event.group_id or 0)
-            key = display_text.casefold()
-            window_seconds = float(self.app_config.group_reply.repeat_echo_window_seconds or 20.0)
-            min_count = max(2, int(self.app_config.group_reply.repeat_echo_min_count or 2))
-            cooldown_seconds = max(0.0, float(self.app_config.group_reply.repeat_echo_cooldown_seconds or 0.0))
-
-            history = self._group_repeat_history[group_id]
-            while history and now - float(history[0]["time"]) > window_seconds:
-                history.popleft()
-
-            same_entries = [item for item in history if item.get("key") == key]
-            unique_users = {int(item.get("user_id", 0)) for item in same_entries}
-            unique_users.add(int(event.user_id))
-
-            history.append({"time": now, "key": key, "user_id": int(event.user_id)})
-
-            cooldown_key = (group_id, key)
-            cooldown_until = float(self._group_repeat_cooldowns.get(cooldown_key, 0.0) or 0.0)
-            if cooldown_until > now:
-                return None
-
-            if len(unique_users) < min_count:
-                return None
-
-            self._group_repeat_cooldowns[cooldown_key] = now + cooldown_seconds
-        if self.runtime_metrics:
-            self.runtime_metrics.record_group_repeat_echo()
-        if not bool(getattr(self.app_config.bot_behavior, "log_full_prompt", False)):
-            logger.info("触发群聊复读：群=%s，触发用户数=%s", group_id, len(unique_users))
-        return display_text
+        return await self.repeat_echo_service.check_trigger(event, display_text)
 
     async def _plan_group_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
@@ -961,45 +880,7 @@ class MessageHandler:
             prompt_plan=getattr(plan, "prompt_plan", None) if plan else None,
         )
 
-    def _build_response_system_prompt(
-        self,
-        person_fact_context: str,
-        persistent_memory_context: str,
-        session_restore_context: str,
-        precise_recall_context: str,
-        dynamic_memory_context: str,
-        is_first_turn: bool,
-        event: Optional[MessageEvent] = None,
-        plan: Optional[MessageHandlingPlan] = None,
-        recent_history_text: str = "",
-        current_message: str = "",
-    ) -> str:
-        return self.reply_pipeline.build_response_system_prompt(
-            event=event,
-            person_fact_context=person_fact_context,
-            persistent_memory_context=persistent_memory_context,
-            session_restore_context=session_restore_context,
-            precise_recall_context=precise_recall_context,
-            dynamic_memory_context=dynamic_memory_context,
-            is_first_turn=is_first_turn,
-            plan=plan,
-            recent_history_text=recent_history_text,
-            current_message=current_message,
-        )
 
-    def _build_response_messages(
-        self,
-        system_prompt: str,
-        user_message: str,
-        base64_images: List[str],
-        related_history_messages: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        return self.reply_pipeline.build_response_messages(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            base64_images=base64_images,
-            related_history_messages=related_history_messages,
-        )
 
     async def get_ai_response(
         self,

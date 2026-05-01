@@ -647,104 +647,116 @@ class SQLiteConversationStore:
         owner_user_id = str(session.user_id or "")
         metadata_json = json.dumps(session.metadata or {}, ensure_ascii=False)
         closed_at = session.closed_at or _now_iso()
+        session_dict = session.to_dict()
+        session_id = session.session_id
 
-        conn = self._connection()
-        try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO conversations
-                (session_id, dialogue_key, user_id, message_type, group_id,
-                 started_at, updated_at, closed_at, turn_count, latest_message_id, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session.session_id,
-                    session.dialogue_key,
-                    session.user_id,
-                    session.message_type,
-                    session.group_id,
-                    session.started_at,
-                    session.updated_at,
-                    closed_at,
-                    session.turn_count,
-                    session.metadata.get("latest_message_id", ""),
-                    metadata_json,
-                ),
-            )
-            for turn in session.turns:
+        def _do_persist():
+            conn = self._connection()
+            try:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO conversation_turns
-                    (turn_id, session_id, user, assistant, timestamp,
-                     source_message_id, source_group_id, owner_user_id,
-                     source_message_type, dialogue_key, image_description)
+                    INSERT OR REPLACE INTO conversations
+                    (session_id, dialogue_key, user_id, message_type, group_id,
+                     started_at, updated_at, closed_at, turn_count, latest_message_id, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        turn.turn_id,
                         session.session_id,
-                        turn.user,
-                        turn.assistant,
-                        turn.timestamp,
-                        turn.source_message_id,
-                        turn.source_group_id,
-                        turn.owner_user_id,
-                        turn.source_message_type,
-                        turn.dialogue_key,
-                        turn.image_description,
+                        session.dialogue_key,
+                        session.user_id,
+                        session.message_type,
+                        session.group_id,
+                        session.started_at,
+                        session.updated_at,
+                        closed_at,
+                        session.turn_count,
+                        session.metadata.get("latest_message_id", ""),
+                        metadata_json,
                     ),
                 )
-            conn.commit()
-            session.dirty_turns = 0
-            logger.debug(
-                "对话会话已写入DB：用户=%s，会话=%s，轮次=%s",
-                owner_user_id,
-                session.session_id,
-                session.turn_count,
-            )
-            if session.closed_at:
-                self._sessions.pop(session.session_id, None)
-            return ConversationRecord.from_dict(copy.deepcopy(session.to_dict()))
+                for turn in session.turns:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO conversation_turns
+                        (turn_id, session_id, user, assistant, timestamp,
+                         source_message_id, source_group_id, owner_user_id,
+                         source_message_type, dialogue_key, image_description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            turn.turn_id,
+                            session.session_id,
+                            turn.user,
+                            turn.assistant,
+                            turn.timestamp,
+                            turn.source_message_id,
+                            turn.source_group_id,
+                            turn.owner_user_id,
+                            turn.source_message_type,
+                            turn.dialogue_key,
+                            turn.image_description,
+                        ),
+                    )
+                conn.commit()
+                session.dirty_turns = 0
+                logger.debug(
+                    "对话会话已写入DB：用户=%s，会话=%s，轮次=%s",
+                    owner_user_id,
+                    session.session_id,
+                    session.turn_count,
+                )
+            finally:
+                conn.close()
+
+        try:
+            await asyncio.to_thread(_do_persist)
         except Exception as exc:
             logger.error(
                 "保存对话会话失败：用户=%s，会话=%s，错误=%s",
                 owner_user_id,
-                session.session_id,
+                session_id,
                 exc,
                 exc_info=True,
             )
             return None
-        finally:
-            conn.close()
+
+        if session.closed_at:
+            self._sessions.pop(session.session_id, None)
+        return ConversationRecord.from_dict(copy.deepcopy(session_dict))
 
     async def load_session(self, user_id: str, session_id: str) -> Optional[ConversationRecord]:
         import sqlite3
-        conn = self._connection()
-        try:
-            cur = conn.execute(
-                "SELECT * FROM conversations WHERE session_id = ?",
-                (str(session_id),),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-            cols = [c[0] for c in cur.description]
-            record_dict = dict(zip(cols, row))
-            record_dict["metadata"] = json.loads(record_dict.get("metadata", "{}") or "{}")
 
-            turn_cur = conn.execute(
-                "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY turn_id",
-                (str(session_id),),
-            )
-            turn_rows = turn_cur.fetchall()
-            turn_cols = [c[0] for c in turn_cur.description]
-            record_dict["turns"] = [t.to_dict() for t in self._rows_to_turns(turn_rows, turn_cols)]
-            return ConversationRecord.from_dict(record_dict)
+        def _do_load():
+            conn = self._connection()
+            try:
+                cur = conn.execute(
+                    "SELECT * FROM conversations WHERE session_id = ?",
+                    (str(session_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                cols = [c[0] for c in cur.description]
+                record_dict = dict(zip(cols, row))
+                record_dict["metadata"] = json.loads(record_dict.get("metadata", "{}") or "{}")
+
+                turn_cur = conn.execute(
+                    "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY turn_id",
+                    (str(session_id),),
+                )
+                turn_rows = turn_cur.fetchall()
+                turn_cols = [c[0] for c in turn_cur.description]
+                record_dict["turns"] = [t.to_dict() for t in self._rows_to_turns(turn_rows, turn_cols)]
+                return ConversationRecord.from_dict(record_dict)
+            finally:
+                conn.close()
+
+        try:
+            return await asyncio.to_thread(_do_load)
         except Exception as exc:
             logger.warning("加载对话会话失败：用户=%s，会话=%s，错误=%s", user_id, session_id, exc)
             return None
-        finally:
-            conn.close()
 
     async def update_session_metadata(
         self,
@@ -753,29 +765,52 @@ class SQLiteConversationStore:
         metadata: Dict[str, Any],
     ) -> Optional[ConversationRecord]:
         import sqlite3
-        conn = self._connection()
-        try:
-            live = self._sessions.get(str(session_id))
-            if live is not None:
-                live.metadata.update(dict(metadata or {}))
-                payload = live.to_dict()
-            else:
-                cur = conn.execute(
-                    "SELECT metadata FROM conversations WHERE session_id = ?",
-                    (str(session_id),),
+
+        sid = str(session_id)
+        live = self._sessions.get(sid)
+        live_dict = None
+        if live is not None:
+            live.metadata.update(dict(metadata or {}))
+            live_dict = live.to_dict()
+            payload_metadata = dict(live_dict.get("metadata") or {})
+        else:
+            live_dict = None
+            payload_metadata = dict(metadata or {})
+
+        def _do_update():
+            conn = self._connection()
+            try:
+                base_metadata = {}
+                if live_dict is None:
+                    cur = conn.execute(
+                        "SELECT metadata FROM conversations WHERE session_id = ?",
+                        (sid,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    base_metadata = json.loads(row[0] or "{}")
+                merged_metadata = {**base_metadata, **payload_metadata}
+                metadata_json = json.dumps(merged_metadata, ensure_ascii=False)
+                conn.execute(
+                    "UPDATE conversations SET metadata = ? WHERE session_id = ?",
+                    (metadata_json, sid),
                 )
-                row = cur.fetchone()
-                if not row:
-                    return None
-                payload = {"metadata": json.loads(row[0] or "{}")}
-            payload["metadata"] = {**dict(payload.get("metadata") or {}), **dict(metadata or {})}
-            metadata_json = json.dumps(payload["metadata"], ensure_ascii=False)
-            conn.execute(
-                "UPDATE conversations SET metadata = ? WHERE session_id = ?",
-                (metadata_json, str(session_id)),
-            )
-            conn.commit()
-            return ConversationRecord.from_dict(copy.deepcopy(payload))
+                conn.commit()
+                if live_dict is not None:
+                    result_dict = copy.deepcopy(live_dict)
+                    result_dict["metadata"] = merged_metadata
+                else:
+                    result_dict = {"metadata": merged_metadata}
+                return result_dict
+            finally:
+                conn.close()
+
+        try:
+            result_dict = await asyncio.to_thread(_do_update)
+            if result_dict is None:
+                return None
+            return ConversationRecord.from_dict(result_dict)
         except Exception as exc:
             logger.warning(
                 "写入会话元数据失败：用户=%s，会话=%s，错误=%s",
@@ -784,40 +819,42 @@ class SQLiteConversationStore:
                 exc,
             )
             return None
-        finally:
-            conn.close()
 
     async def get_conversations(self, user_id: str, limit: int = 10) -> List[ConversationRecord]:
         import sqlite3
-        conn = self._connection()
-        try:
-            cur = conn.execute(
-                """
-                SELECT * FROM conversations
-                WHERE user_id = ?
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (str(user_id), limit),
-            )
-            rows = cur.fetchall()
-            cols = [c[0] for c in cur.description]
-            records: List[ConversationRecord] = []
-            for row in rows:
-                record_dict = dict(zip(cols, row))
-                record_dict["metadata"] = json.loads(record_dict.get("metadata", "{}") or "{}")
 
-                turn_cur = conn.execute(
-                    "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY turn_id",
-                    (record_dict["session_id"],),
+        def _do_get():
+            conn = self._connection()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM conversations
+                    WHERE user_id = ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (str(user_id), limit),
                 )
-                turn_rows = turn_cur.fetchall()
-                turn_cols = [c[0] for c in turn_cur.description]
-                record_dict["turns"] = [t.to_dict() for t in self._rows_to_turns(turn_rows, turn_cols)]
-                records.append(ConversationRecord.from_dict(record_dict))
-            return records
-        finally:
-            conn.close()
+                rows = cur.fetchall()
+                cols = [c[0] for c in cur.description]
+                records: List[ConversationRecord] = []
+                for row in rows:
+                    record_dict = dict(zip(cols, row))
+                    record_dict["metadata"] = json.loads(record_dict.get("metadata", "{}") or "{}")
+
+                    turn_cur = conn.execute(
+                        "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY turn_id",
+                        (record_dict["session_id"],),
+                    )
+                    turn_rows = turn_cur.fetchall()
+                    turn_cols = [c[0] for c in turn_cur.description]
+                    record_dict["turns"] = [t.to_dict() for t in self._rows_to_turns(turn_rows, turn_cols)]
+                    records.append(ConversationRecord.from_dict(record_dict))
+                return records
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_do_get)
 
     def active_session_ids(self) -> List[str]:
         return list(self._sessions.keys())
@@ -829,7 +866,8 @@ class SQLiteConversationStore:
     async def add_group_message(self, group_key: str, message: Dict[str, Any]) -> None:
         """Persist a group chat message to SQLite."""
         import sqlite3
-        async with self._lock:
+
+        def _do_add():
             conn = self._connection()
             try:
                 conn.execute(
@@ -871,6 +909,9 @@ class SQLiteConversationStore:
             finally:
                 conn.close()
 
+        async with self._lock:
+            await asyncio.to_thread(_do_add)
+
     async def get_recent_group_messages(
         self,
         group_key: str,
@@ -881,39 +922,47 @@ class SQLiteConversationStore:
         # 归一化：支持 "qq:group:123456" 和 "group:123456" 两种格式查询
         parts = group_key.split(":")
         normalized_key = f"group:{parts[-1]}" if len(parts) >= 2 and parts[-1].isdigit() else group_key
-        conn = self._connection()
-        try:
-            cur = conn.execute(
-                """
-                SELECT * FROM group_messages
-                WHERE group_key = ?
-                ORDER BY event_time DESC
-                LIMIT ?
-                """,
-                (normalized_key, limit),
-            )
-            results: List[Dict[str, Any]] = []
-            for row in cur.fetchall():
-                cols = [c[0] for c in cur.description]
-                d = dict(zip(cols, row))
-                d["has_image"] = bool(d["has_image"])
-                d["raw_has_image"] = bool(d["has_image"])
-                d["image_context_enabled"] = bool(d["image_context_enabled"])
-                d["vision_available"] = bool(d["vision_available"])
-                d["image_file_ids"] = json.loads(d.get("image_file_ids", "[]"))
-                d["per_image_descriptions"] = json.loads(d.get("per_image_descriptions", "[]"))
-                results.append(d)
-            return list(reversed(results))
-        finally:
-            conn.close()
+
+        def _do_get():
+            conn = self._connection()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM group_messages
+                    WHERE group_key = ?
+                    ORDER BY event_time DESC
+                    LIMIT ?
+                    """,
+                    (normalized_key, limit),
+                )
+                results: List[Dict[str, Any]] = []
+                for row in cur.fetchall():
+                    cols = [c[0] for c in cur.description]
+                    d = dict(zip(cols, row))
+                    d["has_image"] = bool(d["has_image"])
+                    d["raw_has_image"] = bool(d["has_image"])
+                    d["image_context_enabled"] = bool(d["image_context_enabled"])
+                    d["vision_available"] = bool(d["vision_available"])
+                    d["image_file_ids"] = json.loads(d.get("image_file_ids", "[]"))
+                    d["per_image_descriptions"] = json.loads(d.get("per_image_descriptions", "[]"))
+                    results.append(d)
+                return list(reversed(results))
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_do_get)
 
     async def clear_group_messages(self, group_key: str) -> None:
         """Delete all messages for a group_key."""
         import sqlite3
-        async with self._lock:
+
+        def _do_clear():
             conn = self._connection()
             try:
                 conn.execute("DELETE FROM group_messages WHERE group_key = ?", (group_key,))
                 conn.commit()
             finally:
                 conn.close()
+
+        async with self._lock:
+            await asyncio.to_thread(_do_clear)

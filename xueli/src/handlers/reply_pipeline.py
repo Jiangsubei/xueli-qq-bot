@@ -635,11 +635,9 @@ class ReplyPipeline:
         return str(getattr(fallback, "name", "") or "").strip() or "助手"
 
     def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
-        identifier = str(user_id or "").strip() or "unknown"
-        name = str(display_name or "").strip()
-        if name and name != identifier:
-            return f"{identifier}（{name}）"
-        return identifier
+        from src.handlers.identity_utils import format_identity_label
+
+        return format_identity_label(user_id, display_name)
 
     def _current_user_label(self, event: Optional[MessageEvent]) -> str:
         if event is None:
@@ -750,36 +748,15 @@ class ReplyPipeline:
         self,
         *,
         event: Optional[MessageEvent] = None,
-        person_fact_context: str,
-        persistent_memory_context: str,
-        session_restore_context: str,
-        precise_recall_context: str,
-        dynamic_memory_context: str,
-        is_first_turn: bool,
+        message_context: MessageContext,
         plan: Optional[MessageHandlingPlan] = None,
-        recent_history_text: str = "",
-        current_message: str = "",
-        temporal_context: Optional[TemporalContext] = None,
-        prompt_plan: Optional[PromptPlan] = None,
     ) -> str:
-        message_context = MessageContext(
-            user_message=str(current_message or "").strip(),
-            temporal_context=temporal_context or TemporalContext(),
-            recent_history_text=recent_history_text,
-            rendered_recent_history=recent_history_text,
-            rendered_timeline_summary=str(getattr(temporal_context, "summary_text", "") or ""),
-            person_fact_context=person_fact_context,
-            persistent_memory_context=persistent_memory_context,
-            session_restore_context=session_restore_context,
-            precise_recall_context=precise_recall_context,
-            dynamic_memory_context=dynamic_memory_context,
-            prompt_plan=prompt_plan,
-        )
+        prompt_plan = message_context.prompt_plan or (getattr(plan, "prompt_plan", None) if plan else None)
         rendered = self.renderer.render(
             event=event,
             message_context=message_context,
             prompt_plan=prompt_plan,
-            current_message=current_message,
+            current_message=message_context.user_message,
             planner_reason=str(getattr(plan, "reason", "") or ""),
         )
         return rendered.system_prompt

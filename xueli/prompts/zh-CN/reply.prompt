@@ -1,3 +1,31 @@
+# =============================================================================
+# 用途：回复生成（Reply）系统提示词骨架
+# 调用方：xueli/src/handlers/reply_prompt_renderer.py → render()
+# 加载方式：template_loader.render("reply.prompt", xxx_block=..., ...)
+#
+# 变量说明（10 个 block，按注入顺序排列）：
+#   {identity_block}          — 助手身份 + personality / dialogue_style / behavior 配置
+#   {constraint_block}        — 平台规则（群聊/私聊）+ JSON 数组输出格式要求
+#                              仅在 reply_scope 启用时注入
+#   {scene_block}             — "这是和{用户}的{私聊/群聊}对话。" + 当前消息
+#   {continuity_block}        — 回复目标 + 连续性策略 + 历史会话 + 时间线 + 最近对话
+#   {planner_reference_block} — planner 的输出方向提示（reply_reference），非强制
+#                              仅在 planner 输出了非空 reply_reference 时注入
+#   {vision_block}            — 图片上下文描述
+#                              仅在 vision_context 启用且有图片分析结果时注入
+#   {person_facts_block}      — 以 "[人格事实]" 开头的用户长期事实记忆
+#                              仅在 person_facts 启用时注入
+#   {precise_recall_block}    — 以 "[精确召回]" 开头的深度记忆召回
+#                              仅在 precise_recall 启用时注入
+#   {dynamic_memory_block}    — 以 "[动态记忆]" 开头的重要记忆 + 近期动态记忆
+#                              仅在 dynamic_memory 启用时注入
+#   {final_style_block}       — 以 "[风格约束]" 开头的 FinalStyleGuide 约束
+#                              (verbosity/warmth/initiative/tone/expression/anti_patterns)
+#                              仅在 style_guide 启用时注入
+#
+# 注意：空 block 在渲染前会被过滤掉，不会在最终 prompt 中留下多余空行。
+# =============================================================================
+
 {identity_block}
 
 {constraint_block}

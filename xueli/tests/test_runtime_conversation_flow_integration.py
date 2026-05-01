@@ -85,6 +85,7 @@ from src.handlers.conversation_session_manager import ConversationSessionManager
 from src.handlers.message_handler import MessageHandler
 from src.handlers.timing_gate_service import TimingGateService
 from src.handlers.reply_pipeline import ReplyPipeline
+from src.handlers.repeat_echo_service import RepeatEchoService
 from src.memory.memory_flow_service import MemoryFlowService
 from src.memory.internal.access_policy import MemoryAccessPolicy
 from src.memory.storage.markdown_store import MemoryItem
@@ -321,6 +322,7 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         handler.group_repeat_lock = asyncio.Lock()
         handler._group_repeat_history = defaultdict(deque)
         handler._group_repeat_cooldowns = {}
+        handler.repeat_echo_service = RepeatEchoService(app_config, handler.runtime_metrics)
         handler._sync_active_conversations_metric = lambda count=None: None
         return handler
 

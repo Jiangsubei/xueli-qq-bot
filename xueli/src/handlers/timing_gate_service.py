@@ -89,10 +89,8 @@ class TimingGateService:
             return fallback
 
     def _build_system_prompt(self) -> str:
-        return self.template_loader.render(
-            "timing_gate.prompt",
-            scene_guidance="如果当前消息是直接点名、明确提问、或已经足够完整且自然可接，优先继续；只有在明显还没说完或现在继续会太抢时才 wait。",
-        )
+        """Load timing_gate.prompt — fully static, no variables."""
+        return self.template_loader.load("timing_gate.prompt")
 
     def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
         lines = [

@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Any
 
+from src.core.prompt_templates import PromptTemplateLoader
 from src.memory.extraction.memory_extractor import MemoryExtractor
 from src.memory.chat_summary_service import ChatSummaryService
 from src.memory.person_fact_service import PersonFactService
@@ -16,16 +17,11 @@ from .task_manager import MemoryTaskManager
 
 logger = logging.getLogger(__name__)
 
-_INSIGHT_SYSTEM_PROMPT = (
-    "你是一个记忆分析器。你的任务是从用户的多段近期记忆中发现模式、趋势或值得注意的变化。\n"
-    "你应该只关注确凿的、能从记忆证据中直接推断的发现。不要脑补。\n"
-    "输出一个 JSON 对象，格式为：\n"
-    "{\"has_insight\": true/false, \"content\": \"总结性描述\", \"confidence\": 0.85}\n"
-    "has_insight: 是否发现了值得记录的模式\n"
-    "content: 一条简洁的总结性描述，可以直接存入记忆\n"
-    "confidence: 对这个发现的置信度，0-1\n"
-    "如果最近记忆中没有明显模式，输出 has_insight: false"
-)
+_template_loader = PromptTemplateLoader()
+
+
+def _insight_system_prompt() -> str:
+    return _template_loader.load("insight_digestion.prompt")
 
 
 class MemoryBackgroundCoordinator:
@@ -442,12 +438,13 @@ class MemoryBackgroundCoordinator:
         user_prompt = "以下是用户最近的记忆列表。请分析其中是否存在值得记录的模式、趋势或变化：\n" + "\n".join(memory_lines)
 
         try:
+            insight_prompt = _insight_system_prompt()
             messages = [
-                {"role": "system", "content": _INSIGHT_SYSTEM_PROMPT},
+                {"role": "system", "content": insight_prompt},
                 {"role": "user", "content": user_prompt},
             ]
             response = await asyncio.wait_for(
-                self.llm_callback(_INSIGHT_SYSTEM_PROMPT, [messages[-1]]),
+                self.llm_callback(insight_prompt, [messages[-1]]),
                 timeout=30.0,
             )
             content = str(getattr(response, "content", "") or "")
