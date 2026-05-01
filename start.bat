@@ -9,8 +9,6 @@ echo        QQ AI Launcher
 echo ========================================
 echo.
 
-cd xueli
-
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python was not found. Please install Python 3.8+ first.
@@ -18,9 +16,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "venv" (
+if not exist "xueli\venv" (
     echo [INFO] Creating virtual environment...
-    python -m venv venv
+    python -m venv xueli\venv
     if errorlevel 1 (
         echo [ERROR] Failed to create virtual environment.
         pause
@@ -29,7 +27,7 @@ if not exist "venv" (
 )
 
 echo [INFO] Activating virtual environment...
-call venv\Scripts\activate.bat
+call xueli\venv\Scripts\activate.bat
 if errorlevel 1 (
     echo [ERROR] Failed to activate virtual environment.
     pause
@@ -37,24 +35,24 @@ if errorlevel 1 (
 )
 
 echo [INFO] Installing dependencies...
-pip install -q -r ..\requirements.txt
+pip install -q -r requirements.txt
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies.
     pause
     exit /b 1
 )
 
-if not exist "config\.env" (
+if not exist "xueli\config\.env" (
     echo.
     echo [WARN] .env was not found.
     echo [INFO] Creating .env from .env.example...
-    copy /Y config\.env.example config\.env >nul
+    copy /Y xueli\config\.env.example xueli\config\.env >nul
     echo.
     echo ========================================
-    echo Edit config\.env and run start.bat again.
+    echo Edit xueli\config\.env and run start.bat again.
     echo ========================================
     echo.
-    notepad config\.env
+    notepad xueli\config\.env
     pause
     exit /b 1
 )
@@ -69,8 +67,8 @@ echo.
 python main.py
 set "APP_EXIT=%ERRORLEVEL%"
 
-if exist "venv\Scripts\deactivate.bat" (
-    call venv\Scripts\deactivate.bat
+if exist "xueli\venv\Scripts\deactivate.bat" (
+    call xueli\venv\Scripts\deactivate.bat
 )
 
 echo.
