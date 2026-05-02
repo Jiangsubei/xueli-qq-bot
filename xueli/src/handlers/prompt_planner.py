@@ -13,7 +13,7 @@ class PromptPlanner:
 
     def decision_output_schema(self) -> str:
         return (
-            '{"action":"reply|wait|ignore","reason":"简短理由","prompt_plan":{'
+            '{"reason":"简短理由","prompt_plan":{'
             '"reply_goal":"answer|continue|comfort|clarify|recall|light_presence",'
             '"continuity_mode":"direct_continue|resume_recent_topic|resume_old_topic",'
             '"timeline_detail":"off|summary|per_message",'

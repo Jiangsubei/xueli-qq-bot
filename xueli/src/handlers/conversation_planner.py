@@ -312,30 +312,13 @@ class ConversationPlanner:
             "reply": MessagePlanAction.REPLY.value,
             "respond": MessagePlanAction.REPLY.value,
             "回复": MessagePlanAction.REPLY.value,
-            "wait": MessagePlanAction.WAIT.value,
-            "等待": MessagePlanAction.WAIT.value,
-            "暂缓": MessagePlanAction.WAIT.value,
-            "observe": MessagePlanAction.WAIT.value,
-            "ignore": MessagePlanAction.IGNORE.value,
-            "no_reply": MessagePlanAction.IGNORE.value,
-            "noreply": MessagePlanAction.IGNORE.value,
-            "不回复": MessagePlanAction.IGNORE.value,
-            "无需回复": MessagePlanAction.IGNORE.value,
-            "忽略": MessagePlanAction.IGNORE.value,
-            "skip": MessagePlanAction.IGNORE.value,
         }
-        normalized = mapping.get(value, value)
-        if normalized not in {
-            MessagePlanAction.REPLY.value,
-            MessagePlanAction.WAIT.value,
-            MessagePlanAction.IGNORE.value,
-        }:
-            raise ValueError(f"unsupported planner action: {action}")
+        normalized = mapping.get(value, MessagePlanAction.REPLY.value)
         return normalized
 
     def _parse_plan(self, content: str, *, event: MessageEvent, context: Optional[MessageContext] = None) -> MessageHandlingPlan:
         decision = self._extract_json_object(content)
-        action = self._normalize_action(str(decision.get("action", "")))
+        action = MessagePlanAction.REPLY.value
         reason = str(decision.get("reason", "")).strip() or "模型未提供理由"
         return MessageHandlingPlan(
             action=action,
