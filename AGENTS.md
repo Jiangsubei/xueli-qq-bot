@@ -3,8 +3,8 @@
 ## 常用命令
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 安装依赖（推荐使用 uv）
+uv pip install -r requirements.txt
 
 # 运行全部单元测试
 python -m unittest discover -s xueli/tests -t xueli
@@ -25,6 +25,47 @@ bash start.sh
 - 测试基于 `unittest`，不要假设 `pytest` 存在。
 - 测试通过 `-t xueli` 将 `xueli/` 设为 Python 路径根，测试内 import 使用 `src.*`（而非 `xueli.src.*`）。
 - `xueli/config/config.toml` 是本地私有配置（已 gitignore），首次使用需从 `config.example.toml` 复制。
+
+---
+
+## 修改项目原则
+
+### 1. 测试先行
+每次代码改动后必须运行全量测试（`python -m unittest discover -s xueli/tests -t xueli`），测试不通过不提交。
+- 已发现并修复跨平台路径问题（`tempfile` 替代硬编码路径）
+- 已修复 asyncio 时序不稳定问题（调整超时和等待逻辑）
+
+### 2. 契约优先
+核心数据结构（`PromptPlan`、`ReplyResult`、`MessageContext` 等）的修改必须同步更新所有调用方、测试和文档。
+- 已修复 label 常量分散问题，新增 `label_constants.py` 统一管理
+
+### 3. asyncio 正确性
+`async` 函数中 `except Exception` 前必须先 `except asyncio.CancelledError: raise`，防止取消协议被吞。
+- 约45处核心路径已修复
+- 禁止用 `asyncio.CancelledError` 作业务流程控制，应使用自定义异常（如 `StaleWindowError`）
+
+### 4. 原子化存储
+所有持久化文件写入必须先写 `.tmp` 再 `os.replace()`，禁止直接覆盖目标文件。
+- 已修复 4 处：`markdown_store`、`important_memory_store`、`person_fact_store`、`character_card_service`
+
+### 5. 轻量外部依赖
+优先使用 Python 标准库（如 `random` 而非 `numpy`、`jieba` 分词而非外部向量服务），保持轻量化。
+
+### 6. 配置即文档
+`config.example.toml` 包含完整注释，所有字段均有说明；`config.toml` 为实际运行配置。配置项与代码默认值严格对齐。
+- 已新增 `[planning_window]`、`[memory_dispute]`、`[character_growth]` 三个 section
+- 已补充分段发送6个字段（`sentence_split_enabled`、`segmented_reply_enabled`、`max_segments` 等）
+
+### 7. README 与代码同步
+代码审查后发现 README 描述与实现完全吻合（结构化分段发送、随机延迟均已实现），无需修改 README。
+- `config.example.toml` 是用户了解功能的主要窗口，注释即文档
+
+### 8. 平台解耦
+核心逻辑不依赖平台细节，平台字段通过 `normalizer.py` 归一化后进入 core。
+- `platform_normalizers.py` 仅保留平台无关的 helper 和向后兼容的 re-export
+- 新 adapter 应实现自己的 `attach_inbound_event()` 并由 `dispatcher.py` 优先调用
+
+---
 
 ## 架构核心理念
 
@@ -91,17 +132,21 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 - **离线消化**：每 6 小时 LLM 扫描近期记忆归纳模式（`insight_type: digested`）
 - **向量联想**：`VectorIndex`（字符 n-gram 余弦相似度）与 BM25 混合检索，零外部依赖
 
+---
+
 ## 关键约束
 
 1. 私聊和群聊共用一条 conversation 主链，不要分裂两套业务逻辑。
 2. `ReplyPipeline` 定位是 prompt compiler，回复后副作用（记忆写入）应走 `MemoryFlowService`，不要塞回 pipeline。
 3. 命名优先使用 `conversation_*`、`adapter_*`、`platform_*` 等中性命名，不要扩散 `group_*`、`napcat_*`。
 4. 会话永不过期，重启后从历史存储恢复并保留原始时间信息。
-5. 结构化分段发送是主路径（模型输出字符串数组）；正则分句仅作兜底。
+5. 结构化分段发送是主路径（模型输出 JSON 数组格式）；正则分句仅作兜底。
 6. 普通图片只做视觉理解，不入 emoji 仓库；原生表情只存 `face / mface` 引用。
 7. WebUI 基于 Django 5.2，核心逻辑不要为 WebUI 方便写进 WebUI service。
 8. `data/` 目录已 gitignore，是运行时产物，不提交。
 9. `group_reply_decision` 配置未完整填写时，群聊退回规则路径（通常只在被 @ 时回复）。
+
+---
 
 ## 高风险改动
 
@@ -114,6 +159,8 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 - `BotRuntime` 主消息处理链
 - 三大 prompt 模板文件
 
+---
+
 ## 改动流程
 
 1. 先读相关入口代码，判断是 core / adapter / WebUI 逻辑。
@@ -122,6 +169,8 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 4. 改后运行受影响测试；如改了契约、配置方式、主链路，同步更新测试和文档。
 5. 保持日志、类型、测试、实现四者一致。
 
+---
+
 ## 编码习惯与已知陷阱
 
 - **文件写入必须原子化**：所有持久化存储（Markdown/JSON）必须写 `.tmp` → `os.replace()`，禁止直接覆写目标文件。已修复的 4 处：`markdown_store`、`important_memory_store`、`person_fact_store`、`character_card_service`。
@@ -129,6 +178,8 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 - **禁止用 `asyncio.CancelledError` 作业务流程控制**：应使用自定义异常（如 `StaleWindowError`），避免与任务取消混淆。
 - **`Future.set_result()` 不要在持有 `asyncio.Lock` 时调用**：回调链路可能尝试获取同一把锁导致死锁。应收集 waiter → 锁外 resolve。
 - **禁止在 `async` 上下文中使用同步阻塞 I/O**：`Path.read_text()` / `Path.write_text()` 应通过 `asyncio.to_thread()` 包裹，或使用 `aiofiles`。
+
+---
 
 ## 标签常量
 

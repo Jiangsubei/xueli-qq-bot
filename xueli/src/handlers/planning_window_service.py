@@ -27,6 +27,8 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
+        if not self.config.enabled:
+            return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
         conversation_key = self.host._get_conversation_key(event)
         result = await self.scheduler.submit_event(
             conversation_key=conversation_key,
@@ -64,6 +66,8 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
+        if not self.config.enabled:
+            return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
         user_message = self.host.extract_user_message(event)
         if self._should_bypass_group_window(event, user_message):
             return WindowDispatchResult(status="bypassed", reason="bypassed")

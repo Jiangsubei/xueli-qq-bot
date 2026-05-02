@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -56,9 +56,7 @@ class EmojiManager:
 
         self.enabled = bool(emoji_config and emoji_config.enabled)
         self.capture_enabled = bool(self.enabled and getattr(emoji_config, "capture_enabled", True))
-        # Native emoji refs no longer persist images locally, so the old image-based
-        # idle classifier is intentionally disabled.
-        self.classification_enabled = False
+        self.classification_enabled = bool(getattr(emoji_config, "classification_enabled", False))
         self.repository = EmojiRepository(
             getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis"
         )

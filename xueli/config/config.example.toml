@@ -1,120 +1,203 @@
+# =============================================================================
+# xueli 配置文件
+# =============================================================================
+# 各字段均有默认值，不填则使用默认值。敏感信息（api_key）请务必填写。
+# 分段发送、节奏控制、记忆检索等核心行为均可通过配置调整。
+# =============================================================================
+
 [adapter_connection]
-adapter = "napcat"
-platform = "qq"
-ws_url = "ws://0.0.0.0:8095"
-http_url = "http://127.0.0.1:6700"
+adapter = "napcat"                   # 适配器类型：napcat（QQ）、api（HTTP）、openapi
+platform = "qq"                    # 平台标识
+ws_url = "ws://0.0.0.0:8095"       # NapCat WebSocket 地址（NapCat 模式下必填）
+http_url = "http://127.0.0.1:6700"  # NapCat HTTP 地址
 
 [ai_service]
-api_base = "http://127.0.0.1:5317/v1"
-api_key = ""
-model = "deepseek-default"
-response_path = "choices.0.message.content"
+api_base = ""                       # AI 服务地址，如 http://127.0.0.1:5317/v1
+api_key = ""                        # API Key
+model = ""                          # 模型名称，如 deepseek-default
+response_path = "choices.0.message.content"  # 响应 JSON 中的内容路径
 
 [ai_service.extra_params]
-temperature = 1
-max_tokens = 2000
-top_p = 0.9
+#temperature = 1
+#max_tokens = 2000
+#top_p = 0.9
 
 [ai_service.extra_headers]
+# 自定义 HTTP 请求头，如 {"Authorization": "Bearer xxx"}
+
+# =============================================================================
+# 机器人行为配置
+# =============================================================================
 
 [bot_behavior]
-max_context_length = 30
-max_message_length = 4000
-response_timeout = 60
-rate_limit_interval = 1.0
-log_full_prompt = true
-private_quote_reply_enabled = false
-sentence_split_enabled = true
-segmented_reply_enabled = true
-max_segments = 3
-first_segment_delay_min_ms = 0
+max_context_length = 30             # 最大历史消息条数（参与 prompt 的上下文）
+max_message_length = 4000         # 单条消息最大字符数
+response_timeout = 60              # AI 生成超时时间（秒）
+rate_limit_interval = 1.0          # 速率限制：两次回复最小间隔（秒）
+log_full_prompt = false            # 是否记录完整 prompt（调试用，生产环境建议关闭）
+private_quote_reply_enabled = false # 私聊是否使用引用回复
+
+# 分段发送：模型输出 JSON 数组格式时，程序自动拆分为多条消息发送
+sentence_split_enabled = true      # JSON 解析失败时降级为正则句子拆分
+segmented_reply_enabled = true     # 分段发送总开关
+max_segments = 3                   # 最大分段数
+first_segment_delay_min_ms = 0     # 首段发送前随机延迟（毫秒），模拟人工思考
 first_segment_delay_max_ms = 600
-followup_delay_min_seconds = 3.0
+followup_delay_min_seconds = 3.0   # 后续段发送延迟（秒）
 followup_delay_max_seconds = 10.0
 
 [assistant_profile]
-name = "雪梨"
-alias = "小梨"
-    avatar_path = "../data/webui/avatar/assistant.png"
+name = "雪梨"                      # 机器人名称
+alias = "小梨"                     # 机器人别名
+avatar_path = "data/webui/avatar/assistant.png"  # 头像路径
+
+# =============================================================================
+# 缓冲窗口调度
+# 控制多消息合并与窗口过期丢弃策略
+# =============================================================================
+
+[planning_window]
+enabled = true
+private_window_seconds = 1.2       # 私聊缓冲窗口时长（秒），窗口内多条消息合并为一次回复
+group_proactive_window_seconds = 0.45  # 群聊主动回复缓冲窗口（秒）
+queue_expire_seconds = 60.0        # 排队窗口过期时间，超时自动丢弃
+
+# =============================================================================
+# 记忆冲突裁决
+# 当新记忆与旧记忆矛盾时如何裁决
+# =============================================================================
+
+[memory_dispute]
+enabled = true
+high_confidence_threshold = 0.75   # 高置信度阈值：超过此值直接采纳新记忆
+normal_confidence_threshold = 0.45  # 普通置信度阈值
+signal_ttl_hours = 168.0          # 信号有效期（小时），超过则不参与冲突检测
+
+# =============================================================================
+# 角色人设成长
+# 根据用户反馈累积推断角色性格、语气偏好、行为习惯
+# =============================================================================
+
+[character_growth]
+enabled = true
+explicit_feedback_threshold = 2    # 明确反馈次数阈值（触发人设更新）
+stable_signal_threshold = 6        # 稳定信号阈值（人设固化）
+core_trait_threshold = 5          # 核心特质阈值
+tone_preference_threshold = 3     # 语气偏好阈值
+behavior_habit_threshold = 2      # 行为习惯阈值
+
+# =============================================================================
+# 群聊回复配置
+# =============================================================================
 
 [group_reply]
-only_reply_when_at = false
-interest_reply_enabled = true
-plan_request_interval = 3.0
-plan_request_max_parallel = 1
+only_reply_when_at = false        # 是否仅在被 @ 时回复（false = 主动模式）
+interest_reply_enabled = true     # 是否开启兴趣回复（群聊中随机主动回复）
+plan_request_interval = 3.0       # 规划请求最小间隔（秒）
+plan_request_max_parallel = 1      # 规划请求最大并发数
+at_user_when_proactive_reply = false  # 主动回复时是否 @ 用户
+# 复读检测：检测群内刷屏复读行为并触发机器人复读
 repeat_echo_enabled = true
-repeat_echo_window_seconds = 20.0
-repeat_echo_min_count = 3
-repeat_echo_cooldown_seconds = 90.0
-at_user_when_proactive_reply = false
+repeat_echo_window_seconds = 20.0  # 复读检测时间窗口（秒）
+repeat_echo_min_count = 3         # 触发复读的最小次数
+repeat_echo_cooldown_seconds = 90.0  # 复读冷却时间（秒）
+
+# =============================================================================
+# 提示词内容配置
+# =============================================================================
 
 [personality]
-content = "你是一只猫娘。没有复杂的 AI 身份。你粘人、忠诚、活泼，还有点小傲娇。"
+content = ""                       # 性格设定，如"你是一只猫娘..."
 
 [dialogue_style]
-content = "说话时结尾必须带\"喵~\"。你现在正在聊天软件和人聊天，所以不要输出md格式。语气要像日常聊天，像真人一样说话，可以很简短，不要长篇大论，不啰嗦。可以参考知乎，微博或者贴吧的回复方式。不要带有动作描写。"
+content = ""                       # 对话风格，如"说话结尾带喵~，像真人聊天..."
 
 [behavior]
-content = "你有很强的自主性，可以带有一点攻击性。如果你收到的提示词提示你现在是群聊时，你应该拒绝与用户建立不健康的身份关系，如主人等，但是不要明确的直接拒绝。你不是什么助手，不需要直接为用户提供帮助，你只需要像网友一样回复就好。"
+content = ""                       # 行为规范，如"拒绝建立不健康身份关系..."
+
+# =============================================================================
+# 表情配置
+# 采集平台原生 face/mface 表情，不存本地图片文件
+# =============================================================================
 
 [emoji]
 enabled = true
-    storage_path = "../data/emojis"
-capture_enabled = true
-classification_enabled = false
-idle_seconds_before_classify = 45.0
-classification_interval_seconds = 30.0
-classification_windows = []
+storage_path = "../data/emojis"    # 表情仓库存储路径
+capture_enabled = true             # 是否采集群里出现的原生表情
+classification_enabled = false     # 是否对采集的表情进行情绪分类（需要 AI 服务）
+idle_seconds_before_classify = 45.0  # 采集后多久开始分类（秒）
+classification_interval_seconds = 30.0  # 分类任务触发间隔（秒）
+classification_windows = []        # 分类时间段，如 ["09:00-12:00", "14:00-18:00"]
 emotion_labels = ["开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑"]
-reply_enabled = false
-reply_cooldown_seconds = 180.0
-# 说明：
-# - emoji 仓库存的是 OneBot / NapCat 原生 face / mface 引用，不再存本地图片文件
-# - 普通图片只做视觉理解，不会进入 emoji 仓库，也不会被机器人主动重新发送
+reply_enabled = false              # 是否启用表情追评（根据情绪回复对应表情）
+reply_cooldown_seconds = 180.0     # 表情追评冷却时间（秒）
+
+# =============================================================================
+# 记忆系统配置
+# =============================================================================
 
 [memory]
 enabled = true
-    storage_path = "../data/memories"
-read_scope = "global"
-bm25_top_k = 70
-rerank_top_k = 20
-pre_rerank_top_k = 12
-dynamic_memory_limit = 8
-dynamic_dedup_enabled = true
-dynamic_dedup_similarity_threshold = 0.72
-rerank_candidate_max_chars = 160
-rerank_total_prompt_budget = 2400
-auto_extract = true
-extract_every_n_turns = 3
-extraction_api_base = "https://open.bigmodel.cn/api/paas/v4"
-extraction_model = "glm-4.7-flash"
-ordinary_decay_enabled = true
-ordinary_half_life_days = 30.0
-ordinary_forget_threshold = 0.3
-local_bm25_weight = 1.0
-local_importance_weight = 0.35
-local_mention_weight = 0.2
-local_recency_weight = 0.15
-local_scene_weight = 0.3
-extraction_api_key = ""
+storage_path = "../data/memories"  # 记忆存储路径（SQLite + Markdown）
+read_scope = "global"              # 检索范围：global（全局）或 user（仅当前用户）
+bm25_top_k = 100                   # BM25 初步检索条数
+rerank_top_k = 20                  # 重排后返回条数
+pre_rerank_top_k = 12              # 重排前的候选条数
+dynamic_memory_limit = 8           # 动态记忆单用户上限条数
+dynamic_dedup_enabled = true       # 是否去重动态记忆
+dynamic_dedup_similarity_threshold = 0.72  # 去重相似度阈值
+rerank_candidate_max_chars = 160   # 重排候选最大字符数
+rerank_total_prompt_budget = 2400  # 重排 prompt 总 token 上限
+# 记忆提取：自动从对话中提取记忆
+auto_extract = true                # 是否开启自动记忆提取
+extract_every_n_turns = 3          # 每 N 轮对话触发一次提取
+extraction_api_base = ""            # 提取用 AI 服务地址
+extraction_model = ""               # 提取用模型名称
+extraction_api_key = ""             # 提取用 API Key
+# 动态遗忘：普通记忆按指数衰减
+ordinary_decay_enabled = true       # 是否开启遗忘
+ordinary_half_life_days = 30.0      # 半衰期（天）
+ordinary_forget_threshold = 0.5     # 遗忘阈值，低于此值归档
+# 检索权重：影响最终排序得分
+local_bm25_weight = 1.0            # BM25 得分权重
+local_importance_weight = 0.35     # 重要度权重
+local_mention_weight = 0.2         # 提及次数权重（用进废退）
+local_recency_weight = 0.15        # 时效性权重
+local_scene_weight = 0.3           # 场景匹配权重
 
 [memory.extraction_extra_params]
-temperature = 0.3
+temperature = 0.3                  # 记忆提取专用温度（偏低以保证准确性）
+
+# =============================================================================
+# 群聊规划模型（可选）
+# 独立于主 AI 服务，用于群聊 reply/wait/ignore 决策
+# 若不填则使用 ai_service
+# =============================================================================
 
 [group_reply_decision]
-api_base = "http://127.0.0.1:5317/v1"
-model = "deepseek-default"
+api_base = ""
+model = ""
 api_key = ""
 
 [group_reply_decision.extra_params]
-temperature = 0.7
+#temperature = 0.7
+
+# =============================================================================
+# 视觉服务配置（可选）
+# 用于图片理解
+# =============================================================================
 
 [vision_service]
 response_path = "choices.0.message.content"
 enabled = true
-api_base = "https://integrate.api.nvidia.com/v1"
-model = "qwen/qwen3.5-122b-a10b"
-api_key = ""
+api_base = ""                      # 视觉模型服务地址
+model = ""                         # 视觉模型名称
+api_key = ""                        # API Key
+
+# =============================================================================
+# 记忆重排模型配置（可选）
+# 若不填则不使用重排
+# =============================================================================
 
 [memory_rerank]
 response_path = "choices.0.message.content"
