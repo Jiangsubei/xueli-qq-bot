@@ -354,6 +354,8 @@ class TwoStageRetriever:
                         vector_results[mem.id] = score
                     else:
                         vector_results[mem.id] = max(vector_results[mem.id], score)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.debug("向量检索失败（非致命）：%s", exc)
 
@@ -405,6 +407,8 @@ class TwoStageRetriever:
                         )
                     )
                 return results
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("记忆重排失败，回退到本地预排序：用户=%s，错误=%s", user_id, exc)
 

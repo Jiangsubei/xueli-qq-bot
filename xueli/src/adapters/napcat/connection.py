@@ -53,6 +53,8 @@ class NapCatConnection:
             logger.info("等待 NapCat 连接")
             await self.server.wait_closed()
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("WebSocket 服务启动失败：%s", e)
             raise
@@ -68,6 +70,8 @@ class NapCatConnection:
                 await self.websocket.close()
             except ConnectionClosed:
                 logger.debug("旧连接关闭时已断开")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.debug("关闭旧连接时出错：%s", e)
 

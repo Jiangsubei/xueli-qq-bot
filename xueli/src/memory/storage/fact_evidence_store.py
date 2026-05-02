@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -106,7 +107,10 @@ class FactEvidenceStore:
         return await asyncio.to_thread(self._load_payload, user_id)
 
     def _save_payload(self, user_id: str, payload: dict) -> None:
-        self._file_path(user_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        file_path = self._file_path(user_id)
+        tmp_path = file_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, file_path)
 
     async def _save_payload_async(self, user_id: str, payload: dict) -> None:
         await asyncio.to_thread(self._save_payload, user_id, payload)
