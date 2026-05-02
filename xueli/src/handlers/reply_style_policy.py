@@ -4,6 +4,7 @@ from typing import Optional
 
 from src.core.models import CharacterCardSnapshot, FinalStyleGuide, PromptPlan, SoftUncertaintySignal, TemporalContext
 from src.core.mood_engine import MoodEngine
+from src.core.prompt_templates import PromptTemplateLoader
 
 
 class ReplyStylePolicy:
@@ -121,25 +122,20 @@ class ReplyStylePolicy:
             allowed_colloquialism += " 群聊里不要把语气做得太黏。"
 
         anti_patterns = [
-            "不要自称提示词或记忆来源",
-            "不要复读大段历史原文",
-            "不要用客服腔或总结报告腔",
-            "不要直接说你记错了或数据库显示",
+            "回复应该像真人聊天，而不是像在念提示词或背诵记忆",
+            "提到历史对话时应该自然地融入当前对话，而不是复读大段原文",
+            "口吻应该像朋友聊天，不是客服/总结报告/说明书",
         ]
         if expression_profile == "companion":
             anti_patterns.append("不要模板化卖萌")
         if normalized_mode == "group":
-            # 群聊总闸门：强化克制
             anti_patterns.extend([
-                "不要抢别人的话头",
-                "不要连续补发多段内容",
-                "不要在文本后继续刷存在感",
+                "别人说话时要当配角，只在被cue或话题自然轮到你时才开口",
+                "一次只发一段，不用连续补发多条消息刷存在感",
             ])
         elif normalized_mode == "private":
-            # 私聊路径：相对宽松但仍有克制
             anti_patterns.extend([
-                "不要一上来写太长的回复",
-                "不要连续补发多段内容",
+                "开头不要太长的回复，渐进式进入对话节奏",
             ])
         if reply_goal == "comfort":
             anti_patterns.append("不要一上来讲道理")
@@ -147,8 +143,14 @@ class ReplyStylePolicy:
             anti_patterns.append(f"不要偏离这次回复意图：{planner_reason.strip()}")
 
         relationship_tone = str(getattr(character_snapshot, "relationship_tone_hint", "") or "")
+        relationship_guidance = ""
         if relationship_tone:
-            anti_patterns.append(f"关系提示：{relationship_tone}")
+            try:
+                template = PromptTemplateLoader().load("relationship_tone.prompt")
+                relationship_stage = str(getattr(character_snapshot, "relationship_stage", "") or "")
+                relationship_guidance = relationship_tone
+            except Exception:
+                relationship_guidance = relationship_tone
 
         if mood_engine is not None and mood_engine.enabled:
             warmth_mod, verb_mod, init_mod = mood_engine.mood_modifier()
@@ -178,5 +180,6 @@ class ReplyStylePolicy:
             sentence_shape=sentence_shape,
             followup_shape=followup_shape,
             allowed_colloquialism=allowed_colloquialism,
+            relationship_guidance=relationship_guidance,
             anti_patterns=anti_patterns,
         )

@@ -323,10 +323,15 @@ class VisionClient:
         normalized_all = [item for item in [str(item).strip() for item in all_emotions] if item in labels][:3]
 
         primary = str(data.get("primary_emotion", "")).strip()
-        if primary not in labels:
+        if not primary:
             primary = normalized_all[0] if normalized_all else labels[0]
-        if primary not in normalized_all:
+        if primary not in labels and primary not in normalized_all:
             normalized_all.insert(0, primary)
+
+        secondary_emotions = data.get("secondary_emotions")
+        if not isinstance(secondary_emotions, list):
+            secondary_emotions = []
+        normalized_secondary = [str(item).strip() for item in secondary_emotions if str(item).strip()]
 
         reply_tones = data.get("reply_tones")
         if not isinstance(reply_tones, list):
@@ -359,6 +364,8 @@ class VisionClient:
             "all_emotions": normalized_all[:3],
             "reply_tones": normalized_tones,
             "reply_intents": normalized_intents[:3],
+            "secondary_emotions": normalized_secondary,
+            "intensity": self._float_value(data.get("intensity"), default=0.5),
         }
 
     def _pad_list(self, values: List[Any], size: int, default: Any) -> List[Any]:

@@ -12,7 +12,6 @@ from src.memory_limits import MIN_RERANK_CANDIDATE_MAX_CHARS, MIN_RERANK_TOTAL_P
 
 logger = logging.getLogger(__name__)
 _TIME_WINDOW_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$")
-_DEFAULT_EMOTION_LABELS = ["开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑"]
 
 
 @dataclass(frozen=True)
@@ -53,7 +52,7 @@ class EmojiConfig:
     idle_seconds_before_classify: float = 45.0
     classification_interval_seconds: float = 30.0
     classification_windows: List[str] = field(default_factory=list)
-    emotion_labels: List[str] = field(default_factory=lambda: list(_DEFAULT_EMOTION_LABELS))
+    emotion_labels: List[str] = field(default_factory=list)
     reply_enabled: bool = False
     reply_cooldown_seconds: float = 180.0
 
@@ -107,7 +106,7 @@ class CharacterGrowthConfig:
     mood_energy_recovery_night: float = 0.2
     mood_cycle_length_days: int = 7
     mood_show_in_reply: bool = False
-    relationship_tracking_enabled: bool = False
+    relationship_tracking_enabled: bool = True
     intimacy_acquaintance_threshold: float = 0.2
     intimacy_friend_threshold: float = 0.5
     intimacy_close_friend_threshold: float = 0.8
@@ -186,21 +185,21 @@ class MemoryConfig:
     ordinary_decay_enabled: bool = True
     ordinary_half_life_days: float = 30.0
     ordinary_forget_threshold: float = 0.5
+    cold_memory_threshold_days: float = 90.0
+    cold_decay_multiplier: float = 1.5
+    archive_penalty_base: float = 0.5
     local_bm25_weight: float = 1.0
     local_importance_weight: float = 0.35
     local_mention_weight: float = 0.2
     local_recency_weight: float = 0.15
     local_scene_weight: float = 0.3
+    scene_same_group_weight: float = 1.5
+    scene_same_type_weight: float = 1.0
+    scene_same_user_weight: float = 0.8
     vector_weight: float = 0.4
     fuzzy_recall_enabled: bool = False
     fuzzy_recall_probability: float = 0.3
     fuzzy_recall_confidence_threshold: float = 0.7
-    fuzzy_recall_expressions: List[str] = field(default_factory=lambda: [
-        "我好像记得...",
-        "大概是...",
-        "印象中...",
-        "名字我一时想不起来了，但...",
-    ])
     recall_confidence_decay_per_day: float = 0.01
     recall_confidence_minimum: float = 0.3
 
@@ -402,7 +401,6 @@ class Config:
         "MEMORY_FUZZY_RECALL_ENABLED": ("memory", "fuzzy_recall_enabled"),
         "MEMORY_FUZZY_RECALL_PROBABILITY": ("memory", "fuzzy_recall_probability"),
         "MEMORY_FUZZY_RECALL_CONFIDENCE_THRESHOLD": ("memory", "fuzzy_recall_confidence_threshold"),
-        "MEMORY_FUZZY_RECALL_EXPRESSIONS": ("memory", "fuzzy_recall_expressions"),
         "MEMORY_RECALL_CONFIDENCE_DECAY_PER_DAY": ("memory", "recall_confidence_decay_per_day"),
         "MEMORY_RECALL_CONFIDENCE_MINIMUM": ("memory", "recall_confidence_minimum"),
         "PROACTIVE_SHARE_ENABLED": ("proactive_share", "enabled"),
@@ -414,10 +412,16 @@ class Config:
         "PROACTIVE_SHARE_TRIGGER_SOURCES": ("proactive_share", "trigger_sources"),
     }
     _JSON_STRING_KEYS = {
-        "OPENAI_EXTRA_PARAMS", "OPENAI_EXTRA_HEADERS", "VISION_SERVICE_EXTRA_PARAMS", "VISION_SERVICE_EXTRA_HEADERS",
-        "GROUP_REPLY_DECISION_EXTRA_PARAMS", "GROUP_REPLY_DECISION_EXTRA_HEADERS",
-        "MEMORY_RERANK_EXTRA_PARAMS", "MEMORY_RERANK_EXTRA_HEADERS",
-        "MEMORY_EXTRACTION_EXTRA_PARAMS", "MEMORY_EXTRACTION_EXTRA_HEADERS",
+        "OPENAI_EXTRA_PARAMS",
+        "OPENAI_EXTRA_HEADERS",
+        "VISION_SERVICE_EXTRA_PARAMS",
+        "VISION_SERVICE_EXTRA_HEADERS",
+        "GROUP_REPLY_DECISION_EXTRA_PARAMS",
+        "GROUP_REPLY_DECISION_EXTRA_HEADERS",
+        "MEMORY_RERANK_EXTRA_PARAMS",
+        "MEMORY_RERANK_EXTRA_HEADERS",
+        "MEMORY_EXTRACTION_EXTRA_PARAMS",
+        "MEMORY_EXTRACTION_EXTRA_HEADERS",
     }
 
     def __init__(self, path: str | None = None):
@@ -654,7 +658,7 @@ class Config:
             idle_seconds_before_classify=self._bounded_float(section, "emoji", "idle_seconds_before_classify", default=45.0, minimum=0.0),
             classification_interval_seconds=self._bounded_float(section, "emoji", "classification_interval_seconds", default=30.0, minimum=0.0),
             classification_windows=self._time_window_list(section, "emoji", "classification_windows", default=[]),
-            emotion_labels=self._string_list(section, "emoji", "emotion_labels", default=_DEFAULT_EMOTION_LABELS),
+            emotion_labels=self._string_list(section, "emoji", "emotion_labels"),
             reply_enabled=self._bool_value(section, "emoji", "reply_enabled", default=False),
             reply_cooldown_seconds=self._bounded_float(section, "emoji", "reply_cooldown_seconds", default=180.0, minimum=0.0),
         )
@@ -876,21 +880,21 @@ class Config:
             ordinary_decay_enabled=self._bool_value(section, "memory", "ordinary_decay_enabled", default=True),
             ordinary_half_life_days=self._bounded_float(section, "memory", "ordinary_half_life_days", default=30.0, minimum=0.000001),
             ordinary_forget_threshold=self._bounded_float(section, "memory", "ordinary_forget_threshold", default=0.5, minimum=0.0, maximum=1.0),
+            cold_memory_threshold_days=self._bounded_float(section, "memory", "cold_memory_threshold_days", default=90.0, minimum=1.0),
+            cold_decay_multiplier=self._bounded_float(section, "memory", "cold_decay_multiplier", default=1.5, minimum=1.0),
+            archive_penalty_base=self._bounded_float(section, "memory", "archive_penalty_base", default=0.5, minimum=0.0, maximum=1.0),
             local_bm25_weight=self._bounded_float(section, "memory", "local_bm25_weight", default=1.0, minimum=0.0),
             local_importance_weight=self._bounded_float(section, "memory", "local_importance_weight", default=0.35, minimum=0.0),
             local_mention_weight=self._bounded_float(section, "memory", "local_mention_weight", default=0.2, minimum=0.0),
             local_recency_weight=self._bounded_float(section, "memory", "local_recency_weight", default=0.15, minimum=0.0),
             local_scene_weight=self._bounded_float(section, "memory", "local_scene_weight", default=0.3, minimum=0.0),
+            scene_same_group_weight=self._bounded_float(section, "memory", "scene_same_group_weight", default=1.5, minimum=0.0),
+            scene_same_type_weight=self._bounded_float(section, "memory", "scene_same_type_weight", default=1.0, minimum=0.0),
+            scene_same_user_weight=self._bounded_float(section, "memory", "scene_same_user_weight", default=0.8, minimum=0.0),
             vector_weight=self._bounded_float(section, "memory", "vector_weight", default=0.4, minimum=0.0, maximum=1.0),
             fuzzy_recall_enabled=self._bool_value(section, "memory", "fuzzy_recall_enabled", default=False),
             fuzzy_recall_probability=self._bounded_float(section, "memory", "fuzzy_recall_probability", default=0.3, minimum=0.0, maximum=1.0),
             fuzzy_recall_confidence_threshold=self._bounded_float(section, "memory", "fuzzy_recall_confidence_threshold", default=0.7, minimum=0.0, maximum=1.0),
-            fuzzy_recall_expressions=self._string_list(section, "memory", "fuzzy_recall_expressions", default=[
-                "我好像记得...",
-                "大概是...",
-                "印象中...",
-                "名字我一时想不起来了，但...",
-            ]),
             recall_confidence_decay_per_day=self._bounded_float(section, "memory", "recall_confidence_decay_per_day", default=0.01, minimum=0.0),
             recall_confidence_minimum=self._bounded_float(section, "memory", "recall_confidence_minimum", default=0.3, minimum=0.0, maximum=1.0),
         )
@@ -923,11 +927,17 @@ class Config:
                 ordinary_decay_enabled=config.ordinary_decay_enabled,
                 ordinary_half_life_days=config.ordinary_half_life_days,
                 ordinary_forget_threshold=config.ordinary_forget_threshold,
+                cold_memory_threshold_days=config.cold_memory_threshold_days,
+                cold_decay_multiplier=config.cold_decay_multiplier,
+                archive_penalty_base=config.archive_penalty_base,
                 local_bm25_weight=config.local_bm25_weight,
                 local_importance_weight=config.local_importance_weight,
                 local_mention_weight=config.local_mention_weight,
                 local_recency_weight=config.local_recency_weight,
                 local_scene_weight=config.local_scene_weight,
+                scene_same_group_weight=config.scene_same_group_weight,
+                scene_same_type_weight=config.scene_same_type_weight,
+                scene_same_user_weight=config.scene_same_user_weight,
             )
         return config
 
@@ -1057,7 +1067,9 @@ class Config:
             return default
         return normalized
 
-    def _string_list(self, section: Dict[str, Any], section_name: str, key: str, default: List[str]) -> List[str]:
+    def _string_list(self, section: Dict[str, Any], section_name: str, key: str, default: Optional[List[str]] = None) -> List[str]:
+        if default is None:
+            default = []
         value = section.get(key)
         if value is None:
             return list(default)

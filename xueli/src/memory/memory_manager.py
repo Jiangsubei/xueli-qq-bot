@@ -46,6 +46,8 @@ class MemoryManagerConfig:
     ordinary_decay_enabled: bool = True
     ordinary_half_life_days: float = 30.0
     ordinary_forget_threshold: float = 0.5
+    cold_memory_threshold_days: float = 90.0
+    cold_decay_multiplier: float = 1.5
     auto_build_index: bool = True
     auto_extract_memory: bool = True
     user_important_budget_chars: int = 360
@@ -74,6 +76,8 @@ class MemoryManager:
             ordinary_decay_enabled=self.config.ordinary_decay_enabled,
             ordinary_half_life_days=self.config.ordinary_half_life_days,
             ordinary_forget_threshold=self.config.ordinary_forget_threshold,
+            cold_memory_threshold_days=self.config.cold_memory_threshold_days,
+            cold_decay_multiplier=self.config.cold_decay_multiplier,
         )
         self.bm25_index = BM25Index()
         self.vector_index = VectorIndex()

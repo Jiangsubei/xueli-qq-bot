@@ -194,7 +194,7 @@ class EmojiReplyService:
 
         if target_tone not in self.reply_tones:
             target_tone = ""
-        if target_emotion not in self.emotion_labels:
+        if not target_emotion or not str(target_emotion).strip():
             target_emotion = ""
         if not target_intent and target_tone and target_emotion:
             target_intent = f"{target_tone}-{target_emotion}"

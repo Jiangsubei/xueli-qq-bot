@@ -13,7 +13,6 @@ class RecallRenderer:
     enabled: bool = False
     fuzzy_probability: float = 0.3
     confidence_threshold: float = 0.7
-    fuzzy_expressions: List[str] = field(default_factory=list)
     confidence_decay_per_day: float = 0.01
     confidence_minimum: float = 0.3
 
@@ -42,14 +41,14 @@ class RecallRenderer:
         return random.random() < self.fuzzy_probability
 
     def render_fuzzy_instruction(self) -> str:
-        if not self.enabled or not self.fuzzy_expressions:
+        """返回通用指导，让模型自行决定如何表达模糊感。"""
+        if not self.enabled:
             return ""
-        prefix_list = "、".join(f"“{expr}”" for expr in self.fuzzy_expressions[:4])
         return (
-            "【回忆提示】当你在回复中引用以下回忆时，请使用模糊的表达方式，"
-            "不要逐字复述细节。偶尔加入不确定的口吻，例如："
-            f"{prefix_list}。"
-            "让回忆听起来像是你脑海中自然浮现的，而非精确检索出的。"
+            "【回忆提示】当你在回复中引用记忆内容时，请使用自然、模糊的口吻，"
+            "让回忆听起来像是你脑海中自然浮现的片段，而非精确检索出的内容。"
+            "不要逐字复述细节，适当加入你自己的想法和感受，"
+            "用你自己的方式表达不确定感，不需要使用任何预设的开场白。"
         )
 
     def wrap_recall_context(self, raw_text: str) -> str:

@@ -443,7 +443,7 @@ class ConversationPlanner:
                 response = await run_chat()
             plan = self._parse_plan(response.content, event=event, context=context)
             if context and context.trace_id:
-                logger.info("[规划器] 会话规划完成")
+                logger.info("[规划器] 会话规划完成 action=%s reason=%s", plan.action, plan.reason)
             return plan
         except asyncio.CancelledError:
             raise

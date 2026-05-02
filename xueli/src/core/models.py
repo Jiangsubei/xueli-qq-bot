@@ -475,6 +475,7 @@ class FinalStyleGuide:
     sentence_shape: str = ""
     followup_shape: str = ""
     allowed_colloquialism: str = ""
+    relationship_guidance: str = ""
     anti_patterns: List[str] = field(default_factory=list)
 
 
@@ -591,6 +592,7 @@ class CharacterCardSnapshot:
     updated_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     relationship_tone_hint: str = ""
+    relationship_stage: str = ""
 
 
 @dataclass
@@ -650,26 +652,38 @@ class RelationshipProfile:
     last_intimacy_change: str = ""
     friction_signals: int = 0
     total_interactions: int = 0
+    interactions_last_week: int = 0
+    deep_conversation_ratio: float = 0.0
+    topic_overlap_count: int = 0
+    last_interaction_at: str = ""
 
     def resolve_stage(self, *, acquaintance_threshold: float = 0.2, friend_threshold: float = 0.5, close_friend_threshold: float = 0.8) -> str:
+        if self.intimacy_level >= close_friend_threshold + 0.1:
+            return "intimate"
         if self.intimacy_level >= close_friend_threshold:
             return "close_friend"
         if self.intimacy_level >= friend_threshold:
             return "friend"
         if self.intimacy_level >= acquaintance_threshold:
             return "acquaintance"
+        if self.intimacy_level >= acquaintance_threshold * 0.5:
+            return "met_before"
         return "stranger"
 
     def tone_hint(self) -> str:
         if self.friction_signals > 0:
             return "注意语气柔和，对方最近有点摩擦感"
         stage = self.relationship_stage
+        if stage == "intimate":
+            return "亲密伙伴之间，可以非常自然地交流，深入情感话题"
         if stage == "close_friend":
             return "老朋友之间，可以调侃、用内部梗，语气随意自然"
         if stage == "friend":
             return "朋友之间，可以稍亲切，但保持分寸"
         if stage == "acquaintance":
             return "熟人之间，礼貌但可以稍亲近"
+        if stage == "met_before":
+            return "以前聊过但不熟，保持礼貌自然即可"
         return "陌生人初识，保持礼貌和距离感"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -680,6 +694,10 @@ class RelationshipProfile:
             "last_intimacy_change": self.last_intimacy_change,
             "friction_signals": self.friction_signals,
             "total_interactions": self.total_interactions,
+            "interactions_last_week": self.interactions_last_week,
+            "deep_conversation_ratio": self.deep_conversation_ratio,
+            "topic_overlap_count": self.topic_overlap_count,
+            "last_interaction_at": self.last_interaction_at,
         }
 
     @classmethod
@@ -691,4 +709,8 @@ class RelationshipProfile:
             last_intimacy_change=str(data.get("last_intimacy_change", "")),
             friction_signals=int(data.get("friction_signals", 0)),
             total_interactions=int(data.get("total_interactions", 0)),
+            interactions_last_week=int(data.get("interactions_last_week", 0)),
+            deep_conversation_ratio=float(data.get("deep_conversation_ratio", 0.0)),
+            topic_overlap_count=int(data.get("topic_overlap_count", 0)),
+            last_interaction_at=str(data.get("last_interaction_at", "")),
         )

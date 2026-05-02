@@ -252,6 +252,8 @@ class MarkdownMemoryStore:
         ordinary_decay_enabled: bool = True,
         ordinary_half_life_days: float = 30.0,
         ordinary_forget_threshold: float = 0.5,
+        cold_memory_threshold_days: float = 90.0,
+        cold_decay_multiplier: float = 1.5,
     ):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -267,6 +269,8 @@ class MarkdownMemoryStore:
         self.ordinary_decay_enabled = ordinary_decay_enabled
         self.ordinary_half_life_days = max(float(ordinary_half_life_days), 0.1)
         self.ordinary_forget_threshold = float(ordinary_forget_threshold)
+        self.cold_memory_threshold_days = max(float(cold_memory_threshold_days), 1.0)
+        self.cold_decay_multiplier = max(float(cold_decay_multiplier), 1.0)
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
@@ -349,7 +353,9 @@ class MarkdownMemoryStore:
             recency_bonus = 0.15
         else:
             recency_bonus = 0.0
-        return mention_bonus + observation_bonus + recency_bonus
+        emotional_tone = str(mem.metadata.get("emotional_tone", "") or "").strip()
+        emotional_bonus = 0.2 if emotional_tone else 0.0
+        return mention_bonus + observation_bonus + recency_bonus + emotional_bonus
 
     def _get_effective_importance(self, mem: MemoryItem, now: Optional[datetime] = None) -> float:
         if not self.ordinary_decay_enabled:
@@ -365,7 +371,25 @@ class MarkdownMemoryStore:
         now_dt = now or datetime.now()
         age_days = max((now_dt - reference_dt).total_seconds() / 86400.0, 0.0)
         base = max(self._get_base_importance(mem), 0.0)
-        decay_factor = math.pow(0.5, age_days / self.ordinary_half_life_days)
+
+        # Category-specific half-life modifier: important memories decay slower
+        category = str((mem.metadata or {}).get("memory_category") or "").strip().lower()
+        category_half_life_modifiers = {
+            "core_fact": 3.0,
+            "important": 1.5,
+            "casual": 0.7,
+        }
+        category_mod = category_half_life_modifiers.get(category, 1.0)
+        effective_half_life = self.ordinary_half_life_days * category_mod
+
+        decay_factor = math.pow(0.5, age_days / max(effective_half_life, 0.1))
+
+        # Cold memory acceleration: old memories decay faster
+        if age_days > self.cold_memory_threshold_days:
+            cold_age = age_days - self.cold_memory_threshold_days
+            cold_extra = math.pow(0.5, cold_age / max(effective_half_life, 0.1) / self.cold_decay_multiplier)
+            decay_factor *= cold_extra
+
         retention_bonus = self._get_retention_bonus(mem, age_days=age_days)
         return min(5.0, (base * decay_factor) + retention_bonus)
 
@@ -731,6 +755,10 @@ class MarkdownMemoryStore:
             mem.metadata["mention_count"] = mention_count
             if mem.metadata.get("archived", False):
                 mem.metadata["archived"] = False
+                logger.info("[归档激活] 记忆 %s 因检索命中重新激活", mem.id)
+            if mem.metadata.get("_index_archived", False):
+                recall_count = int(mem.metadata.get("recall_count_since_archive", 0) or 0) + 1
+                mem.metadata["recall_count_since_archive"] = recall_count
             updated += 1
 
         if updated == 0:

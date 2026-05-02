@@ -192,7 +192,7 @@ class MessageHandler:
         base_path = str(getattr(memory_config, "storage_path", "") or "").strip()
         if base_path:
             return base_path
-        return str(Path(self.app_config._config_path).parent / "data" / "memories") if hasattr(self.app_config, "_config_path") else "../data/memories"
+        return os.path.join(os.path.dirname(str(self.app_config._config_path)), "data", "memories") if hasattr(self.app_config, "_config_path") else "../data/memories"
 
     def _ensure_extended_services(self) -> None:
         planning_window_config = getattr(self.app_config, "planning_window", PlanningWindowConfig())

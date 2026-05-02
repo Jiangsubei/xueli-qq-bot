@@ -5,9 +5,9 @@
 JSON 结构必须是：
 {"should_send":true,"tone":"安慰","emotion":"委屈","intent":"安慰-委屈","reason":"一句简短理由"}
 
-tone 只能从这些标签里选：{reply_tones}
+tone 优先从这些标签里选：{reply_tones}
 
-emotion 只能从这些标签里选：{emotion_labels}
+emotion 优先从这些标签里选，可从列表外选择或输出混合情绪：{emotion_labels}
 
 如果不适合发表情包，should_send 设为 false，tone/emotion/intent 置空。
 

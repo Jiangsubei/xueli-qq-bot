@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from collections import Counter
@@ -79,6 +80,7 @@ class CharacterCardService:
                 "stable_signals": dict(signal_counter),
             },
             relationship_tone_hint=self.get_relationship_tone_hint(str(user_id)),
+            relationship_stage=str(getattr(self.get_relationship_profile(str(user_id)), "relationship_stage", "") or ""),
         )
         payload["snapshot"] = asdict(snapshot)
         self._save_payload(user_id, payload)
@@ -97,6 +99,10 @@ class CharacterCardService:
             traits.append("更注重温和承接")
         if explicit_counter.get("more_direct", 0) >= self.config.core_trait_threshold:
             traits.append("更偏向直接清楚")
+        if explicit_counter.get("more_serious", 0) >= self.config.core_trait_threshold:
+            traits.append("更偏好严肃认真的交流")
+        if explicit_counter.get("more_company", 0) >= self.config.core_trait_threshold:
+            traits.append("更需要陪伴式对话")
         return traits
 
     def _build_tone_preferences(self, explicit_counter: Counter, signal_counter: Counter) -> List[str]:
@@ -105,6 +111,8 @@ class CharacterCardService:
             hints.append("偏好更短一点")
         if explicit_counter.get("more_warm", 0) >= self.config.tone_preference_threshold:
             hints.append("偏好更柔和一点")
+        if explicit_counter.get("more_detail", 0) >= self.config.tone_preference_threshold:
+            hints.append("偏好更详细一点")
         if signal_counter.get("private_continue", 0) >= self.config.stable_signal_threshold:
             hints.append("私聊里可以更自然续接")
         return hints
@@ -113,6 +121,10 @@ class CharacterCardService:
         hints: List[str] = []
         if explicit_counter.get("less_followup", 0) >= self.config.behavior_habit_threshold:
             hints.append("少一点主动追问")
+        if explicit_counter.get("less_mirror", 0) >= self.config.behavior_habit_threshold:
+            hints.append("少一点模仿对方")
+        if explicit_counter.get("less_emoji", 0) >= self.config.behavior_habit_threshold:
+            hints.append("少发表情包")
         if signal_counter.get("group_light_presence", 0) >= self.config.stable_signal_threshold:
             hints.append("群聊里保持轻接话")
         if signal_counter.get("comfort_acceptance", 0) >= self.config.stable_signal_threshold:
@@ -124,14 +136,24 @@ class CharacterCardService:
         hints: List[str] = []
         if explicit_counter.get("more_brief", 0) >= self.config.tone_preference_threshold:
             hints.append("这个用户喜欢简短精炼的回复")
+        if explicit_counter.get("more_detail", 0) >= self.config.tone_preference_threshold:
+            hints.append("这个用户希望回复更详细一些")
         if explicit_counter.get("more_warm", 0) >= self.config.tone_preference_threshold:
             hints.append("这个用户偏好更柔和温暖的语气")
         if explicit_counter.get("more_direct", 0) >= self.config.core_trait_threshold:
             hints.append("这个用户喜欢直接清楚的表达")
         if explicit_counter.get("more_gentle", 0) >= self.config.core_trait_threshold:
             hints.append("这个用户需要更温和的承接方式")
+        if explicit_counter.get("more_serious", 0) >= self.config.core_trait_threshold:
+            hints.append("这个用户偏好严肃认真的交流风格")
+        if explicit_counter.get("more_company", 0) >= self.config.core_trait_threshold:
+            hints.append("这个用户需要更多的陪伴感")
         if explicit_counter.get("less_followup", 0) >= self.config.behavior_habit_threshold:
             hints.append("这个用户不太喜欢被追问")
+        if explicit_counter.get("less_mirror", 0) >= self.config.behavior_habit_threshold:
+            hints.append("这个用户不喜欢被模仿")
+        if explicit_counter.get("less_emoji", 0) >= self.config.behavior_habit_threshold:
+            hints.append("这个用户不太喜欢收到表情包")
         if signal_counter.get("private_continue", 0) >= self.config.stable_signal_threshold:
             hints.append("私聊里可以自然续接，不用刻意开启新话题")
         if signal_counter.get("group_light_presence", 0) >= self.config.stable_signal_threshold:
@@ -140,18 +162,40 @@ class CharacterCardService:
             hints.append("用户接受了情绪承接，可以更自然地表达关心")
         return hints
 
+    _logger = logging.getLogger(__name__)
+
     def _classify_feedback(self, text: str) -> str:
         normalized = re.sub(r"\s+", "", text)
-        if any(token in normalized for token in ("简短一点", "短一点", "别太长", "精简")):
+        if any(token in normalized for token in ("简短一点", "短一点", "别太长", "精简", "少打点字", "别写太多")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_brief: %s", normalized[:80])
             return "more_brief"
         if any(token in normalized for token in ("接住我", "先安慰", "温柔一些", "温柔一点")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_gentle: %s", normalized[:80])
             return "more_gentle"
         if any(token in normalized for token in ("温柔一点", "柔和一点", "别那么冲", "语气好一点")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_warm: %s", normalized[:80])
             return "more_warm"
-        if any(token in normalized for token in ("直接一点", "说清楚点", "别绕")):
+        if any(token in normalized for token in ("直接一点", "说清楚点", "别绕", "直白一点", "别拐弯")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_direct: %s", normalized[:80])
             return "more_direct"
-        if any(token in normalized for token in ("别追问", "少问点", "别一直问")):
+        if any(token in normalized for token in ("别追问", "少问点", "别一直问", "别再问了", "不要追问")):
+            self._logger.info("[规则兜底触发] 关键词命中 less_followup: %s", normalized[:80])
             return "less_followup"
+        if any(token in normalized for token in ("别闹", "正经点", "认真点", "严肃一点")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_serious: %s", normalized[:80])
+            return "more_serious"
+        if any(token in normalized for token in ("别敷衍", "多说两句", "别惜字如金", "太短了")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_detail: %s", normalized[:80])
+            return "more_detail"
+        if any(token in normalized for token in ("别学我", "不要学我", "别模仿")):
+            self._logger.info("[规则兜底触发] 关键词命中 less_mirror: %s", normalized[:80])
+            return "less_mirror"
+        if any(token in normalized for token in ("别发表情", "别刷表情", "少发点表情")):
+            self._logger.info("[规则兜底触发] 关键词命中 less_emoji: %s", normalized[:80])
+            return "less_emoji"
+        if any(token in normalized for token in ("陪我聊聊", "聊一会", "聊聊", "在这陪我", "多陪陪我")):
+            self._logger.info("[规则兜底触发] 关键词命中 more_company: %s", normalized[:80])
+            return "more_company"
         return ""
 
     def record_emotion(self, user_id: str, tone: str) -> None:
@@ -214,15 +258,26 @@ class CharacterCardService:
     def update_intimacy(self, user_id: str, delta: float, *, is_friction: bool = False) -> RelationshipProfile:
         if not self.config.relationship_tracking_enabled:
             return RelationshipProfile(user_id=user_id)
+        import logging
+        _logger = logging.getLogger(__name__)
         profile = self.get_relationship_profile(user_id)
+        previous_stage = str(profile.relationship_stage or "stranger")
         profile.user_id = user_id
         profile.intimacy_level = max(0.0, min(1.0, profile.intimacy_level + delta))
         profile.total_interactions += 1
+        profile.interactions_last_week += 1
+        profile.last_interaction_at = datetime.now().isoformat()
         if is_friction:
             profile.friction_signals += 1
         else:
             profile.friction_signals = max(0, profile.friction_signals - 1)
         self.save_relationship_profile(user_id, profile)
+        current_stage = str(profile.relationship_stage or "stranger")
+        if previous_stage != current_stage:
+            _logger.info(
+                "[关系] 用户 %s 关系阶段变更: %s → %s (亲密度%.2f 互动%d次)",
+                user_id, previous_stage, current_stage, profile.intimacy_level, profile.total_interactions,
+            )
         return profile
 
     def get_relationship_tone_hint(self, user_id: str) -> str:

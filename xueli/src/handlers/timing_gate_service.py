@@ -75,13 +75,24 @@ class TimingGateService:
             decision = self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
             if context.trace_id:
                 logger.info(
-                    "节奏判断完成：%s decision=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s",
+                    "节奏判断完成：%s decision=%s reason=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s",
                     format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or get_execution_key(event), message_id=getattr(event, "message_id", 0)),
                     decision.decision,
+                    str(getattr(decision, "reason", "") or ""),
                     str(getattr(context.temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
                     str(getattr(context.temporal_context, "conversation_gap_bucket", "unknown") or "unknown"),
                     str(getattr(context.temporal_context, "session_gap_bucket", "unknown") or "unknown"),
                     str(getattr(context.temporal_context, "continuity_hint", "unknown") or "unknown"),
+                )
+                planner_reason = str(getattr(plan, "reason", "") or "")
+                timing_reason = str(getattr(decision, "reason", "") or "")
+                logger.info(
+                    "[决策摘要] %s plan=%s timing=%s plan_reason=%s timing_reason=%s",
+                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or get_execution_key(event), message_id=getattr(event, "message_id", 0)),
+                    str(getattr(plan, "action", "unknown")),
+                    decision.decision,
+                    planner_reason[:120],
+                    timing_reason[:120],
                 )
             return decision
         except asyncio.CancelledError:
@@ -116,9 +127,10 @@ class TimingGateService:
             decision = self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
             if context.trace_id:
                 logger.info(
-                    "节奏判断完成：%s decision=%s",
+                    "节奏判断完成：%s decision=%s reason=%s",
                     format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or get_execution_key(event), message_id=getattr(event, "message_id", 0)),
                     decision.decision,
+                    str(getattr(decision, "reason", "") or ""),
                 )
             return decision
         except asyncio.CancelledError:

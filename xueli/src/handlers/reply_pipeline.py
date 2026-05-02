@@ -111,7 +111,6 @@ class ReplyPipeline:
             enabled=getattr(memory, "fuzzy_recall_enabled", False),
             fuzzy_probability=getattr(memory, "fuzzy_recall_probability", 0.3),
             confidence_threshold=getattr(memory, "fuzzy_recall_confidence_threshold", 0.7),
-            fuzzy_expressions=list(getattr(memory, "fuzzy_recall_expressions", [])),
             confidence_decay_per_day=getattr(memory, "recall_confidence_decay_per_day", 0.01),
             confidence_minimum=getattr(memory, "recall_confidence_minimum", 0.3),
         )

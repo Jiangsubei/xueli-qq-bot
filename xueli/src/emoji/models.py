@@ -15,6 +15,11 @@ DEFAULT_EMOTION_LABELS: List[str] = [
     "嘲讽",
     "害怕",
     "困惑",
+    "焦虑",
+    "疲惫",
+    "温暖",
+    "内疚",
+    "感动",
 ]
 
 DEFAULT_REPLY_TONES: List[str] = [
@@ -37,6 +42,8 @@ class EmojiEmotionResult:
     all_emotions: List[str] = field(default_factory=list)
     reply_tones: List[str] = field(default_factory=list)
     reply_intents: List[str] = field(default_factory=list)
+    secondary_emotions: List[str] = field(default_factory=list)
+    intensity: float = 0.5
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -46,6 +53,8 @@ class EmojiEmotionResult:
             "all_emotions": list(self.all_emotions),
             "reply_tones": list(self.reply_tones),
             "reply_intents": list(self.reply_intents),
+            "secondary_emotions": list(self.secondary_emotions),
+            "intensity": float(self.intensity),
         }
 
 

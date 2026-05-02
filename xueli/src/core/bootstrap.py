@@ -185,6 +185,10 @@ class BotBootstrapper:
                 local_mention_weight=memory_config.local_mention_weight,
                 local_recency_weight=memory_config.local_recency_weight,
                 local_scene_weight=memory_config.local_scene_weight,
+                scene_same_group_weight=memory_config.scene_same_group_weight,
+                scene_same_type_weight=memory_config.scene_same_type_weight,
+                scene_same_user_weight=memory_config.scene_same_user_weight,
+                archive_penalty_base=memory_config.archive_penalty_base,
                 vector_weight=memory_config.vector_weight,
             ),
             extraction_config=ExtractionConfig(
@@ -193,6 +197,8 @@ class BotBootstrapper:
             ordinary_decay_enabled=memory_config.ordinary_decay_enabled,
             ordinary_half_life_days=memory_config.ordinary_half_life_days,
             ordinary_forget_threshold=memory_config.ordinary_forget_threshold,
+            cold_memory_threshold_days=memory_config.cold_memory_threshold_days,
+            cold_decay_multiplier=memory_config.cold_decay_multiplier,
             auto_extract_memory=memory_config.auto_extract,
             auto_build_index=True,
         )

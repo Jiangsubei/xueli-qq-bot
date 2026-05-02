@@ -60,7 +60,7 @@ class EventDispatcher:
 
     async def _inc_stat(self, key: str) -> None:
         async with self._stats_lock:
-            self.stats[key] = int(self.stats.get(key, 0) or 0) + 1
+            self.stats[key] = self.stats.get(key, 0) + 1
 
     def register_preprocessor(self, func: Callable[[EventContext], None]):
         """注册预处理器。"""

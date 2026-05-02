@@ -50,6 +50,10 @@ class RetrievalConfig:
     local_recency_weight: float = 0.15
     local_scene_weight: float = 0.3
     vector_weight: float = 0.4
+    scene_same_group_weight: float = 1.5
+    scene_same_type_weight: float = 1.0
+    scene_same_user_weight: float = 0.8
+    archive_penalty_base: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -464,8 +468,34 @@ class TwoStageRetriever:
             + scene_score * self.config.local_scene_weight
         )
         if metadata.get("_index_archived", False):
-            score *= 0.5
+            archive_penalty = self._compute_archive_penalty(metadata=metadata, memory=memory)
+            score *= archive_penalty
         return score
+
+    def _compute_archive_penalty(
+        self,
+        *,
+        metadata: Dict[str, Any],
+        memory: MemoryItem,
+    ) -> float:
+        """Dynamic archive penalty: decays faster for old archives, recovers with recall."""
+        base = self.config.archive_penalty_base
+        archived_date_str = str(metadata.get("archived_at", "") or metadata.get("updated_at", "") or getattr(memory, "updated_at", ""))
+        if archived_date_str:
+            try:
+                from datetime import datetime
+                archived_dt = datetime.fromisoformat(archived_date_str.replace("Z", "+00:00"))
+                age_days = (datetime.now() - archived_dt.replace(tzinfo=None)).days
+                if age_days < 30:
+                    return max(0.3, base * 0.6)
+                elif age_days > 180:
+                    return min(1.0, base * 1.4)
+            except (ValueError, TypeError):
+                pass
+        recall_count = self._safe_float(metadata.get("recall_count_since_archive", 0), 0.0)
+        if recall_count > 0:
+            return max(0.3, base - (recall_count * 0.1))
+        return base
 
     def _compute_scene_score(
         self,
@@ -481,11 +511,11 @@ class TwoStageRetriever:
         owner_user_id = str(metadata.get("owner_user_id", "") or "").strip()
 
         if source_message_type and source_message_type == retrieval_context.message_type:
-            score += 1.0
+            score += self.config.scene_same_type_weight
         if retrieval_context.message_type == "group" and retrieval_context.group_id and source_group_id == retrieval_context.group_id:
-            score += 1.5
+            score += self.config.scene_same_group_weight
         if retrieval_context.requester_user_id and owner_user_id == retrieval_context.requester_user_id:
-            score += 0.8
+            score += self.config.scene_same_user_weight
         return score
 
     def _compute_recency_score(self, updated_at: str) -> float:

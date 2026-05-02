@@ -187,6 +187,14 @@ class MemoryFlowService:
         self._update_relationship(host=host, event=event, prepared=prepared, user_id=user_id, estimated_tone=estimated_tone)
 
     def _update_relationship(self, *, host: Any, event: Any, prepared: "PreparedReplyRequest", user_id: str, estimated_tone: str) -> None:
+        """Update user intimacy based on interaction signals.
+
+        NOTE: keyword-based emotion estimation is disabled (_estimate_user_emotion always
+        returns ""). Intimacy changes are now driven purely by LLM feedback signals
+        via record_explicit_feedback / record_interaction_signal.
+        If emotion-based intimacy adjustment is needed in the future, it should be
+        injected via explicit LLM-returned emotion labels through the feedback mechanism.
+        """
         del host, event, prepared
         if self.character_card_service is None:
             return
@@ -203,19 +211,28 @@ class MemoryFlowService:
 
     @staticmethod
     def _estimate_user_emotion(text: str) -> str:
-        """Lightweight emotion estimation via keyword matching (no LLM call)."""
+        """Keyword-based emotion tone detection (fallback path).
+
+        Returns a single emotion label from emoji.emotion_labels, or ""
+        if no match. This is a rule-based fast path; LLM-level emotion
+        understanding runs through the async classification pipeline.
+        """
         normalized = str(text or "").strip()
         if not normalized:
             return ""
-        patterns = {
-            "伤心": ["好难过", "难受", "哭了", "想哭", "崩溃", "绝望", "好苦", "好累", "心累"],
-            "生气": ["气死", "好气", "无语死了", "真无语", "烦死了", "受够了", "滚", "傻逼"],
-            "开心": ["哈哈", "太好了", "真棒", "开心", "高兴", "嘻嘻", "嘿嘿", "好耶", "！"],
-            "惊讶": ["不会吧", "真的假的", "居然", "竟然", "我靠", "震惊"],
-            "困惑": ["什么意思", "没懂", "不懂", "搞不懂", "怎么样", "什么情况"],
-            "平静": ["嗯", "好", "行", "没问题", "知道了"],
+        emotion_keywords = {
+            "开心": ("开心", "高兴", "哈哈", "笑死", "太好", "棒", "nice", "好耶", "快乐", "幸福", "美好"),
+            "喜欢": ("喜欢", "爱", "好可爱", "好萌", "心动", "可爱", "萌", "甜蜜"),
+            "惊讶": ("惊讶", "震惊", "天啊", "不会吧", "居然", "没想到", "我的天"),
+            "无语": ("无语", "无言", "服了", "醉了", "不知道说啥", "懒得说"),
+            "委屈": ("委屈", "难过死了", "呜呜", "想哭", "难受", "不公平"),
+            "生气": ("生气", "愤怒", "气死", "火大", "烦", "暴躁", "恼火"),
+            "伤心": ("伤心", "难过", "心痛", "悲伤", "失落", "哭", "眼泪", "emo"),
+            "嘲讽": ("呵呵", "就这", "离谱", "无语子", "绝了", "真行"),
+            "害怕": ("害怕", "恐怖", "吓死", "可怕", "担心", "焦虑", "紧张"),
+            "困惑": ("困惑", "不懂", "啥意思", "什么情况", "不明", "迷惑", "茫然"),
         }
-        for tone, keywords in patterns.items():
+        for emotion_label, keywords in emotion_keywords.items():
             if any(kw in normalized for kw in keywords):
-                return tone
+                return emotion_label
         return ""

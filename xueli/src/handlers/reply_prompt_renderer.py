@@ -239,8 +239,10 @@ class ReplyPromptRenderer:
             lines.append(f"- 收尾/跟进：{style_guide.followup_shape}")
         if str(style_guide.allowed_colloquialism or "").strip():
             lines.append(f"- 口语度：{style_guide.allowed_colloquialism}")
+        if str(style_guide.relationship_guidance or "").strip():
+            lines.append(f"- 关系：{style_guide.relationship_guidance}")
         if anti_patterns:
-            lines.append("避免：\n" + anti_patterns)
+            lines.append("风格指引：\n" + anti_patterns)
         return "\n".join(lines)
 
     def _emotional_trend_section(self, *, event: Any) -> str:
