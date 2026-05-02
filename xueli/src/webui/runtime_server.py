@@ -85,7 +85,7 @@ class WebUIRuntimeServer:
         self.port = int(getattr(self._httpd, "server_port", self.port))
         self._thread = threading.Thread(target=self._serve_forever, name="webui-server", daemon=True)
         self._thread.start()
-            logger.debug("[WebUI] WebUI 地址已就绪")
+        logger.debug("[WebUI] WebUI 地址已就绪")
         return True
 
     def _serve_forever(self) -> None:
