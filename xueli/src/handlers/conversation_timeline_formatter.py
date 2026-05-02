@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Iterable, List
 
 from src.core.models import ConversationContextItem, PromptPlan, TemporalContext
+from src.handlers.label_constants import SENDER_LABEL_ASSISTANT, SENDER_LABEL_USER
 
 
 def _format_clock(timestamp: float) -> str:
@@ -15,12 +16,12 @@ def _format_clock(timestamp: float) -> str:
 def _speaker_label(item: dict[str, Any]) -> str:
     role = str(item.get("speaker_role") or "user").strip().lower()
     if role == "assistant":
-        return str(item.get("speaker_name") or "助手").strip() or "助手"
-    speaker = str(item.get("speaker_name") or item.get("user_id") or "用户").strip()
+        return str(item.get("speaker_name") or SENDER_LABEL_ASSISTANT).strip() or SENDER_LABEL_ASSISTANT
+    speaker = str(item.get("speaker_name") or item.get("user_id") or SENDER_LABEL_USER).strip()
     user_id = str(item.get("user_id") or "").strip()
     if speaker and user_id and speaker != user_id:
         return f"{speaker}({user_id})"
-    return speaker or user_id or "用户"
+    return speaker or user_id or SENDER_LABEL_USER
 
 
 class ConversationTimelineFormatter:

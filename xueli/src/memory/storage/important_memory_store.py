@@ -226,6 +226,8 @@ class ImportantMemoryStore:
                     logger.debug("解析重要记忆行失败：%s", exc)
 
             return memories
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("读取重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return []
@@ -252,6 +254,8 @@ class ImportantMemoryStore:
                     await file.write("\n".join(lines))
                 os.replace(tmp_path, file_path)
                 return True
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("写入重要记忆失败：用户=%s，错误=%s", user_id, exc)
                 return False
@@ -358,6 +362,8 @@ class ImportantMemoryStore:
             if len(new_memories) == len(memories):
                 return False
             return await self._write_memories(user_id, new_memories)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("删除重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return False
@@ -390,9 +396,11 @@ class ImportantMemoryStore:
         try:
             file_path.unlink()
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-                logger.error("清空重要记忆失败：用户=%s，错误=%s", user_id, exc)
-                return False
+            logger.error("清空重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            return False
 
     async def replace_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
         return await self._write_memories(user_id, memories)

@@ -115,6 +115,8 @@ class CrossEncoderReranker(BaseReranker):
                 results.append((mem, rerank_score, combined_score))
             results.sort(key=lambda item: item[2], reverse=True)
             return [(mem, score) for mem, score, _ in results[:top_k]]
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("本地重排失败：%s", exc)
             return candidates[:top_k]
@@ -263,6 +265,8 @@ class APIReranker(BaseReranker):
             else:
                 response = await run_chat()
             ranked = self._parse_response(getattr(response, "content", ""))
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("API 重排失败：地址=%s，错误=%s", self.endpoint, exc)
             return candidates[:top_k]
@@ -317,6 +321,8 @@ class TwoStageRetriever:
                     model_invocation_router=self.config.model_invocation_router,
                 )
                 logger.debug("API 重排器初始化完成：地址=%s，模型=%s", self.config.api_endpoint, self.config.api_model)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("初始化重排器失败：%s", exc)
             self._reranker = None

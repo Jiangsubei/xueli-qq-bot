@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -778,6 +778,8 @@ class MessageHandler:
                 base64_data = await self.image_client.process_image_segment(seg.data)
                 if base64_data:
                     base64_images.append(base64_data)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("处理图片失败：%s", exc, exc_info=True)
         return base64_images
@@ -814,6 +816,8 @@ class MessageHandler:
                 session_key=get_execution_key(event),
                 message_id=getattr(event, "message_id", 0),
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             raise wrap_image_error(exc)
         if self.runtime_metrics:

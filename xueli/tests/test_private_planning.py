@@ -65,10 +65,10 @@ class PrivatePlanningTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_batching_merges_inputs_into_single_dispatch(self) -> None:
         planner = _FakePlanner()
         handler = MessageHandler(conversation_planner=planner)
-        handler.private_batch_window_seconds = 0.01
+        handler.private_batch_window_seconds = 0.05
 
         first_task = asyncio.create_task(handler.plan_message(self._event("我补充一下", message_id=10)))
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
         second_plan = await handler.plan_message(self._event("帮我整理这个思路", message_id=11))
         first_plan = await first_task
 

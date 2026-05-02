@@ -7,7 +7,7 @@ This module re-exports them for backward compatibility only.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.adapters.base import ProtocolAdapter

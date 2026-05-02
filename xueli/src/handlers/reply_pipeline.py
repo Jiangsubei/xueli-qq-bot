@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from datetime import datetime
@@ -14,6 +14,7 @@ from src.core.model_invocation_router import ModelInvocationType
 from src.core.pipeline_errors import classify_pipeline_error
 from src.core.models import Conversation, MessageEvent, MessageHandlingPlan, MessageType, PromptPlan, TemporalContext
 from src.core.runtime_metrics import RuntimeMetrics
+from src.handlers.label_constants import DISPLAY_NAME_FALLBACK, SESSION_TYPE_LABEL
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_generation_service import ReplyGenerationService
 from src.handlers.reply_prompt_renderer import ReplyPromptRenderer
@@ -103,6 +104,17 @@ class ReplyPipeline:
         plan: Optional[MessageHandlingPlan] = None,
         context: Optional[MessageContext] = None,
     ) -> PreparedReplyRequest:
+        """将事件、用户消息、规划结果组装为 PreparedReplyRequest（发给 AI 的完整请求结构）。
+
+        步骤：
+        1. 构建 MessageContext（含记忆上下文），若外部已传入则跳过
+        2. 处理图片（下载或复用 vision_analysis）
+        3. 解析/复用视觉分析结果
+        4. 渲染 prompt（system + user）
+        5. 组装 messages 列表
+        6. 返回 PreparedReplyRequest
+        """
+        # 步骤1：构建消息上下文（包含记忆检索结果）
         message_context = context
         if message_context is None:
             message_context = await self.host.build_message_context(
@@ -111,9 +123,13 @@ class ReplyPipeline:
                 include_memory=True,
             )
         original_user_message = str(message_context.user_message or user_message or "")
+
+        # 步骤2：处理图片（优先复用上下文中已有的，否则按需下载）
         base64_images = list(message_context.base64_images or [])
         if not base64_images and not message_context.vision_analysis:
             base64_images = await self._download_images_if_needed(event)
+
+        # 从上下文或对话历史提取各记忆区块和最近消息
         conversation = message_context.conversation or self.host._get_conversation(self.host._get_conversation_key(event))
         recent_history_text = str(message_context.recent_history_text or "").strip() or self._build_recent_history_text(
             event=event,
@@ -127,6 +143,8 @@ class ReplyPipeline:
         dynamic_memory_context = str(message_context.dynamic_memory_context or "")
         related_history_messages = list(message_context.related_history_messages or [])
         is_first_turn = bool(message_context.is_first_turn)
+
+        # 步骤3：视觉分析（优先复用 plan 中已有的，避免重复调用）
         vision_analysis = dict(message_context.vision_analysis or {})
         if vision_analysis and self.host.runtime_metrics:
             self.host.runtime_metrics.record_vision_request(reused_from_plan=True)
@@ -138,6 +156,8 @@ class ReplyPipeline:
                 plan=plan,
                 trace_id=message_context.trace_id if message_context else "",
             )
+
+        # 步骤4：渲染 Prompt（system_prompt + current_message）
         model_user_message = self._build_model_user_message(
             original_user_message=original_user_message,
             vision_analysis=vision_analysis,
@@ -156,11 +176,15 @@ class ReplyPipeline:
             vision_analysis=vision_analysis,
             has_image=self._event_has_image(event),
         )
+
+        # 兜底回复（当所有生成策略均失败时使用）
         fallback_response = self._build_fallback_response(
             event=event,
             original_user_message=original_user_message,
             vision_analysis=vision_analysis,
         )
+
+        # 步骤5：组装消息列表（若没有兜底回复，则正常构建；否则为空）
         messages: List[Dict[str, Any]] = []
         if fallback_response is None:
             messages = self.build_response_messages(
@@ -169,6 +193,8 @@ class ReplyPipeline:
                 base64_images=base64_images,
                 related_history_messages=related_history_messages,
             )
+
+        # 步骤6：返回完整请求结构
         return PreparedReplyRequest(
             original_user_message=original_user_message,
             model_user_message=model_user_message,
@@ -447,21 +473,33 @@ class ReplyPipeline:
         conversation: Conversation,
         prompt_plan: Optional[PromptPlan] = None,
     ) -> Tuple[str, str, str, str, str, List[Dict[str, Any]], bool]:
+        """加载并返回多层级记忆上下文，供 Prompt 渲染使用。
+
+        返回：(person_fact_context, persistent_memory_context, session_restore_context,
+              precise_recall_context, dynamic_memory_context, history_messages, is_first_turn)
+        """
         if not self.host.memory_manager:
             return "", "", "", "", "", [], len(conversation.messages) == 0
 
+        # 判断是否为首轮对话（决定是否启用 session_restore 等首次相关特性）
         is_first_turn = len(conversation.messages) == 0
         access_context = self._build_memory_access_context(event)
+
+        # 层级1：用户事实（身份标签、兴趣等，相对稳定）
         person_fact_context = ""
         if self._layer_enabled(prompt_plan, "include_person_facts", default=True):
             person_fact_context = await self._load_person_fact_context(
                 user_id=str(event.user_id),
                 access_context=access_context,
             )
+
+        # 层级2：持久记忆（跨会话积累的长期信息）
         persistent_memory_context = await self._load_persistent_memory_context(
             user_id=str(event.user_id),
             access_context=access_context,
         )
+
+        # 根据 memory_profile 决定各动态记忆区块的开关和强度
         memory_profile = self._memory_profile(prompt_plan)
         include_sections = {
             "session_restore": self._layer_enabled(prompt_plan, "include_session_restore", default=True) and memory_profile in {"relevant", "rich"},
@@ -477,6 +515,7 @@ class ReplyPipeline:
             if not enabled:
                 section_intensity[key] = "off"
 
+        # 统一检索：一次性拉取所有记忆区块（session_restore / precise_recall / dynamic / history）
         try:
             payload = await self.host.memory_manager.search_memories_with_context(
                 user_id=str(event.user_id),
@@ -494,6 +533,7 @@ class ReplyPipeline:
             logger.warning("检索记忆上下文失败：%s", exc)
             return person_fact_context, persistent_memory_context, "", "", "", [], is_first_turn
 
+        # 按 section 拆解检索结果，按需过滤
         memories = payload.get("memories", []) if isinstance(payload, dict) else []
         session_restore_entries = payload.get("session_restore", []) if isinstance(payload, dict) else []
         precise_recall_entries = payload.get("precise_recall", []) if isinstance(payload, dict) else []
@@ -506,6 +546,8 @@ class ReplyPipeline:
             memories = []
         if not self._layer_enabled(prompt_plan, "include_recent_history", default=True):
             history_messages = []
+
+        # 格式化各记忆区块为字符串（去重 + 整理）
         session_restore_context = self._format_memory_context(self._collect_memory_lines(session_restore_entries))
         precise_recall_context = self._format_memory_context(self._collect_memory_lines(precise_recall_entries))
         dynamic_memory_context = self._format_memory_context(
@@ -632,7 +674,7 @@ class ReplyPipeline:
             if name:
                 return name
         fallback = getattr(getattr(self.host, "app_config", None), "assistant_profile", None)
-        return str(getattr(fallback, "name", "") or "").strip() or "助手"
+        return str(getattr(fallback, "name", "") or "").strip() or DISPLAY_NAME_FALLBACK
 
     def _format_identity_label(self, user_id: Any, display_name: str = "") -> str:
         from src.handlers.identity_utils import format_identity_label
@@ -669,7 +711,7 @@ class ReplyPipeline:
         if event is None:
             return ""
         session_type = str(event.message_type or "").strip().lower() or MessageType.PRIVATE.value
-        session_label = "群聊" if session_type == MessageType.GROUP.value else "私聊"
+        session_label = SESSION_TYPE_LABEL.get(session_type, "私聊")
         return f"请注意你现在正在和{session_label}里的“用户ID：{self._current_user_label(event)}”说话。"
 
     def _build_reply_context_prompt(

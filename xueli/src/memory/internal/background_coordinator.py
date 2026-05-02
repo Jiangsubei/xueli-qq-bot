@@ -59,6 +59,8 @@ class MemoryBackgroundCoordinator:
             return
         try:
             await self.person_fact_service.sync_user_facts(str(user_id))
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("同步人物事实失败：用户=%s，错误=%s", user_id, exc)
 
@@ -149,6 +151,8 @@ class MemoryBackgroundCoordinator:
                 )
                 if result:
                     logger.debug("对话会话已保存：用户=%s，会话=%s", user_id, result.session_id)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("保存对话会话失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
@@ -245,6 +249,8 @@ class MemoryBackgroundCoordinator:
                 )
                 if memories:
                     logger.debug("后台记忆提取完成：用户=%s，写入=%s 条", user_id, len(memories))
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("后台记忆提取任务失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
 
@@ -306,6 +312,8 @@ class MemoryBackgroundCoordinator:
                     session_id=session_id,
                     extract_pending=True,
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error(
                     "会话收尾失败：用户=%s，会话=%s，错误=%s",
@@ -347,6 +355,8 @@ class MemoryBackgroundCoordinator:
                     session_id=session_id,
                     extract_pending=False,
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error(
                     "关闭会话收尾失败：用户=%s，会话=%s，错误=%s",
@@ -379,6 +389,8 @@ class MemoryBackgroundCoordinator:
                     break
                 try:
                     await self._run_digestion_cycle()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     logger.warning("记忆消化循环异常：%s", exc, exc_info=True)
 
@@ -414,6 +426,8 @@ class MemoryBackgroundCoordinator:
                     )
                     insight_count += 1
                     logger.info("记忆消化发现 insight：用户=%s，内容=%s", user_id, insight[:80])
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.debug("记忆消化处理用户 %s 失败：%s", user_id, exc)
 
@@ -449,6 +463,8 @@ class MemoryBackgroundCoordinator:
             )
             content = str(getattr(response, "content", "") or "")
             return self._parse_insight_response(content)
+        except asyncio.CancelledError:
+            raise
         except asyncio.TimeoutError:
             logger.debug("记忆消化 LLM 超时：用户=%s", user_id)
             return None

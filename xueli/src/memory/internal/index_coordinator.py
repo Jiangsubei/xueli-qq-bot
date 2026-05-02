@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -56,6 +56,8 @@ class MemoryIndexCoordinator:
                 else:
                     logger.debug("索引重建完成：用户=%s，记忆数=%s", user_id, len(memories))
             return success
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("索引重建失败：用户=%s，错误=%s", user_id, exc)
             return False

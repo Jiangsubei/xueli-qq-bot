@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -50,6 +50,9 @@ class BotRuntimeSupervisor:
             await self._stop_locked()
             try:
                 result = await self._start_locked()
+            except asyncio.CancelledError:
+                self._state = "stopped"
+                raise
             except Exception as exc:
                 self._state = "error"
                 self._last_error = str(exc)

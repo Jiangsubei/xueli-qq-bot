@@ -436,6 +436,8 @@ class ConversationPlanCoordinator:
                 if "positional arguments" not in str(exc):
                     raise
                 return await self.image_analyzer(event, user_message)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning(
                 "规划前图片分析失败：消息ID=%s，错误=%s",

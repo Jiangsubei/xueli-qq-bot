@@ -95,6 +95,8 @@ class ConversationContextBuilder:
                     )
             except ImageProcessingError:
                 raise
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 raise wrap_image_error(exc)
 

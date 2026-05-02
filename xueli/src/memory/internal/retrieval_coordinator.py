@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import re
@@ -876,6 +876,8 @@ class MemoryRetrievalCoordinator:
 
         try:
             record = await self.conversation_store.load_session(owner_user_id, anchor["session_id"])
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("加载记忆关联对话失败：%s", exc)
             return []

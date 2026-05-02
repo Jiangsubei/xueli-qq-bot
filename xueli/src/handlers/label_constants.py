@@ -1,0 +1,4 @@
+SESSION_TYPE_LABEL = {"private": "私聊", "group": "群聊"}
+SENDER_LABEL_USER = "用户"
+SENDER_LABEL_ASSISTANT = "助手"
+DISPLAY_NAME_FALLBACK = "助手"

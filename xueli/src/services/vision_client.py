@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -278,6 +278,8 @@ class VisionClient:
             result = self._parse_result(response.content, len(base64_images))
             result.source = "vision"
             return result
+        except asyncio.CancelledError:
+            raise
         except AIAPIError as exc:
             logger.warning("图片分析失败：%s", exc)
             return ImageAnalysisResult(

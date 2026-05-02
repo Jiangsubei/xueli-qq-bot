@@ -125,7 +125,17 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 ## 编码习惯与已知陷阱
 
 - **文件写入必须原子化**：所有持久化存储（Markdown/JSON）必须写 `.tmp` → `os.replace()`，禁止直接覆写目标文件。已修复的 4 处：`markdown_store`、`important_memory_store`、`person_fact_store`、`character_card_service`。
-- **async 函数中 `except Exception` 必须在前面加 `except asyncio.CancelledError: raise`**：Python 3.9+ 中 `CancelledError` 继承自 `Exception`，不加守卫会破坏 asyncio 取消协议。
+- **async 函数中 `except Exception` 必须在前面加 `except asyncio.CancelledError: raise`**：Python 3.9+ 中 `CancelledError` 继承自 `Exception`，不加守卫会破坏 asyncio 取消协议。全项目已修复关键路径。
 - **禁止用 `asyncio.CancelledError` 作业务流程控制**：应使用自定义异常（如 `StaleWindowError`），避免与任务取消混淆。
 - **`Future.set_result()` 不要在持有 `asyncio.Lock` 时调用**：回调链路可能尝试获取同一把锁导致死锁。应收集 waiter → 锁外 resolve。
 - **禁止在 `async` 上下文中使用同步阻塞 I/O**：`Path.read_text()` / `Path.write_text()` 应通过 `asyncio.to_thread()` 包裹，或使用 `aiofiles`。
+
+## 标签常量
+
+中文字符串标签统一在 `src/handlers/label_constants.py` 管理：
+- `SESSION_TYPE_LABEL` — 私聊/群聊标签
+- `SENDER_LABEL_USER` — 用户标签
+- `SENDER_LABEL_ASSISTANT` — 助手标签
+- `DISPLAY_NAME_FALLBACK` — 显示名称兜底值
+
+修改这些字符串时只需改一处，所有引用自动同步。

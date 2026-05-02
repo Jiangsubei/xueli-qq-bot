@@ -204,12 +204,33 @@ class MemoryExtractor:
         return len(self._get_pending_turns(session_id))
 
     async def extract_memories(self, user_id: str, *, session_id: str, force: bool = False) -> List[MemoryItem]:
+        """从会话pending队列中提取用户记忆。
+
+        流程分为5个阶段：
+        1. [准备] 获取待提取对话，格式化文本
+        2. [LLM调用] 调用记忆提取模型
+        3. [解析] 解析LLM返回，构建锚点
+        4. [保存] 遍历每条记忆 → 构建元数据 → 处理反射 → 保存普通/重要记忆 → 处理patch
+        5. [收尾] 标记会话checkpoint已提取，返回结果
+
+        Args:
+            user_id: 用户ID
+            session_id: 会话ID
+            force: 是否强制提取（当前未使用，del force保留接口）
+
+        Returns:
+            保存成功的记忆列表（MemoryItem）
+        """
         del force
         session_key = str(session_id or "").strip()
         pending_turns = self._get_pending_turns(session_key)
         if not pending_turns:
             return []
 
+        # ─────────────────────────────────────────────────────────────
+        # 阶段1：准备
+        # ─────────────────────────────────────────────────────────────
+        # 取最近max_dialogue_length轮对话送LLM，latest_turn_id用于更新checkpoint
         visible_turns = pending_turns[-self.config.max_dialogue_length :]
         latest_turn_id = max(int(turn.get("turn_id", 0) or 0) for turn in pending_turns)
         pending_count = len(pending_turns)
@@ -221,13 +242,20 @@ class MemoryExtractor:
             pending_count,
             len(visible_turns),
         )
+
+        # 无有效用户消息时仍推进checkpoint，避免重复提取
         if dialogue_text.strip() == "无":
             self._mark_session_extracted(session_key, latest_turn_id)
             logger.info("记忆提取跳过：会话=%s 当前没有可供提取的用户消息，checkpoint 已推进到 T%s", session_key, latest_turn_id)
             return []
 
+        # ─────────────────────────────────────────────────────────────
+        # 阶段2：LLM调用
+        # ─────────────────────────────────────────────────────────────
         try:
             llm_response = await self._call_llm_for_extraction(user_id=user_id, dialogue_text=dialogue_text)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             if self._is_rate_limit_error(exc):
                 logger.warning("记忆提取触发限流：用户=%s，会话=%s", user_id, session_key)
@@ -239,11 +267,16 @@ class MemoryExtractor:
         model = llm_response.model or ""
         logger.info("记忆提取本轮使用模型：provider=%s model=%s", provider, model)
 
+        # LLM明确回复"无记忆"时也推进checkpoint
         if self._is_explicit_no_memory_response(llm_response.content):
             self._mark_session_extracted(session_key, latest_turn_id)
             logger.info("记忆提取结果为空：用户=%s，会话=%s，checkpoint 已推进到 T%s", user_id, session_key, latest_turn_id)
             return []
 
+        # ─────────────────────────────────────────────────────────────
+        # 阶段3：解析LLM返回
+        # allowed_turn_ids用于过滤锚点无效的记忆；existing_records用于冲突检测
+        # ─────────────────────────────────────────────────────────────
         extracted = self._parse_extraction_response(llm_response.content)
         if not extracted:
             logger.warning(
@@ -262,7 +295,11 @@ class MemoryExtractor:
         ordinary_count = 0
         valid_anchor_count = 0
 
+        # ─────────────────────────────────────────────────────────────
+        # 阶段4：遍历记忆 → 保存 + 冲突处理 + 晋升 + patch
+        # ─────────────────────────────────────────────────────────────
         for item in extracted:
+            # 4a. 锚点验证：记忆来源轮次必须在visible_turns范围内
             if not self._is_valid_anchor(item, allowed_turn_ids):
                 logger.debug(
                     "丢弃来源锚点无效的记忆：会话=%s，锚点=%s-%s，内容=%s",
@@ -273,6 +310,7 @@ class MemoryExtractor:
                 )
                 continue
 
+            # 4b. 提取锚点关联的对话轮次，用于构建记忆元数据
             anchor_turns = [
                 turn
                 for turn in visible_turns
@@ -282,6 +320,7 @@ class MemoryExtractor:
                 continue
             valid_anchor_count += 1
 
+            # 4c. 构建元数据（包含来源、关联对话、情绪标签等）
             metadata = self._build_memory_metadata(
                 owner_user_id=str(user_id),
                 session_id=session_key,
@@ -291,21 +330,25 @@ class MemoryExtractor:
             )
             if item.emotional_tone:
                 metadata["emotional_tone"] = item.emotional_tone
+
+            # 4d. 冲突检测：与历史记忆比对，判断是否存在矛盾
             reflection = await self._reflect_on_memory_conflict(
                 user_id=user_id,
                 item=item,
                 anchor_turns=anchor_turns,
                 existing_records=existing_records,
             )
+            # 有冲突时合并冲突信息到元数据
             if reflection and reflection.has_conflict:
                 metadata = self._merge_reflection_into_metadata(
                     metadata=metadata,
                     reflection=reflection,
                     conflict_candidates=reflection.evidence,
                 )
+
+            # 4e. 保存到普通记忆库（memory_store）
             memory_type = "important" if item.is_important else "ordinary"
             importance = 5 if item.is_important else max(1, min(int(item.importance), 5))
-
             mem = await self.memory_store.add_memory(
                 content=item.content,
                 user_id=user_id,
@@ -320,6 +363,7 @@ class MemoryExtractor:
             )
             if mem:
                 saved_memories.append(mem)
+                # 收集到existing_records供后续记忆比对（用于下一轮冲突检测）
                 if not self._is_suppressed_memory(mem.metadata):
                     existing_records.append(
                         {
@@ -334,6 +378,7 @@ class MemoryExtractor:
                 else:
                     ordinary_count += 1
 
+            # 4f. 重要记忆同步写入重要记忆持久化文件
             important_memory = None
             if item.is_important:
                 important_memory = await self._sync_important_memory(
@@ -343,6 +388,7 @@ class MemoryExtractor:
                     priority=3,
                     metadata=metadata,
                 )
+            # 4g. 普通记忆达到晋升条件时也写入重要记忆
             elif mem and self._should_promote_to_important(mem):
                 important_memory = await self._sync_important_memory(
                     user_id=user_id,
@@ -352,6 +398,7 @@ class MemoryExtractor:
                     metadata=metadata,
                 )
 
+            # 4h. 对有冲突的记忆执行patch：对历史冲突记忆打上标记
             if reflection and mem:
                 successor_memory_id = str((important_memory.id if important_memory and item.is_important else mem.id) or "")
                 successor_memory_type = "important" if important_memory and item.is_important else memory_type
@@ -362,6 +409,9 @@ class MemoryExtractor:
                     reflection=reflection,
                 )
 
+        # ─────────────────────────────────────────────────────────────
+        # 阶段5：收尾
+        # ─────────────────────────────────────────────────────────────
         if saved_memories:
             self._mark_session_extracted(session_key, latest_turn_id)
             logger.info(
@@ -534,6 +584,8 @@ class MemoryExtractor:
             try:
                 response = await self.llm_callback(system_prompt, messages)
                 break
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 if self._is_rate_limit_error(exc) and attempt < 2:
                     await asyncio.sleep(attempt)
@@ -1122,6 +1174,8 @@ class MemoryExtractor:
                 priority=priority,
                 metadata=dict(metadata or {}),
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("同步重要记忆失败：用户=%s，错误=%s", user_id, exc)
             return None

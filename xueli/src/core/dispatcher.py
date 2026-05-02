@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional
 from src.core.models import MessageEvent, MessageType, OneBotEvent
 from src.core.platform_bridge import build_message_event_from_inbound
 from src.core.platform_models import InboundEvent
-from src.core.platform_normalizers import attach_normalized_onebot_event, build_generic_inbound_event, get_attached_inbound_event
+from src.core.platform_normalizers import attach_normalized_onebot_event
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,8 @@ class EventDispatcher:
             try:
                 attacher = self.inbound_event_attacher or self._attach_default_inbound_event
                 ctx.inbound_event = attacher(event)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error("标准消息归一化失败: %s", e, exc_info=True)
 

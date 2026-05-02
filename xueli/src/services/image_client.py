@@ -91,6 +91,8 @@ class ImageClient:
         except asyncio.TimeoutError:
             logger.error("图片下载超时")
             return None
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("图片下载失败：%s", e, exc_info=True)
             return None
@@ -168,6 +170,8 @@ class ImageClient:
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError, binascii.Error) as e:
             logger.error("处理图片消息失败：%s", e, exc_info=True)
             return None
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("处理图片消息失败：%s", e, exc_info=True)
             return None

@@ -75,6 +75,10 @@ class BotBootstrapper:
                 on_connect=on_connect,
                 on_disconnect=on_disconnect,
             )
+        except asyncio.CancelledError:
+            await close_resource(message_handler, label="message_handler")
+            await close_resource(memory_manager, label="memory_manager")
+            raise
         except Exception:
             await close_resource(message_handler, label="message_handler")
             await close_resource(memory_manager, label="memory_manager")
@@ -204,6 +208,9 @@ class BotBootstrapper:
         )
         try:
             await memory_manager.initialize()
+        except asyncio.CancelledError:
+            await close_resource(memory_manager, label="memory_manager")
+            raise
         except Exception:
             await close_resource(memory_manager, label="memory_manager")
             raise
@@ -220,6 +227,13 @@ class BotBootstrapper:
         main_available: bool,
         model_invocation_router: Optional[ModelInvocationRouter] = None,
     ):
+        """构建记忆提取专用的 LLM callback。
+
+        优先级策略：
+        - use_dedicated_first=True：先尝试专用模型，失败后回退主模型
+        - use_dedicated_first=False：仅使用主模型
+        - 两者都不可用时返回 None（记忆提取被禁用）
+        """
         if not use_dedicated_first and not main_available:
             return None
 
@@ -230,6 +244,7 @@ class BotBootstrapper:
             system_prompt: str,
             messages: list,
         ) -> Dict[str, str]:
+            """实际执行一次 LLM 调用，返回 {content, provider, model}。"""
             from src.services.ai_client import AIClient
 
             client = AIClient(log_label="memory_extract", app_config=self.config.app, **client_config)
@@ -266,6 +281,10 @@ class BotBootstrapper:
                 await client.close()
 
         async def llm_callback(system_prompt: str, messages: list):
+            """记忆提取 callback：对内抽象为 (system_prompt, messages) → {content, provider, model}。
+
+            内部自动处理：专用模型优先 → 失败回退主模型 → 两者均不可用则报错。
+            """
             if use_dedicated_first:
                 try:
                     return await _invoke_client(
@@ -274,6 +293,8 @@ class BotBootstrapper:
                         system_prompt=system_prompt,
                         messages=messages,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     if not main_available:
                         raise

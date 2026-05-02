@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -175,6 +175,8 @@ class EmojiReplyService:
                 )
             else:
                 response = await run_chat()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("表情包回复意图判断失败：%s", exc)
             return EmojiReplyDecision(should_send=False, reason=f"decision_error:{exc}")

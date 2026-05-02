@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
 from typing import TYPE_CHECKING, Any
 
-from src.core.config import CharacterGrowthConfig, MemoryDisputeConfig
+from src.core.config import MemoryDisputeConfig
 from src.core.models import FactEvidenceRecord
 from src.memory.memory_dispute_resolver import MemoryDisputeResolver
 from src.memory.storage.fact_evidence_store import FactEvidenceStore
@@ -40,13 +39,24 @@ class MemoryFlowService:
         prepared: "PreparedReplyRequest",
         reply_text: str,
     ) -> None:
+        """回复生成后的副作用处理（记忆写入调度）。
+
+        负责：
+        1. 有效性检查（无文本且无图片则跳过）
+        2. 注册本轮对话（user ↔ assistant）到对话历史
+        3. 提取图片描述并一并注册
+        4. 调度后续记忆提取任务（异步）
+        5. 记录角色成长数据
+        所有异常均捕获并记录日志，不向上传播以避免污染主流程。
+        """
         has_text = bool(str(prepared.original_user_message or "").strip())
         has_image = bool(prepared.base64_images)
         if not self.memory_manager or (not has_text and not has_image):
             return
         try:
             dialogue_key = host._get_conversation_key(event)
-            # 从 vision_analysis 提取图片描述
+
+            # 从 vision_analysis 提取图片描述（用于记忆存档）
             image_description = ""
             if prepared.message_context and prepared.message_context.vision_analysis:
                 va = prepared.message_context.vision_analysis
@@ -55,6 +65,8 @@ class MemoryFlowService:
                     parts = [str(p).strip() for p in (va.get("per_image_descriptions") or []) if str(p).strip()]
                     if parts:
                         image_description = "；".join(parts)
+
+            # 注册本轮对话到记忆系统
             self.memory_manager.register_dialogue_turn(
                 user_id=str(event.user_id),
                 user_message=prepared.original_user_message,
@@ -65,6 +77,8 @@ class MemoryFlowService:
                 message_id=str(event.message_id or ""),
                 image_description=image_description,
             )
+
+            # 调度异步记忆提取（基于阈值触发或定时）
             scheduler = getattr(self.memory_manager, "schedule_memory_extraction", None)
             if callable(scheduler):
                 task = scheduler(
@@ -78,6 +92,8 @@ class MemoryFlowService:
                     event=event,
                     task=task,
                 )
+
+            # 角色人设成长记录
             self._record_character_growth(host=host, event=event, prepared=prepared, reply_text=reply_text)
         except Exception as exc:
             logger.warning("记录记忆副作用失败：%s", exc, exc_info=True)

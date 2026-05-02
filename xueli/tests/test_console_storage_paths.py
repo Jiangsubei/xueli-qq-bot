@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,30 +17,26 @@ class ConsoleStoragePathTests(unittest.TestCase):
 
         if not settings.configured:
             settings.configure(
-                WEBUI_CONFIG_PATH=r"C:\Users\Jiangsubei\Desktop\xueli\xueli\config\config.toml",
                 SECRET_KEY="test",
                 USE_TZ=True,
             )
 
     def test_resolve_storage_path_anchors_relative_paths_to_xueli_root(self) -> None:
-        config_path = Path(r"C:\Users\Jiangsubei\Desktop\xueli\xueli\config\config.toml")
-        with patch.object(services.settings, "WEBUI_CONFIG_PATH", str(config_path), create=True):
-            self.assertEqual(
-                services._resolve_storage_path("../data/memories"),
-                Path(r"C:\Users\Jiangsubei\Desktop\xueli\data\memories"),
-            )
-            self.assertEqual(
-                services._resolve_storage_path("../data/emojis"),
-                Path(r"C:\Users\Jiangsubei\Desktop\xueli\data\emojis"),
-            )
-            self.assertEqual(
-                services._resolve_storage_path("../data/runtime"),
-                Path(r"C:\Users\Jiangsubei\Desktop\xueli\data\runtime"),
-            )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "xueli" / "config" / "config.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.touch()
+
+            with patch.object(services.settings, "WEBUI_CONFIG_PATH", str(config_path), create=True):
+                result = services._resolve_storage_path("../data/memories")
+                expected = (config_path.parent.parent.parent / "data" / "memories").resolve()
+                self.assertEqual(result, expected)
 
     def test_resolve_storage_path_keeps_absolute_path(self) -> None:
-        absolute = Path(r"C:\Users\Jiangsubei\Desktop\xueli\data\memories")
-        self.assertEqual(services._resolve_storage_path(str(absolute)), absolute)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            absolute = Path(tmpdir) / "data" / "memories"
+            result = services._resolve_storage_path(str(absolute))
+            self.assertEqual(result, absolute.resolve())
 
 
 if __name__ == "__main__":

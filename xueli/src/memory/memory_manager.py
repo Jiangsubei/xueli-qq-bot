@@ -403,6 +403,8 @@ class MemoryManager:
                 updated = await self.mark_recalled_memories(user_id, memory_ids)
                 if updated:
                     logger.debug("记忆召回回写完成：用户=%s，更新条目=%s", user_id, updated)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("记忆召回回写失败（非致命）：用户=%s，错误=%s", user_id, exc)
 

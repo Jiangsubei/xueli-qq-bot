@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from src.core.models import FinalStyleGuide, MessageType, PromptPlan
 from src.core.prompt_templates import PromptTemplateLoader
+from src.handlers.label_constants import SENDER_LABEL_USER, SESSION_TYPE_LABEL
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_style_policy import ReplyStylePolicy
 
@@ -99,8 +100,8 @@ class ReplyPromptRenderer:
     def _scene_section(self, *, event: Any, message_context: MessageContext, current_message: str) -> str:
         if event is None:
             return ""
-        session_label = "群聊" if str(getattr(event, "message_type", "") or "").strip().lower() == MessageType.GROUP.value else "私聊"
-        sender = str(message_context.current_sender_label or "用户").strip() or "用户"
+        session_label = SESSION_TYPE_LABEL.get(str(getattr(event, "message_type", "") or "").strip().lower(), "私聊")
+        sender = str(message_context.current_sender_label or SENDER_LABEL_USER).strip() or SENDER_LABEL_USER
         event_time = getattr(event, "time", None)
         time_str = ""
         if event_time:

@@ -199,16 +199,21 @@ class BotRuntime:
     async def _release_window_on_error(self, plan, trace_log: str) -> None:
         try:
             await self.message_handler.complete_window_dispatch(plan)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.debug("释放窗口调度失败：%s", trace_log, exc_info=True)
 
     async def _send_error_fallback(self, current_event, text: str, trace_log: str, trace_id: str) -> None:
         try:
             await self._send_response(current_event, text, trace_id=trace_id)
+        except asyncio.CancelledError:
+            raise
         except Exception as fallback_exc:
             logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
 
     async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
+        # ── 去重检查 ── 防止重放攻击或平台重试导致重复处理
         msg_id = getattr(event, "message_id", 0)
         if not hasattr(self, "_processed_message_ids"):
             self._processed_message_ids = set()
@@ -219,6 +224,8 @@ class BotRuntime:
 
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
+
+        # ── 初始化 ── 提取配置、会话键和跟踪日志
         plan = None
         current_event = event
         app_config = getattr(self.message_handler, "app_config", None)
@@ -231,7 +238,11 @@ class BotRuntime:
 
         try:
             logger.info("开始处理消息：%s", trace_log)
+
+            # ── 主循环 ── 每个周期完成：规划 → 节奏判断 → 回复生成 → 发送
+            #    循环会在以下情况持续：窗口内多条消息待处理、或需要重试
             while True:
+                # 阶段1：规划 — 调用 ConversationPlanner 决定 reply/wait/ignore
                 logger.debug("开始规划：%s", trace_log)
                 if plan is None:
                     plan = await asyncio.wait_for(
@@ -246,12 +257,15 @@ class BotRuntime:
                     plan.reason,
                 )
                 logger.debug("规划原始：%s reply_reference=%s", trace_log, str(getattr(plan, "reply_reference", "") or "").strip())
+
+                # 不需要回复：尝试分发到下一窗口（合并等待中的消息）
                 if not plan.should_reply:
                     current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                     if current_event is not None:
                         continue
                     return
 
+                # 阶段2：节奏判断 — 调用 TimingGate 决定时机是否合适
                 logger.debug("开始节奏判断：%s", trace_log)
                 plan = await asyncio.wait_for(
                     self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
@@ -270,10 +284,13 @@ class BotRuntime:
                         continue
                     return
 
+                # 阶段3：速率限制检查
                 target_id = str(
                     current_event.user_id if current_event.message_type == MessageType.PRIVATE.value else current_event.group_id
                 )
                 await self.message_handler.check_rate_limit(target_id)
+
+                # 阶段4：回复生成 — 调用 AI 生成回复内容
                 logger.debug("开始生成回复：%s", trace_log)
                 reply_result = await asyncio.wait_for(
                     self.message_handler.get_ai_response(current_event, plan=plan, trace_id=trace_id),
@@ -286,6 +303,7 @@ class BotRuntime:
                         continue
                     return
 
+                # 阶段5：发送回复 + 后续处理（emoji 追评、记忆写入）
                 self._log_reply_preview(reply_result, trace_log, source=getattr(reply_result, "source", ""))
                 logger.info("开始发送回复：%s", trace_log)
                 sent = await self._send_response(current_event, reply_result, plan=plan, trace_id=trace_id)
@@ -293,11 +311,16 @@ class BotRuntime:
                     logger.info("发送完成：%s", trace_log)
                     await self.message_handler.record_group_reply_sent(current_event, reply_result.text)
                     await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
+
+                # 分发到下一窗口，处理同一会话中的后续消息
                 current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                 if current_event is not None:
                     continue
                 logger.info("消息处理结束：%s", trace_log)
                 return
+
+        # ── 异常处理 ──
+        # StaleWindowError / CancelledError：窗口过期或任务被取消，不需要发送错误回复
         except (StaleWindowError, asyncio.CancelledError):
             logger.info("窗口过期或任务被取消：%s", trace_log)
             await self._release_window_on_error(plan, trace_log)
@@ -439,6 +462,8 @@ class BotRuntime:
                     getattr(selection.emoji, "emoji_id", ""),
                     getattr(selection.emoji, "sticker_kind", ""),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error(
                 "发送表情跟进失败：%s category=%s 错误=%s",
@@ -525,6 +550,8 @@ class BotRuntime:
     async def _on_websocket_message(self, data: Dict[str, Any]):
         try:
             await self.ingest_adapter_payload(data)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("处理 WebSocket 消息失败：%s", exc, exc_info=True)
             self.runtime_metrics.record_error()

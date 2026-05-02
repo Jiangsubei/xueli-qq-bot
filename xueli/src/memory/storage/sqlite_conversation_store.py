@@ -710,6 +710,8 @@ class SQLiteConversationStore:
 
         try:
             await asyncio.to_thread(_do_persist)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error(
                 "保存对话会话失败：用户=%s，会话=%s，错误=%s",
@@ -754,6 +756,8 @@ class SQLiteConversationStore:
 
         try:
             return await asyncio.to_thread(_do_load)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("加载对话会话失败：用户=%s，会话=%s，错误=%s", user_id, session_id, exc)
             return None
@@ -811,6 +815,8 @@ class SQLiteConversationStore:
             if result_dict is None:
                 return None
             return ConversationRecord.from_dict(result_dict)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning(
                 "写入会话元数据失败：用户=%s，会话=%s，错误=%s",

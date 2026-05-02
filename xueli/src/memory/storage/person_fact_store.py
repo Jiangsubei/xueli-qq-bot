@@ -94,6 +94,8 @@ class PersonFactStore:
             items = [PersonFactItem.from_dict(item) for item in list(payload.get("facts") or [])]
             items.sort(key=lambda item: (item.updated_at, item.created_at, item.content), reverse=True)
             return items
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("读取人物事实失败：用户=%s，错误=%s", user_id, exc)
             return []
@@ -113,6 +115,8 @@ class PersonFactStore:
                     await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
                 os.replace(tmp_path, file_path)
                 return True
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.warning("写入人物事实失败：用户=%s，错误=%s", user_id, exc)
                 return False
@@ -124,6 +128,8 @@ class PersonFactStore:
         try:
             file_path.unlink()
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("清空人物事实失败：用户=%s，错误=%s", user_id, exc)
             return False
