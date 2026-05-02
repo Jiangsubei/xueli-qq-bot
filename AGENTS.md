@@ -116,6 +116,7 @@ MessageHandler
 - `vision_emotion.prompt` — 表情分类
 - `emoji_reply.prompt` — 表情追评决策
 - `rerank.prompt` — 记忆重排
+- `reflection.prompt` — 记忆冲突判断
 
 涉及提示词生成的模块（`VisionClient`、`EmojiReplyService`、`APIReranker`、`ReplyPromptRenderer` 等）必须使用 `PromptTemplateLoader` 加载模板，不得内嵌字符串。
 

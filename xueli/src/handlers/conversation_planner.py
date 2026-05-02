@@ -262,19 +262,12 @@ class ConversationPlanner:
                 f"当前会话：\n这是和用户 {sender_label} 的私聊。",
                 f"当前消息来自用户 {sender_label}：\n{planner_text}",
                 f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n" + "\n".join(image_context_lines),
+                recent_history_text,
+                "补充判断提醒：\n"
+                "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
+                "- 如果用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
+                "- 只有在明显无需响应时才考虑 ignore",
             ]
-            parts.extend(
-                [
-                    recent_history_text,
-                    "补充判断提醒：\n"
-                    "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
-                    "- 如果用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
-                    "- 只有在明显无需响应时才考虑 ignore\n"
-                    "- 如果你选择 reply，请同时输出 prompt_plan，告诉下游回复模型该启用哪些上下文层\n"
-                    "- 如果你选择 reply，请额外提供一段自然语言 reply_reference，告诉下游回复模型这次更适合怎么接话，但不要直接替它写完整回复\n"
-                    "- 请只输出 JSON，不要输出解释。",
-                ]
-            )
             return "\n\n".join(part for part in parts if str(part or "").strip()).strip()
 
         parts = [
@@ -282,20 +275,13 @@ class ConversationPlanner:
             f"当前会话：\n这是群 {event.raw_data.get('group_id', 'unknown')} 里的消息。",
             f"当前消息来自用户 {sender_label}：\n{planner_text}",
             f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n消息里提到了这些名字或别名：{mentioned_names_text}\n" + "\n".join(image_context_lines),
+            recent_history_text,
+            "补充判断提醒：\n"
+            "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
+            "- 请围绕当前消息做判断，不要把前面的话当成当前要回复的内容\n"
+            "- 如果最近记录显示助手刚刚接过话，这是强烈信号：优先选 ignore 或 wait，不要连续回复\n"
+            "- 群聊里如果消息没有明确指向助手，优先选 ignore，不要刷存在感",
         ]
-        parts.extend(
-            [
-                recent_history_text,
-                "补充判断提醒：\n"
-                "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
-                "- 请围绕当前消息做判断，不要把前面的话当成当前要回复的内容\n"
-                "- 如果最近记录显示助手刚刚接过话，这是强烈信号：优先选 ignore 或 wait，不要连续回复\n"
-                "- 群聊里如果消息没有明确指向助手，优先选 ignore，不要刷存在感\n"
-                "- 如果你选择 reply，请同时输出 prompt_plan（建议 light_presence），告诉下游回复模型该启用哪些上下文层\n"
-                "- 如果你选择 reply，请额外提供一段自然语言 reply_reference，告诉下游回复模型这次更适合怎么接话，但不要直接替它写完整回复\n"
-                "- 请只输出 JSON，不要输出解释。",
-            ]
-        )
         return "\n\n".join(part for part in parts if str(part or "").strip()).strip()
 
     def _extract_json_object(self, content: str) -> Dict[str, Any]:

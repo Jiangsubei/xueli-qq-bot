@@ -8,9 +8,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from src.core.prompt_templates import PromptTemplateLoader
 from ..storage.markdown_store import MemoryItem, MarkdownMemoryStore
 
 logger = logging.getLogger(__name__)
+
+_extraction_template_loader = PromptTemplateLoader()
+_reflection_template_loader = PromptTemplateLoader()
 
 
 @dataclass
@@ -61,19 +65,10 @@ class ExtractionConfig:
         "[CATEGORY:闲聊]\n"
         "如果某条记忆之前已经标过类别，后面可以再次修改。如果不标，默认为[CATEGORY:重要]。"
     )
-    reflection_system_prompt: str = (
-        "你是一个冷静的记忆反思器。你的任务不是生成新记忆，而是判断一条新记忆与旧记忆之间是否存在真正冲突。\n"
-        "你必须严格基于提供的证据判断，不要脑补。\n"
-        "如果只是时间变化、阶段性状态、场景限制、表达修正，也要明确指出，不要简单视为长期事实反转。\n"
-        "你必须输出一个 JSON 对象，不要输出任何额外说明。\n"
-        "JSON 字段要求：\n"
-        "has_conflict: boolean，是否存在需要记录的记忆冲突或修补关系\n"
-        "conflict_type: string，可选值为 none / preference_change / temporary_state / scope_specific / factual_correction / ambiguous\n"
-        "action: string，可选值为 keep_both / keep_both_prefer_recent / prefer_new / prefer_existing / merge_context\n"
-        "summary: string，给后续提示词使用的中性总结；如果没有冲突则为空字符串\n"
-        "reason: string，说明你的判断依据\n"
-        "confidence: number，0 到 1 之间\n"
-    )
+
+
+def _build_reflection_prompt() -> str:
+    return _reflection_template_loader.load("reflection.prompt")
 
 
 @dataclass
@@ -943,7 +938,7 @@ class MemoryExtractor:
                 ),
             }
         ]
-        response = await self.llm_callback(self.config.reflection_system_prompt, messages)
+        response = await self.llm_callback(_build_reflection_prompt(), messages)
         return self._normalize_llm_response(response)
 
     def _parse_reflection_response(self, content: str) -> Optional[MemoryReflectionResult]:
