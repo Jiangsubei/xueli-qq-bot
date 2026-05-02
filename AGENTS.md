@@ -171,6 +171,18 @@ Core 不应被 QQ / NapCat 细节污染，不要把平台字段一路传进 core
 
 ---
 
+## 依赖协议约束
+
+项目采用 **MIT 许可证**。引入新依赖时必须确保协议兼容：
+
+- **允许**：MIT、BSD-3-Clause、Apache-2.0、ISC、Python Software Foundation (PSF)、HPND 等 permissive 协议
+- **禁止**：GPL-3.0、AGPL-3.0、LGPL-3.0 等传染性协议（任何代码引用即必须开源）
+- **注意**： MPL-2.0、CDDL-1.0、EPL-2.0 等弱传染协议引入前需评估
+
+当前依赖均为 permissive 协议（websockets/BSD-3-Clause, aiohttp/BSD-3-Clause, aiofiles/MIT, jieba/MIT, rank-bm25/MIT, openai/Apache-2.0, pillow/HPND, django/BSD-3-Clause, tomlkit/MIT）。
+
+---
+
 ## 编码习惯与已知陷阱
 
 - **文件写入必须原子化**：所有持久化存储（Markdown/JSON）必须写 `.tmp` → `os.replace()`，禁止直接覆写目标文件。已修复的 4 处：`markdown_store`、`important_memory_store`、`person_fact_store`、`character_card_service`。
