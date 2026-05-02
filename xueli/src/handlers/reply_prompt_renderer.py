@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.models import FinalStyleGuide, MessageType, PromptPlan
+from src.core.mood_engine import MoodEngine
 from src.core.prompt_templates import PromptTemplateLoader
 from src.handlers.label_constants import SENDER_LABEL_USER, SESSION_TYPE_LABEL
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_style_policy import ReplyStylePolicy
+from src.memory.retrieval.recall_renderer import RecallRenderer
 
 
 @dataclass
@@ -22,10 +24,12 @@ class RenderedPrompt:
 class ReplyPromptRenderer:
     """Compile section-based reply prompts from PromptPlan V2 and MessageContext."""
 
-    def __init__(self, host: Any, style_policy: ReplyStylePolicy | None = None) -> None:
+    def __init__(self, host: Any, style_policy: ReplyStylePolicy | None = None, recall_renderer: Optional[RecallRenderer] = None, mood_engine: Optional[MoodEngine] = None) -> None:
         self.host = host
         self.style_policy = style_policy or ReplyStylePolicy()
         self.template_loader = PromptTemplateLoader()
+        self.recall_renderer = recall_renderer or RecallRenderer()
+        self.mood_engine = mood_engine
 
     def render(
         self,
@@ -51,6 +55,7 @@ class ReplyPromptRenderer:
             chat_mode=chat_mode,
             planner_reason=planner_reason,
             planning_signals=message_context.planning_signals,
+            mood_engine=self.mood_engine,
         )
         message_context.final_style_guide = style_guide
         emotional_trend = self._emotional_trend_section(event=event)
@@ -194,6 +199,7 @@ class ReplyPromptRenderer:
         text = str(message_context.precise_recall_context or "").strip()
         if not text:
             return ""
+        text = self.recall_renderer.apply(text)
         return f"[精确召回]\n{text}"
 
     def _dynamic_memory_section(self, *, message_context: MessageContext, enabled: bool) -> str:

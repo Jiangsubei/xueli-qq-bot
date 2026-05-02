@@ -85,6 +85,14 @@ stable_signal_threshold = 6        # 稳定信号阈值（人设固化）
 core_trait_threshold = 5          # 核心特质阈值
 tone_preference_threshold = 3     # 语气偏好阈值
 behavior_habit_threshold = 2      # 行为习惯阈值
+# 独立情绪波动：机器人拥有独立于用户情绪的自主情绪曲线
+mood_fluctuation_enabled = false    # 情绪波动总开关（默认关闭，保持现有镜像行为）
+mood_volatility = 0.3               # 情绪波动幅度：0.0=无波动，1.0=最大波动
+mood_independence_ratio = 0.7       # 情绪自主性：0.0=完全镜像用户，1.0=完全独立
+mood_energy_decay_per_turn = 0.05   # 每轮对话消耗的能量值
+mood_energy_recovery_night = 0.2    # 夜间能量恢复量
+mood_cycle_length_days = 7          # 情绪周期长度（天）
+mood_show_in_reply = false          # 是否在回复中偶尔显露情绪状态
 
 # =============================================================================
 # 群聊回复配置
@@ -165,6 +173,18 @@ local_mention_weight = 0.2         # 提及次数权重（用进废退）
 local_recency_weight = 0.15        # 时效性权重
 local_scene_weight = 0.3           # 场景匹配权重
 vector_weight = 0.4               # 向量语义检索与 BM25 的融合权重（向量得分 * vector_weight + BM25得分 * (1 - vector_weight)）
+# 模糊回忆：模拟人类不完美的回忆方式
+fuzzy_recall_enabled = false        # 模糊回忆总开关（默认关闭）
+fuzzy_recall_probability = 0.3      # 每次召回时模糊化概率
+fuzzy_recall_confidence_threshold = 0.7  # 低于此 confidence 的记忆触发模糊化
+fuzzy_recall_expressions = [        # 不确定表达前缀列表
+    "我好像记得...",
+    "大概是...",
+    "印象中...",
+    "名字我一时想不起来了，但...",
+]
+recall_confidence_decay_per_day = 0.01  # 记忆 confidence 每日衰减量
+recall_confidence_minimum = 0.3     # confidence 衰减下限
 
 [memory.extraction_extra_params]
 temperature = 0.3                  # 记忆提取专用温度（偏低以保证准确性）

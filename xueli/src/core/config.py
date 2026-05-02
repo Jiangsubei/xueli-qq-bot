@@ -100,6 +100,13 @@ class CharacterGrowthConfig:
     core_trait_threshold: int = 5
     tone_preference_threshold: int = 3
     behavior_habit_threshold: int = 2
+    mood_fluctuation_enabled: bool = False
+    mood_volatility: float = 0.3
+    mood_independence_ratio: float = 0.7
+    mood_energy_decay_per_turn: float = 0.05
+    mood_energy_recovery_night: float = 0.2
+    mood_cycle_length_days: int = 7
+    mood_show_in_reply: bool = False
 
 
 @dataclass(frozen=True)
@@ -176,6 +183,17 @@ class MemoryConfig:
     local_recency_weight: float = 0.15
     local_scene_weight: float = 0.3
     vector_weight: float = 0.4
+    fuzzy_recall_enabled: bool = False
+    fuzzy_recall_probability: float = 0.3
+    fuzzy_recall_confidence_threshold: float = 0.7
+    fuzzy_recall_expressions: List[str] = field(default_factory=lambda: [
+        "我好像记得...",
+        "大概是...",
+        "印象中...",
+        "名字我一时想不起来了，但...",
+    ])
+    recall_confidence_decay_per_day: float = 0.01
+    recall_confidence_minimum: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -318,6 +336,13 @@ class Config:
         "CHARACTER_GROWTH_CORE_TRAIT_THRESHOLD": ("character_growth", "core_trait_threshold"),
         "CHARACTER_GROWTH_TONE_PREFERENCE_THRESHOLD": ("character_growth", "tone_preference_threshold"),
         "CHARACTER_GROWTH_BEHAVIOR_HABIT_THRESHOLD": ("character_growth", "behavior_habit_threshold"),
+        "CHARACTER_GROWTH_MOOD_FLUCTUATION_ENABLED": ("character_growth", "mood_fluctuation_enabled"),
+        "CHARACTER_GROWTH_MOOD_VOLATILITY": ("character_growth", "mood_volatility"),
+        "CHARACTER_GROWTH_MOOD_INDEPENDENCE_RATIO": ("character_growth", "mood_independence_ratio"),
+        "CHARACTER_GROWTH_MOOD_ENERGY_DECAY_PER_TURN": ("character_growth", "mood_energy_decay_per_turn"),
+        "CHARACTER_GROWTH_MOOD_ENERGY_RECOVERY_NIGHT": ("character_growth", "mood_energy_recovery_night"),
+        "CHARACTER_GROWTH_MOOD_CYCLE_LENGTH_DAYS": ("character_growth", "mood_cycle_length_days"),
+        "CHARACTER_GROWTH_MOOD_SHOW_IN_REPLY": ("character_growth", "mood_show_in_reply"),
         "ASSISTANT_NAME": ("assistant_profile", "name"),
         "ASSISTANT_ALIAS": ("assistant_profile", "alias"),
         "PERSONALITY": ("personality", "content"),
@@ -344,6 +369,12 @@ class Config:
         "MEMORY_ORDINARY_DECAY_ENABLED": ("memory", "ordinary_decay_enabled"),
         "MEMORY_ORDINARY_HALF_LIFE_DAYS": ("memory", "ordinary_half_life_days"),
         "MEMORY_ORDINARY_FORGET_THRESHOLD": ("memory", "ordinary_forget_threshold"),
+        "MEMORY_FUZZY_RECALL_ENABLED": ("memory", "fuzzy_recall_enabled"),
+        "MEMORY_FUZZY_RECALL_PROBABILITY": ("memory", "fuzzy_recall_probability"),
+        "MEMORY_FUZZY_RECALL_CONFIDENCE_THRESHOLD": ("memory", "fuzzy_recall_confidence_threshold"),
+        "MEMORY_FUZZY_RECALL_EXPRESSIONS": ("memory", "fuzzy_recall_expressions"),
+        "MEMORY_RECALL_CONFIDENCE_DECAY_PER_DAY": ("memory", "recall_confidence_decay_per_day"),
+        "MEMORY_RECALL_CONFIDENCE_MINIMUM": ("memory", "recall_confidence_minimum"),
     }
     _JSON_STRING_KEYS = {
         "OPENAI_EXTRA_PARAMS", "OPENAI_EXTRA_HEADERS", "VISION_SERVICE_EXTRA_PARAMS", "VISION_SERVICE_EXTRA_HEADERS",
@@ -693,6 +724,13 @@ class Config:
             core_trait_threshold=self._bounded_int(section, "character_growth", "core_trait_threshold", default=5, minimum=1),
             tone_preference_threshold=self._bounded_int(section, "character_growth", "tone_preference_threshold", default=3, minimum=1),
             behavior_habit_threshold=self._bounded_int(section, "character_growth", "behavior_habit_threshold", default=2, minimum=1),
+            mood_fluctuation_enabled=self._bool_value(section, "character_growth", "mood_fluctuation_enabled", default=False),
+            mood_volatility=self._bounded_float(section, "character_growth", "mood_volatility", default=0.3, minimum=0.0, maximum=1.0),
+            mood_independence_ratio=self._bounded_float(section, "character_growth", "mood_independence_ratio", default=0.7, minimum=0.0, maximum=1.0),
+            mood_energy_decay_per_turn=self._bounded_float(section, "character_growth", "mood_energy_decay_per_turn", default=0.05, minimum=0.0),
+            mood_energy_recovery_night=self._bounded_float(section, "character_growth", "mood_energy_recovery_night", default=0.2, minimum=0.0),
+            mood_cycle_length_days=self._bounded_int(section, "character_growth", "mood_cycle_length_days", default=7, minimum=1),
+            mood_show_in_reply=self._bool_value(section, "character_growth", "mood_show_in_reply", default=False),
         )
 
     def _build_assistant_profile_config(self) -> AssistantProfileConfig:
@@ -784,6 +822,18 @@ class Config:
             local_mention_weight=self._bounded_float(section, "memory", "local_mention_weight", default=0.2, minimum=0.0),
             local_recency_weight=self._bounded_float(section, "memory", "local_recency_weight", default=0.15, minimum=0.0),
             local_scene_weight=self._bounded_float(section, "memory", "local_scene_weight", default=0.3, minimum=0.0),
+            vector_weight=self._bounded_float(section, "memory", "vector_weight", default=0.4, minimum=0.0, maximum=1.0),
+            fuzzy_recall_enabled=self._bool_value(section, "memory", "fuzzy_recall_enabled", default=False),
+            fuzzy_recall_probability=self._bounded_float(section, "memory", "fuzzy_recall_probability", default=0.3, minimum=0.0, maximum=1.0),
+            fuzzy_recall_confidence_threshold=self._bounded_float(section, "memory", "fuzzy_recall_confidence_threshold", default=0.7, minimum=0.0, maximum=1.0),
+            fuzzy_recall_expressions=self._string_list(section, "memory", "fuzzy_recall_expressions", default=[
+                "我好像记得...",
+                "大概是...",
+                "印象中...",
+                "名字我一时想不起来了，但...",
+            ]),
+            recall_confidence_decay_per_day=self._bounded_float(section, "memory", "recall_confidence_decay_per_day", default=0.01, minimum=0.0),
+            recall_confidence_minimum=self._bounded_float(section, "memory", "recall_confidence_minimum", default=0.3, minimum=0.0, maximum=1.0),
         )
         rerank_top_k = config.rerank_top_k
         pre_rerank_top_k = config.pre_rerank_top_k

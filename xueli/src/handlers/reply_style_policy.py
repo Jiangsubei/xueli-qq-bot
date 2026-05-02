@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from src.core.models import CharacterCardSnapshot, FinalStyleGuide, PromptPlan, SoftUncertaintySignal, TemporalContext
+from src.core.mood_engine import MoodEngine
 
 
 class ReplyStylePolicy:
@@ -16,6 +19,7 @@ class ReplyStylePolicy:
         planning_signals: dict | None = None,
         soft_uncertainty_signals: list[SoftUncertaintySignal] | None = None,
         character_card_snapshot: CharacterCardSnapshot | None = None,
+        mood_engine: Optional[MoodEngine] = None,
     ) -> FinalStyleGuide:
         plan = prompt_plan or PromptPlan()
         signals = dict(planning_signals or {})
@@ -141,6 +145,24 @@ class ReplyStylePolicy:
             anti_patterns.append("不要一上来讲道理")
         if planner_reason.strip():
             anti_patterns.append(f"不要偏离这次回复意图：{planner_reason.strip()}")
+
+        if mood_engine is not None and mood_engine.enabled:
+            warmth_mod, verb_mod, init_mod = mood_engine.mood_modifier()
+            if warmth_mod < -0.05:
+                warmth_guidance += " 今天有点淡，不用刻意热情。"
+            elif warmth_mod > 0.05:
+                warmth_guidance += " 今天可以稍微热情一点。"
+            if verb_mod < -0.1:
+                verbosity_guidance += " 今天话少一点，惜字如金。"
+            elif verb_mod > 0.1:
+                verbosity_guidance += " 今天可以多说两句。"
+            if init_mod < -0.1:
+                initiative_guidance += " 今天有点累，不主动追问。"
+            elif init_mod > 0.1:
+                initiative_guidance += " 今天精力不错，可以自然延展一下。"
+            mood_hint = mood_engine.mood_visible_hint()
+            if mood_hint:
+                anti_patterns.append(f"可以自然地在回复中流露出'{mood_hint}'的状态")
 
         return FinalStyleGuide(
             verbosity_guidance=verbosity_guidance,

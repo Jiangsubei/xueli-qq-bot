@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.memory.storage.conversation_store import ConversationRecord, ConversationStore, ConversationTurn
@@ -16,6 +17,25 @@ class ConversationRecallService:
     recall_entry_limit: int = 2
     min_match_score: float = 0.18
     max_excerpt_chars: int = 72
+    recall_confidence_decay_per_day: float = 0.01
+    recall_confidence_minimum: float = 0.3
+
+    def compute_confidence(self, timestamp: Optional[str]) -> float:
+        if not timestamp:
+            return 1.0
+        try:
+            if timestamp.endswith("Z"):
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                dt = datetime.fromisoformat(timestamp)
+        except (ValueError, TypeError):
+            return 1.0
+        now = datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        days = (now - dt).total_seconds() / 86400.0
+        confidence = 1.0 - days * self.recall_confidence_decay_per_day
+        return max(self.recall_confidence_minimum, confidence)
 
     async def build_recall_entries(
         self,
@@ -54,6 +74,7 @@ class ConversationRecallService:
                         "record": record,
                         "turn": turn,
                         "score": score,
+                        "recall_confidence": self.compute_confidence(str(turn.timestamp or record.started_at or "")),
                     }
                 )
 
@@ -85,6 +106,7 @@ class ConversationRecallService:
                         "source_turn_start": match["turn"].turn_id,
                         "source_turn_end": match["turn"].turn_id,
                         "score": match["score"],
+                        "recall_confidence": match.get("recall_confidence", 1.0),
                     },
                 }
             )

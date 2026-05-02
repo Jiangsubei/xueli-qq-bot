@@ -18,6 +18,8 @@ from src.handlers.label_constants import DISPLAY_NAME_FALLBACK, SESSION_TYPE_LAB
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_generation_service import ReplyGenerationService
 from src.handlers.reply_prompt_renderer import ReplyPromptRenderer
+from src.memory.retrieval.recall_renderer import RecallRenderer
+from src.core.mood_engine import MoodEngine
 from src.handlers.reply_style_policy import ReplyStylePolicy
 from src.memory.memory_flow_service import MemoryFlowService
 from src.services.ai_client import AIAPIError, AIResponse
@@ -90,11 +92,46 @@ class ReplyPipeline:
     def __init__(self, host: ReplyPipelineHost):
         self.host = host
         self.style_policy = ReplyStylePolicy()
-        self.renderer = ReplyPromptRenderer(host, style_policy=self.style_policy)
+        recall_renderer = self._create_recall_renderer()
+        self.mood_engine = self._create_mood_engine()
+        self.renderer = ReplyPromptRenderer(host, style_policy=self.style_policy, recall_renderer=recall_renderer, mood_engine=self.mood_engine)
         self.reply_generation_service = ReplyGenerationService(host, self)
         self.memory_flow_service = getattr(host, "memory_flow_service", None)
         if self.memory_flow_service is None and getattr(host, "memory_manager", None) is not None:
             self.memory_flow_service = MemoryFlowService(getattr(host, "memory_manager", None))
+
+    def _create_recall_renderer(self) -> RecallRenderer:
+        app_config = getattr(self.host, "app_config", None)
+        if app_config is None:
+            return RecallRenderer()
+        memory = getattr(app_config, "memory", None)
+        if memory is None:
+            return RecallRenderer()
+        return RecallRenderer(
+            enabled=getattr(memory, "fuzzy_recall_enabled", False),
+            fuzzy_probability=getattr(memory, "fuzzy_recall_probability", 0.3),
+            confidence_threshold=getattr(memory, "fuzzy_recall_confidence_threshold", 0.7),
+            fuzzy_expressions=list(getattr(memory, "fuzzy_recall_expressions", [])),
+            confidence_decay_per_day=getattr(memory, "recall_confidence_decay_per_day", 0.01),
+            confidence_minimum=getattr(memory, "recall_confidence_minimum", 0.3),
+        )
+
+    def _create_mood_engine(self) -> MoodEngine:
+        app_config = getattr(self.host, "app_config", None)
+        if app_config is None:
+            return MoodEngine()
+        cg = getattr(app_config, "character_growth", None)
+        if cg is None:
+            return MoodEngine()
+        return MoodEngine(
+            enabled=getattr(cg, "mood_fluctuation_enabled", False),
+            volatility=getattr(cg, "mood_volatility", 0.3),
+            independence_ratio=getattr(cg, "mood_independence_ratio", 0.7),
+            energy_decay_per_turn=getattr(cg, "mood_energy_decay_per_turn", 0.05),
+            energy_recovery_night=getattr(cg, "mood_energy_recovery_night", 0.2),
+            cycle_length_days=getattr(cg, "mood_cycle_length_days", 7),
+            show_in_reply=getattr(cg, "mood_show_in_reply", False),
+        )
 
     async def prepare_request(
         self,
@@ -294,6 +331,10 @@ class ReplyPipeline:
                 event=event,
                 prepared=prepared,
                 reply_text=response.content,
+            )
+        if self.mood_engine.enabled:
+            self.mood_engine.tick(
+                user_emotion_valence=float(getattr(event, "_user_emotion_valence", 0.0) or 0.0)
             )
 
     def build_memory_tools(self) -> List[Dict[str, Any]]:

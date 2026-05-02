@@ -63,6 +63,7 @@ class MemoryItem:
     tags: Optional[List[str]] = None
     metadata: Optional[Dict] = None
     owner_user_id: str = ""
+    recall_confidence: float = 1.0
 
     def __post_init__(self):
         if self.tags is None:
@@ -73,6 +74,8 @@ class MemoryItem:
             self.created_at = _now_iso()
         if not self.updated_at:
             self.updated_at = self.created_at
+        if self.recall_confidence is None:
+            self.recall_confidence = 1.0
 
     def to_markdown_block(self) -> str:
         """将记忆序列化为易读的 Markdown 块。"""

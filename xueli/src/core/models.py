@@ -610,3 +610,33 @@ class MessageHandlingPlan:
     @property
     def should_reply(self) -> bool:
         return self.action == MessagePlanAction.REPLY.value
+
+
+@dataclass
+class MoodState:
+    """Autonomous mood state for the assistant character."""
+
+    valence: float = 0.0
+    arousal: float = 0.5
+    energy: float = 0.8
+    mood_cycle_day: int = 0
+    updated_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "valence": self.valence,
+            "arousal": self.arousal,
+            "energy": self.energy,
+            "mood_cycle_day": self.mood_cycle_day,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MoodState":
+        return cls(
+            valence=float(data.get("valence", 0.0)),
+            arousal=float(data.get("arousal", 0.5)),
+            energy=float(data.get("energy", 0.8)),
+            mood_cycle_day=int(data.get("mood_cycle_day", 0)),
+            updated_at=str(data.get("updated_at", "")),
+        )
