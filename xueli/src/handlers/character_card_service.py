@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from src.core.config import CharacterGrowthConfig
-from src.core.models import CharacterCardSnapshot
+from src.core.models import CharacterCardSnapshot, RelationshipProfile
 
 
 class CharacterCardService:
@@ -78,6 +78,7 @@ class CharacterCardService:
                 "explicit_feedback": dict(explicit_counter),
                 "stable_signals": dict(signal_counter),
             },
+            relationship_tone_hint=self.get_relationship_tone_hint(str(user_id)),
         )
         payload["snapshot"] = asdict(snapshot)
         self._save_payload(user_id, payload)
@@ -189,6 +190,48 @@ class CharacterCardService:
         trend_cn = {"worsening": "情绪逐渐变差", "improving": "情绪逐渐变好", "stable": "情绪平稳"}
         dominant_cn = f"以{dominant}为主" if dominant else ""
         return f"用户情绪趋势：最近几轮对话中{trend_cn.get(trend, '情绪波动')}，{dominant_cn}"
+
+    def get_relationship_profile(self, user_id: str) -> RelationshipProfile:
+        payload = self._load_payload(user_id)
+        data = payload.get("relationship_profile", {})
+        if isinstance(data, dict):
+            return RelationshipProfile.from_dict(data)
+        return RelationshipProfile(user_id=user_id)
+
+    def save_relationship_profile(self, user_id: str, profile: RelationshipProfile) -> None:
+        if not self.config.relationship_tracking_enabled:
+            return
+        payload = self._load_payload(user_id)
+        profile.relationship_stage = profile.resolve_stage(
+            acquaintance_threshold=self.config.intimacy_acquaintance_threshold,
+            friend_threshold=self.config.intimacy_friend_threshold,
+            close_friend_threshold=self.config.intimacy_close_friend_threshold,
+        )
+        profile.last_intimacy_change = datetime.now().isoformat()
+        payload["relationship_profile"] = profile.to_dict()
+        self._save_payload(user_id, payload)
+
+    def update_intimacy(self, user_id: str, delta: float, *, is_friction: bool = False) -> RelationshipProfile:
+        if not self.config.relationship_tracking_enabled:
+            return RelationshipProfile(user_id=user_id)
+        profile = self.get_relationship_profile(user_id)
+        profile.user_id = user_id
+        profile.intimacy_level = max(0.0, min(1.0, profile.intimacy_level + delta))
+        profile.total_interactions += 1
+        if is_friction:
+            profile.friction_signals += 1
+        else:
+            profile.friction_signals = max(0, profile.friction_signals - 1)
+        self.save_relationship_profile(user_id, profile)
+        return profile
+
+    def get_relationship_tone_hint(self, user_id: str) -> str:
+        if not self.config.relationship_tracking_enabled:
+            return ""
+        profile = self.get_relationship_profile(user_id)
+        if profile.friction_signals >= self.config.friction_signals_caution_threshold:
+            return "注意到你们近期有些摩擦，语气要柔和，别让事情变得更僵"
+        return profile.tone_hint()
 
     def _file_path(self, user_id: str) -> Path:
         return self.base_path / f"{str(user_id or 'unknown').strip() or 'unknown'}.json"

@@ -179,6 +179,22 @@ class MemoryFlowService:
         if estimated_tone:
             self.character_card_service.record_emotion(user_id, estimated_tone)
         self.character_card_service.refresh_snapshot(user_id)
+        self._update_relationship(host=host, event=event, prepared=prepared, user_id=user_id, estimated_tone=estimated_tone)
+
+    def _update_relationship(self, *, host: Any, event: Any, prepared: "PreparedReplyRequest", user_id: str, estimated_tone: str) -> None:
+        del host, event, prepared
+        if self.character_card_service is None:
+            return
+        if not self.character_card_service.config.relationship_tracking_enabled:
+            return
+        is_friction = estimated_tone in {"生气", "无语", "委屈"}
+        if estimated_tone in {"开心", "喜欢", "惊讶"}:
+            delta = self.character_card_service.config.intimacy_gain_per_high_quality
+        elif is_friction:
+            delta = -self.character_card_service.config.intimacy_loss_per_friction
+        else:
+            delta = self.character_card_service.config.intimacy_gain_per_high_quality * 0.5
+        self.character_card_service.update_intimacy(user_id=user_id, delta=delta, is_friction=is_friction)
 
     @staticmethod
     def _estimate_user_emotion(text: str) -> str:

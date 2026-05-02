@@ -593,6 +593,7 @@ class CharacterCardSnapshot:
     stable_signal_count: int = 0
     updated_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    relationship_tone_hint: str = ""
 
 
 @dataclass
@@ -639,4 +640,58 @@ class MoodState:
             energy=float(data.get("energy", 0.8)),
             mood_cycle_day=int(data.get("mood_cycle_day", 0)),
             updated_at=str(data.get("updated_at", "")),
+        )
+
+
+@dataclass
+class RelationshipProfile:
+    """Long-term relationship dynamics between the bot and a user."""
+
+    user_id: str = ""
+    intimacy_level: float = 0.0
+    relationship_stage: str = "stranger"
+    last_intimacy_change: str = ""
+    friction_signals: int = 0
+    total_interactions: int = 0
+
+    def resolve_stage(self, *, acquaintance_threshold: float = 0.2, friend_threshold: float = 0.5, close_friend_threshold: float = 0.8) -> str:
+        if self.intimacy_level >= close_friend_threshold:
+            return "close_friend"
+        if self.intimacy_level >= friend_threshold:
+            return "friend"
+        if self.intimacy_level >= acquaintance_threshold:
+            return "acquaintance"
+        return "stranger"
+
+    def tone_hint(self) -> str:
+        if self.friction_signals > 0:
+            return "注意语气柔和，对方最近有点摩擦感"
+        stage = self.relationship_stage
+        if stage == "close_friend":
+            return "老朋友之间，可以调侃、用内部梗，语气随意自然"
+        if stage == "friend":
+            return "朋友之间，可以稍亲切，但保持分寸"
+        if stage == "acquaintance":
+            return "熟人之间，礼貌但可以稍亲近"
+        return "陌生人初识，保持礼貌和距离感"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "user_id": self.user_id,
+            "intimacy_level": self.intimacy_level,
+            "relationship_stage": self.relationship_stage,
+            "last_intimacy_change": self.last_intimacy_change,
+            "friction_signals": self.friction_signals,
+            "total_interactions": self.total_interactions,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RelationshipProfile":
+        return cls(
+            user_id=str(data.get("user_id", "")),
+            intimacy_level=float(data.get("intimacy_level", 0.0)),
+            relationship_stage=str(data.get("relationship_stage", "stranger")),
+            last_intimacy_change=str(data.get("last_intimacy_change", "")),
+            friction_signals=int(data.get("friction_signals", 0)),
+            total_interactions=int(data.get("total_interactions", 0)),
         )

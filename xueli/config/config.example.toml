@@ -93,6 +93,16 @@ mood_energy_decay_per_turn = 0.05   # 每轮对话消耗的能量值
 mood_energy_recovery_night = 0.2    # 夜间能量恢复量
 mood_cycle_length_days = 7          # 情绪周期长度（天）
 mood_show_in_reply = false          # 是否在回复中偶尔显露情绪状态
+# 关系动态学：追踪用户与机器人的长期关系阶段
+relationship_tracking_enabled = false  # 关系追踪总开关（默认关闭）
+intimacy_acquaintance_threshold = 0.2  # 陌生人→熟人亲密度阈值
+intimacy_friend_threshold = 0.5        # 熟人→朋友阈值
+intimacy_close_friend_threshold = 0.8  # 朋友→挚友阈值
+intimacy_gain_per_high_quality = 0.01  # 高质量互动亲密度增幅
+intimacy_loss_per_low_quality = 0.005  # 低质量互动亲密度减幅
+intimacy_loss_per_friction = 0.02     # 摩擦后亲密度减幅
+intimacy_decay_per_week = 0.01        # 每周自然衰减量
+friction_signals_caution_threshold = 2  # 触发"小心翼翼"语气模式的摩擦次数
 
 # =============================================================================
 # 群聊回复配置
@@ -222,3 +232,17 @@ api_key = ""                        # API Key
 
 [memory_rerank]
 response_path = "choices.0.message.content"
+
+# =============================================================================
+# 主动分享配置
+# 机器人基于离线消化洞察和时间信号主动发起分享话题
+# =============================================================================
+
+[proactive_share]
+enabled = false                     # 主动分享总开关（默认关闭）
+idle_hours = 24.0                   # 距上次互动多少小时后允许主动分享
+cooldown_hours = 6.0                # 主动分享后冷却时间
+max_per_day = 3                     # 每天最多主动分享次数
+time_range_start = "09:00"          # 允许分享的时间段起点
+time_range_end = "22:00"            # 允许分享的时间段终点
+trigger_sources = ["insight", "time_signal"]  # 触发来源：insight（离线消化洞察）、time_signal（时间信号）

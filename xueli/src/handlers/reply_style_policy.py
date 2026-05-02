@@ -146,6 +146,10 @@ class ReplyStylePolicy:
         if planner_reason.strip():
             anti_patterns.append(f"不要偏离这次回复意图：{planner_reason.strip()}")
 
+        relationship_tone = str(getattr(character_snapshot, "relationship_tone_hint", "") or "")
+        if relationship_tone:
+            anti_patterns.append(f"关系提示：{relationship_tone}")
+
         if mood_engine is not None and mood_engine.enabled:
             warmth_mod, verb_mod, init_mod = mood_engine.mood_modifier()
             if warmth_mod < -0.05:

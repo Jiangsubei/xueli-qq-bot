@@ -107,6 +107,15 @@ class CharacterGrowthConfig:
     mood_energy_recovery_night: float = 0.2
     mood_cycle_length_days: int = 7
     mood_show_in_reply: bool = False
+    relationship_tracking_enabled: bool = False
+    intimacy_acquaintance_threshold: float = 0.2
+    intimacy_friend_threshold: float = 0.5
+    intimacy_close_friend_threshold: float = 0.8
+    intimacy_gain_per_high_quality: float = 0.01
+    intimacy_loss_per_low_quality: float = 0.005
+    intimacy_loss_per_friction: float = 0.02
+    intimacy_decay_per_week: float = 0.01
+    friction_signals_caution_threshold: int = 2
 
 
 @dataclass(frozen=True)
@@ -197,6 +206,17 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class ProactiveShareConfig:
+    enabled: bool = False
+    idle_hours: float = 24.0
+    cooldown_hours: float = 6.0
+    max_per_day: int = 3
+    time_range_start: str = "09:00"
+    time_range_end: str = "22:00"
+    trigger_sources: List[str] = field(default_factory=lambda: ["insight", "time_signal"])
+
+
+@dataclass(frozen=True)
 class AppConfig:
     adapter_connection: AdapterConnectionConfig = field(default_factory=AdapterConnectionConfig)
     ai_service: AIServiceConfig = field(default_factory=AIServiceConfig)
@@ -214,6 +234,7 @@ class AppConfig:
     behavior: ContentSection = field(default_factory=ContentSection)
     memory_rerank: MemoryRerankConfig = field(default_factory=MemoryRerankConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    proactive_share: ProactiveShareConfig = field(default_factory=ProactiveShareConfig)
 
     @property
     def napcat(self) -> AdapterConnectionConfig:
@@ -343,6 +364,15 @@ class Config:
         "CHARACTER_GROWTH_MOOD_ENERGY_RECOVERY_NIGHT": ("character_growth", "mood_energy_recovery_night"),
         "CHARACTER_GROWTH_MOOD_CYCLE_LENGTH_DAYS": ("character_growth", "mood_cycle_length_days"),
         "CHARACTER_GROWTH_MOOD_SHOW_IN_REPLY": ("character_growth", "mood_show_in_reply"),
+        "CHARACTER_GROWTH_RELATIONSHIP_TRACKING_ENABLED": ("character_growth", "relationship_tracking_enabled"),
+        "CHARACTER_GROWTH_INTIMACY_ACQUAINTANCE_THRESHOLD": ("character_growth", "intimacy_acquaintance_threshold"),
+        "CHARACTER_GROWTH_INTIMACY_FRIEND_THRESHOLD": ("character_growth", "intimacy_friend_threshold"),
+        "CHARACTER_GROWTH_INTIMACY_CLOSE_FRIEND_THRESHOLD": ("character_growth", "intimacy_close_friend_threshold"),
+        "CHARACTER_GROWTH_INTIMACY_GAIN_PER_HIGH_QUALITY": ("character_growth", "intimacy_gain_per_high_quality"),
+        "CHARACTER_GROWTH_INTIMACY_LOSS_PER_LOW_QUALITY": ("character_growth", "intimacy_loss_per_low_quality"),
+        "CHARACTER_GROWTH_INTIMACY_LOSS_PER_FRICTION": ("character_growth", "intimacy_loss_per_friction"),
+        "CHARACTER_GROWTH_INTIMACY_DECAY_PER_WEEK": ("character_growth", "intimacy_decay_per_week"),
+        "CHARACTER_GROWTH_FRICTION_SIGNALS_CAUTION_THRESHOLD": ("character_growth", "friction_signals_caution_threshold"),
         "ASSISTANT_NAME": ("assistant_profile", "name"),
         "ASSISTANT_ALIAS": ("assistant_profile", "alias"),
         "PERSONALITY": ("personality", "content"),
@@ -375,6 +405,13 @@ class Config:
         "MEMORY_FUZZY_RECALL_EXPRESSIONS": ("memory", "fuzzy_recall_expressions"),
         "MEMORY_RECALL_CONFIDENCE_DECAY_PER_DAY": ("memory", "recall_confidence_decay_per_day"),
         "MEMORY_RECALL_CONFIDENCE_MINIMUM": ("memory", "recall_confidence_minimum"),
+        "PROACTIVE_SHARE_ENABLED": ("proactive_share", "enabled"),
+        "PROACTIVE_SHARE_IDLE_HOURS": ("proactive_share", "idle_hours"),
+        "PROACTIVE_SHARE_COOLDOWN_HOURS": ("proactive_share", "cooldown_hours"),
+        "PROACTIVE_SHARE_MAX_PER_DAY": ("proactive_share", "max_per_day"),
+        "PROACTIVE_SHARE_TIME_RANGE_START": ("proactive_share", "time_range_start"),
+        "PROACTIVE_SHARE_TIME_RANGE_END": ("proactive_share", "time_range_end"),
+        "PROACTIVE_SHARE_TRIGGER_SOURCES": ("proactive_share", "trigger_sources"),
     }
     _JSON_STRING_KEYS = {
         "OPENAI_EXTRA_PARAMS", "OPENAI_EXTRA_HEADERS", "VISION_SERVICE_EXTRA_PARAMS", "VISION_SERVICE_EXTRA_HEADERS",
@@ -566,6 +603,7 @@ class Config:
             memory_rerank=self._build_memory_rerank_config(),
             personality=self._build_content_section("personality"), dialogue_style=self._build_content_section("dialogue_style"),
             behavior=self._build_content_section("behavior"), memory=self._build_memory_config(),
+            proactive_share=self._build_proactive_share_config(),
         )
 
     def _build_adapter_connection_config(self) -> AdapterConnectionConfig:
@@ -731,6 +769,15 @@ class Config:
             mood_energy_recovery_night=self._bounded_float(section, "character_growth", "mood_energy_recovery_night", default=0.2, minimum=0.0),
             mood_cycle_length_days=self._bounded_int(section, "character_growth", "mood_cycle_length_days", default=7, minimum=1),
             mood_show_in_reply=self._bool_value(section, "character_growth", "mood_show_in_reply", default=False),
+            relationship_tracking_enabled=self._bool_value(section, "character_growth", "relationship_tracking_enabled", default=False),
+            intimacy_acquaintance_threshold=self._bounded_float(section, "character_growth", "intimacy_acquaintance_threshold", default=0.2, minimum=0.0, maximum=1.0),
+            intimacy_friend_threshold=self._bounded_float(section, "character_growth", "intimacy_friend_threshold", default=0.5, minimum=0.0, maximum=1.0),
+            intimacy_close_friend_threshold=self._bounded_float(section, "character_growth", "intimacy_close_friend_threshold", default=0.8, minimum=0.0, maximum=1.0),
+            intimacy_gain_per_high_quality=self._bounded_float(section, "character_growth", "intimacy_gain_per_high_quality", default=0.01, minimum=0.0),
+            intimacy_loss_per_low_quality=self._bounded_float(section, "character_growth", "intimacy_loss_per_low_quality", default=0.005, minimum=0.0),
+            intimacy_loss_per_friction=self._bounded_float(section, "character_growth", "intimacy_loss_per_friction", default=0.02, minimum=0.0),
+            intimacy_decay_per_week=self._bounded_float(section, "character_growth", "intimacy_decay_per_week", default=0.01, minimum=0.0),
+            friction_signals_caution_threshold=self._bounded_int(section, "character_growth", "friction_signals_caution_threshold", default=2, minimum=1),
         )
 
     def _build_assistant_profile_config(self) -> AssistantProfileConfig:
@@ -780,6 +827,18 @@ class Config:
 
     def _build_content_section(self, section_name: str) -> ContentSection:
         return ContentSection(content=self._optional_string(self._get_section(section_name), section_name, "content", default=""))
+
+    def _build_proactive_share_config(self) -> ProactiveShareConfig:
+        section = self._get_section("proactive_share")
+        return ProactiveShareConfig(
+            enabled=self._bool_value(section, "proactive_share", "enabled", default=False),
+            idle_hours=self._bounded_float(section, "proactive_share", "idle_hours", default=24.0, minimum=0.0),
+            cooldown_hours=self._bounded_float(section, "proactive_share", "cooldown_hours", default=6.0, minimum=0.0),
+            max_per_day=self._bounded_int(section, "proactive_share", "max_per_day", default=3, minimum=1),
+            time_range_start=self._optional_string(section, "proactive_share", "time_range_start", default="09:00"),
+            time_range_end=self._optional_string(section, "proactive_share", "time_range_end", default="22:00"),
+            trigger_sources=self._string_list(section, "proactive_share", "trigger_sources", default=["insight", "time_signal"]),
+        )
 
     def _build_memory_config(self) -> MemoryConfig:
         section = self._get_section("memory")

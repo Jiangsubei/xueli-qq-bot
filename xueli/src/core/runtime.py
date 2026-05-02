@@ -35,6 +35,8 @@ from src.core.models import MessageEvent, MessageSegment, MessageType
 from src.core.runtime_metrics import RuntimeMetrics
 from src.core.webui_runtime_registry import register_runtime, unregister_runtime
 from src.core.webui_snapshot import WebUISnapshotPublisher
+from src.core.proactive_share_scheduler import ProactiveShareScheduler
+from src.memory.storage.proactive_share_store import ProactiveShareStore
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,9 @@ class BotRuntime:
         self._connection_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._handlers_registered = False
+
+        self._proactive_share_store: Optional[ProactiveShareStore] = None
+        self._proactive_scheduler: Optional[ProactiveShareScheduler] = None
 
         self.status = {
             "connected": False,
@@ -126,6 +131,8 @@ class BotRuntime:
         if self.message_handler and hasattr(self.message_handler, "set_status_provider"):
             self.message_handler.set_status_provider(self.get_status)
 
+        self._setup_proactive_share()
+
         self._initialized = True
         self._sync_runtime_counters()
         self._sync_status_cache()
@@ -164,6 +171,29 @@ class BotRuntime:
             )
 
         self._handlers_registered = True
+
+    def _setup_proactive_share(self) -> None:
+        proactive = self.config.app.proactive_share
+        if not proactive.enabled:
+            return
+        data_path = self.config.app.memory.storage_path or "../data/memories"
+        self._proactive_share_store = ProactiveShareStore(
+            base_path=f"{data_path}/proactive_shares"
+        )
+        self._proactive_scheduler = ProactiveShareScheduler(
+            store=self._proactive_share_store,
+            enabled=proactive.enabled,
+            idle_hours=proactive.idle_hours,
+            cooldown_hours=proactive.cooldown_hours,
+            max_per_day=proactive.max_per_day,
+            time_range_start=proactive.time_range_start,
+            time_range_end=proactive.time_range_end,
+        )
+
+    def record_user_interaction(self) -> None:
+        scheduler = getattr(self, "_proactive_scheduler", None)
+        if scheduler:
+            scheduler.record_interaction()
 
     async def _handle_pipeline_message(self, event: MessageEvent, trace_id: str) -> None:
         await self._handle_message_event(event, trace_id=trace_id)
@@ -222,6 +252,7 @@ class BotRuntime:
             return
         self._processed_message_ids.add(msg_id)
 
+        self.record_user_interaction()
         self.runtime_metrics.inc_messages_received()
         self._sync_status_cache()
 
@@ -623,6 +654,9 @@ class BotRuntime:
         self._running = True
         self._connection_task = asyncio.create_task(self._get_adapter().run())
         self._snapshot_task = asyncio.create_task(self._run_webui_snapshot_heartbeat())
+        scheduler = getattr(self, "_proactive_scheduler", None)
+        if scheduler:
+            await scheduler.start(self)
 
         try:
             await self._shutdown_event.wait()
@@ -655,6 +689,12 @@ class BotRuntime:
 
         await cancel_task(self._snapshot_task, label="webui_snapshot_task")
         self._snapshot_task = None
+
+        scheduler = getattr(self, "_proactive_scheduler", None)
+        if scheduler:
+            await scheduler.stop()
+            self._proactive_scheduler = None
+            self._proactive_share_store = None
 
         await close_resource(self.message_handler, label="message_handler")
         await close_resource(self.memory_manager, label="memory_manager")
