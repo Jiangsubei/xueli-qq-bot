@@ -101,7 +101,7 @@ class MemoryFlowService:
             # 角色人设成长记录
             self._record_character_growth(host=host, event=event, prepared=prepared, reply_text=reply_text)
         except Exception as exc:
-            logger.warning("记录记忆副作用失败：%s", exc, exc_info=True)
+            logger.warning("[记忆流] 记录记忆副作用失败")
 
     def _schedule_post_extraction_processing(self, *, host: Any, event: Any, task: Any) -> None:
         if task is None:
@@ -114,7 +114,7 @@ class MemoryFlowService:
                     return
                 loop.create_task(self._process_memory_disputes(host=host, event=event))
             except Exception as exc:
-                logger.warning("调度记忆争议处理失败：%s", exc, exc_info=True)
+                logger.warning("[记忆流] 调度记忆争议处理失败")
 
         add_done = getattr(task, "add_done_callback", None)
         if callable(add_done):
@@ -163,7 +163,7 @@ class MemoryFlowService:
                         ttl_hours=self.dispute_config.signal_ttl_hours,
                     )
         except Exception as exc:
-            logger.warning("后台记忆争议处理失败：%s", exc, exc_info=True)
+            logger.warning("[记忆流] 后台记忆争议处理失败")
 
     def _record_character_growth(self, *, host: Any, event: Any, prepared: "PreparedReplyRequest", reply_text: str) -> None:
         del reply_text

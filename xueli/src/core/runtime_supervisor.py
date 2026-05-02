@@ -113,7 +113,7 @@ class BotRuntimeSupervisor:
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.warning("助手停止时出现异常：%s", exc, exc_info=True)
+                logger.warning("[运行时] 助手停止时出现异常")
 
         self._bot = None
         self._bot_task = None

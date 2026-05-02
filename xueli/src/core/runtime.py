@@ -152,7 +152,7 @@ class BotRuntime:
         self._initialized = True
         self._sync_runtime_counters()
         self._sync_status_cache()
-        logger.info("机器人运行时初始化完成")
+        logger.info("[运行时] 初始化完成")
 
     def _setup_handlers(self):
         """Register dispatcher handlers once."""
@@ -167,18 +167,14 @@ class BotRuntime:
             if not hasattr(event, "message_type"):
                 return
             msg_type = "private" if event.message_type == MessageType.PRIVATE.value else "group"
-            logger.debug("收到%s消息：用户=%s", "私聊" if msg_type == "private" else "群聊", event.user_id)
+            logger.debug("[运行时] 收到消息")
 
         @self.dispatcher.on_message
         async def handle_message(event: MessageEvent):
             message_id = getattr(event, "message_id", 0)
             trace_id = build_trace_id(message_id)
             execution_key = get_execution_key(event)
-            logger.info(
-                "收到消息：%s key=%s",
-                format_trace_log(trace_id=trace_id, session_key=execution_key, message_id=message_id),
-                execution_key,
-            )
+            logger.info("[运行时] 收到消息")
             await self._message_pipeline.submit(
                 execution_key=execution_key,
                 trace_id=trace_id,
@@ -222,7 +218,7 @@ class BotRuntime:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.error("消息任务执行失败：%s", exc, exc_info=True)
+            logger.error("[运行时] 消息任务执行失败")
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
 
@@ -248,7 +244,7 @@ class BotRuntime:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug("释放窗口调度失败：%s", trace_log, exc_info=True)
+            logger.debug("[运行时] 释放窗口调度失败")
 
     async def _send_error_fallback(self, current_event, text: str, trace_log: str, trace_id: str) -> None:
         try:
@@ -256,7 +252,7 @@ class BotRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as fallback_exc:
-            logger.error("发送兜底回复失败：%s category=%s 错误=%s", trace_log, classify_pipeline_error(fallback_exc), fallback_exc, exc_info=True)
+            logger.error("[运行时] 发送兜底回复失败")
 
     async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
         # ── 去重检查 ── 防止重放攻击或平台重试导致重复处理
@@ -265,7 +261,7 @@ class BotRuntime:
             if not hasattr(self, "_processed_message_ids"):
                 self._processed_message_ids = set()
             if msg_id in self._processed_message_ids:
-                logger.warning("跳过重复消息: message_id=%s", msg_id)
+                logger.warning("[运行时] 跳过重复消息")
                 return
             self._processed_message_ids.add(msg_id)
             if len(self._processed_message_ids) > 10000:
@@ -289,26 +285,20 @@ class BotRuntime:
         trace_log = format_trace_log(trace_id=trace_id, session_key=session_key, message_id=message_id)
 
         try:
-            logger.info("开始处理消息：%s", trace_log)
+            logger.info("[运行时] 开始处理消息")
 
             # ── 主循环 ── 每个周期完成：规划 → 节奏判断 → 回复生成 → 发送
             #    循环会在以下情况持续：窗口内多条消息待处理、或需要重试
             while True:
                 # 阶段1：规划 — 调用 ConversationPlanner 决定 reply/wait/ignore
-                logger.debug("开始规划：%s", trace_log)
+                logger.debug("[运行时] 开始规划")
                 if plan is None:
                     plan = await asyncio.wait_for(
                         self.message_handler.plan_message(current_event, trace_id=trace_id),
                         timeout=max(1, response_timeout),
                     )
-                logger.info(
-                    "规划结果：%s action=%s source=%s reason=%s",
-                    trace_log,
-                    plan.action,
-                    plan.source,
-                    plan.reason,
-                )
-                logger.debug("规划原始：%s reply_reference=%s", trace_log, str(getattr(plan, "reply_reference", "") or "").strip())
+                logger.info("[运行时] 规划完成")
+    
 
                 # 不需要回复：尝试分发到下一窗口（合并等待中的消息）
                 if not plan.should_reply:
@@ -318,18 +308,12 @@ class BotRuntime:
                     return
 
                 # 阶段2：节奏判断 — 调用 TimingGate 决定时机是否合适
-                logger.debug("开始节奏判断：%s", trace_log)
+                logger.debug("[运行时] 开始节奏判断")
                 plan = await asyncio.wait_for(
                     self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
                     timeout=max(1, response_timeout),
                 )
-                logger.info(
-                    "节奏判断结果：%s action=%s source=%s reason=%s",
-                    trace_log,
-                    plan.action,
-                    plan.source,
-                    plan.reason,
-                )
+                logger.info("[运行时] 节奏判断完成")
                 if not plan.should_reply:
                     current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                     if current_event is not None:
@@ -349,13 +333,13 @@ class BotRuntime:
                 await self.message_handler.check_rate_limit(target_id)
 
                 # 阶段4：回复生成 — 调用 AI 生成回复内容
-                logger.debug("开始生成回复：%s", trace_log)
+                logger.debug("[运行时] 开始生成回复")
                 reply_result = await asyncio.wait_for(
                     self.message_handler.get_ai_response(current_event, plan=plan, trace_id=trace_id),
                     timeout=max(1, response_timeout),
                 )
                 if not reply_result or not reply_result.text:
-                    logger.info("回复为空，跳过发送：%s", trace_log)
+                    logger.info("[运行时] 回复为空，跳过发送")
                     current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                     if current_event is not None:
                         continue
@@ -363,10 +347,10 @@ class BotRuntime:
 
                 # 阶段5：发送回复 + 后续处理（emoji 追评、记忆写入）
                 self._log_reply_preview(reply_result, trace_log, source=getattr(reply_result, "source", ""))
-                logger.info("开始发送回复：%s", trace_log)
+                logger.info("[运行时] 开始发送回复")
                 sent = await self._send_response(current_event, reply_result, plan=plan, trace_id=trace_id)
                 if sent:
-                    logger.info("发送完成：%s", trace_log)
+                    logger.info("[运行时] 发送完成")
                     await self.message_handler.record_reply_sent(current_event, reply_result.text)
                     await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
 
@@ -374,22 +358,22 @@ class BotRuntime:
                 current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                 if current_event is not None:
                     continue
-                logger.info("消息处理结束：%s", trace_log)
+                logger.info("[运行时] 消息处理结束")
                 return
 
         # ── 异常处理 ──
         # StaleWindowError / CancelledError：窗口过期或任务被取消，不需要发送错误回复
         except (StaleWindowError, asyncio.CancelledError):
-            logger.info("窗口过期或任务被取消：%s", trace_log)
+            logger.info("[运行时] 窗口过期或任务取消")
             await self._release_window_on_error(plan, trace_log)
         except asyncio.TimeoutError:
-            logger.error("处理消息事件超时：%s timeout=%ss", trace_log, response_timeout)
+            logger.error("[运行时] 处理消息超时")
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             await self._release_window_on_error(plan, trace_log)
         except (SendError, ModelRequestError, ModelParseError, ImageProcessingError, MemoryOperationError, PipelineExecutionError) as exc:
             category = classify_pipeline_error(exc)
-            logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)
+            logger.error("[运行时] 处理消息失败")
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             await self._release_window_on_error(plan, trace_log)
@@ -404,7 +388,7 @@ class BotRuntime:
                 session_key=get_execution_key(event),
                 message_id=getattr(event, "message_id", 0),
             )
-            logger.warning("发送前检测到窗口已过期，跳过发送：%s", trace_log)
+            logger.warning("[运行时] 窗口已过期，跳过发送")
             return False
         message = str(getattr(reply, "text", reply) or "").strip()
         is_repeat_echo = getattr(plan, "source", None) == "repeat_echo"
@@ -451,13 +435,7 @@ class BotRuntime:
                 target_id = str(inbound.session.channel_id) if inbound else str(event.raw_data.get("group_id", ""))
             else:
                 target_id = str(event.user_id)
-            logger.info(
-                "回复已发送：%s 目标=%s 类型=%s 分段=%s",
-                format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
-                target_id,
-                event.message_type,
-                len(parts),
-            )
+            logger.info("[运行时] 回复已发送")
         return True
 
     def _build_reply_part_plans(
@@ -546,7 +524,7 @@ class BotRuntime:
         )
         if result is False:
             raise SendError("发送私聊消息失败")
-        logger.debug("已发送私聊消息：session=%s", session.key)
+        logger.debug("[运行时] 私聊消息已发送")
 
     async def _send_private_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
         self._ensure_no_outbound_image_segments(segments)
@@ -559,7 +537,7 @@ class BotRuntime:
         )
         if result is False:
             raise SendError("发送私聊分段消息失败")
-        logger.debug("已发送私聊分段消息：session=%s，segments=%s", session.key, len(segments))
+        logger.debug("[运行时] 私聊分段消息已发送")
 
     async def _send_scope_msg(self, target: Any, message: str, at_user: Optional[Any] = None, *, trace_id: str = ""):
         session = self._resolve_reply_session(target, at_user=at_user)
@@ -572,13 +550,13 @@ class BotRuntime:
             )
             if result is False:
                 raise SendError("发送群聊 @ 消息失败")
-            logger.debug("已发送群聊@消息：session=%s，at_user=%s", session.key, at_user)
+            logger.debug("[运行时] 群聊@消息已发送")
             return
 
         result = await self._get_adapter_for_session(session).send_action(ReplyAction(session=session, text=message))
         if result is False:
             raise SendError("发送群聊消息失败")
-        logger.debug("已发送群聊消息：session=%s", session.key)
+        logger.debug("[运行时] 群聊消息已发送")
 
     async def _send_scope_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
         self._ensure_no_outbound_image_segments(segments)
@@ -591,7 +569,7 @@ class BotRuntime:
         )
         if result is False:
             raise SendError("发送群聊分段消息失败")
-        logger.debug("已发送群聊分段消息：session=%s，segments=%s", session.key, len(segments))
+        logger.debug("[运行时] 群聊分段消息已发送")
 
     def _ensure_no_outbound_image_segments(self, segments: List[MessageSegment]) -> None:
         for segment in list(segments or []):
@@ -614,7 +592,7 @@ class BotRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("处理 WebSocket 消息失败：%s", exc, exc_info=True)
+            logger.error("[运行时] WebSocket 消息处理失败")
             self.runtime_metrics.record_error()
             self._sync_status_cache()
 
@@ -644,13 +622,13 @@ class BotRuntime:
         self.runtime_metrics.set_connected(True)
         self.runtime_metrics.set_ready(True)
         self._sync_status_cache()
-        logger.debug("平台 adapter 已连接")
+        logger.debug("[运行时] 平台 adapter 已连接")
 
     async def _on_disconnect(self):
         self.runtime_metrics.set_connected(False)
         self.runtime_metrics.set_ready(False)
         self._sync_status_cache()
-        logger.debug("平台 adapter 连接已断开")
+        logger.debug("[运行时] 平台 adapter 已断开")
 
     async def _run_webui_snapshot_heartbeat(self) -> None:
         while not self._shutdown_event.is_set():
@@ -662,7 +640,7 @@ class BotRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("WebUI 快照心跳异常：%s", exc, exc_info=True)
+                logger.debug("[运行时] WebUI 快照心跳异常")
                 await asyncio.sleep(5)
 
     async def run(self):
@@ -672,14 +650,15 @@ class BotRuntime:
         if self._manage_signals:
             def signal_handler(signum, frame):
                 del frame
-                logger.info("收到系统信号：%s", signum)
+                logger.info("[运行时] 收到系统信号")
                 self._shutdown_event.set()
 
             try:
                 signal.signal(signal.SIGINT, signal_handler)
                 signal.signal(signal.SIGTERM, signal_handler)
             except (AttributeError, ValueError):
-                logger.debug("当前运行环境不支持注册系统信号处理器")
+                pass
+
 
         self._running = True
         self._connection_task = asyncio.create_task(self._get_adapter().run())
@@ -691,10 +670,10 @@ class BotRuntime:
         try:
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
-            logger.info("机器人运行任务被取消")
+            logger.info("[运行时] 运行任务被取消")
         finally:
             await self.close()
-            logger.info("机器人主循环已退出")
+            logger.info("[运行时] 主循环已退出")
 
     async def close(self) -> None:
         async with self._get_close_lock():
@@ -926,18 +905,6 @@ class BotRuntime:
         )
         self._sync_status_cache()
 
-    def _log_plan_preview(self, plan: Any, trace_log: str) -> None:
-        # Already logged inline at INFO; this is kept for raw_decision dump at DEBUG
-        raw_decision = getattr(plan, "raw_decision", None)
-        if raw_decision is None:
-            return
-        logger.debug(
-            "规划原始：%s reply_reference=%s preview=%s",
-            trace_log,
-            preview_text_for_log(str(getattr(plan, "reply_reference", "") or "").strip()),
-            preview_json_for_log(raw_decision),
-        )
-
     def _log_reply_preview(self, reply: Any, trace_log: str, *, source: str = "") -> None:
         reply_text = str(getattr(reply, "text", reply) or "").strip()
         preview = preview_text_for_log(reply_text)
@@ -946,13 +913,6 @@ class BotRuntime:
         normalized_source = str(source or "").strip() or "unknown"
         segments = list(getattr(reply, "segments", None) or [])
         if segments:
-            logger.info(
-                "最终回复预览：%s source=%s segments=%s content=%s raw_segments=%s",
-                trace_log,
-                normalized_source,
-                len(segments),
-                preview,
-                preview_json_for_log(segments),
-            )
+            logger.info("[运行时] 回复预览")
             return
-        logger.info("最终回复预览：%s source=%s content=%s", trace_log, normalized_source, preview)
+        logger.info("[运行时] 回复预览")

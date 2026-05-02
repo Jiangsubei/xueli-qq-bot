@@ -263,34 +263,28 @@ class ReplyPipeline:
             response = await self.reply_generation_service.generate_reply(event=event, prepared=prepared)
             self._persist_reply_result(event, prepared, response)
             group_id = event.raw_data.get("group_id", "")
-            logger.debug(
-                "回复生成完成：%s 用户=%s，群=%s，长度=%s",
-                trace_log,
-                event.user_id,
-                group_id,
-                len(response.content),
-            )
+            logger.debug("[回复管道] 回复生成完成")
             normalized_text = str(response.content or "").strip()
             normalized_segments = [str(item or "").strip() for item in list(getattr(response, "segments", None) or []) if str(item or "").strip()]
             if not normalized_segments and normalized_text:
                 normalized_segments = [normalized_text]
             return ReplyResult(text=normalized_text, segments=normalized_segments, source=source)
         except asyncio.TimeoutError:
-            logger.error("回复生成失败：%s category=model_request_error 错误=模型响应超时", trace_log)
+            logger.error("[回复管道] 回复生成失败（超时）")
             return ReplyResult(text="", segments=[], source="error_suppressed")
         except AIAPIError as exc:
-            logger.error("回复生成失败：%s category=model_request_error 错误=%s", trace_log, exc)
+            logger.error("[回复管道] 回复生成失败")
             return ReplyResult(text="", segments=[], source="error_suppressed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
+            logger.error("[回复管道] 回复流程异常")
             return ReplyResult(text="", segments=[], source="error_suppressed")
 
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
         if not self._event_has_image(event) or not self._vision_enabled():
             return []
-        logger.debug("开始处理图片输入")
+        logger.debug("[回复管道] 开始处理图片输入")
         return await self.host.download_images(event)
 
     def _log_prompt_if_enabled(self, event: MessageEvent, prepared: PreparedReplyRequest) -> None:
@@ -407,7 +401,7 @@ class ReplyPipeline:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("记忆工具调用失败：%s", exc)
+                logger.warning("[回复管道] 记忆工具调用失败")
                 content = f"检索失败: {exc}"
 
         return {
@@ -572,7 +566,7 @@ class ReplyPipeline:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("检索记忆上下文失败：%s", exc)
+            logger.warning("[回复管道] 检索记忆上下文失败")
             return person_fact_context, persistent_memory_context, "", "", "", [], is_first_turn
 
         # 按 section 拆解检索结果，按需过滤
@@ -625,7 +619,7 @@ class ReplyPipeline:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("加载人物事实失败：%s", exc)
+            logger.warning("[回复管道] 加载人物事实失败")
             return ""
 
     async def _load_persistent_memory_context(
@@ -646,7 +640,7 @@ class ReplyPipeline:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("加载持续关键信息失败：%s", exc)
+            logger.warning("[回复管道] 加载持续关键信息失败")
             important = []
         return self._format_memory_context(self._collect_memory_lines(important))
 

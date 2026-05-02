@@ -256,7 +256,7 @@ class MemoryExtractor:
         # 无有效用户消息时仍推进checkpoint，避免重复提取
         if dialogue_text.strip() == "无":
             self._mark_session_extracted(session_key, latest_turn_id)
-            logger.info("记忆提取跳过：会话=%s 当前没有可供提取的用户消息，checkpoint 已推进到 T%s", session_key, latest_turn_id)
+            logger.info("[记忆提取] 记忆提取跳过")
             return []
 
         # ─────────────────────────────────────────────────────────────
@@ -268,19 +268,19 @@ class MemoryExtractor:
             raise
         except Exception as exc:
             if self._is_rate_limit_error(exc):
-                logger.warning("记忆提取触发限流：用户=%s，会话=%s", user_id, session_key)
+                logger.warning("[记忆提取] 记忆提取触发限流")
                 return []
-            logger.error("记忆提取失败：用户=%s，会话=%s，错误=%s", user_id, session_key, exc, exc_info=True)
+            logger.error("[记忆提取] 记忆提取失败")
             return []
 
         provider = llm_response.provider or "unknown"
         model = llm_response.model or ""
-        logger.info("记忆提取本轮使用模型：provider=%s model=%s", provider, model)
+        logger.info("[记忆提取] 记忆提取本轮使用模型")
 
         # LLM明确回复"无记忆"时也推进checkpoint
         if self._is_explicit_no_memory_response(llm_response.content):
             self._mark_session_extracted(session_key, latest_turn_id)
-            logger.info("记忆提取结果为空：用户=%s，会话=%s，checkpoint 已推进到 T%s", user_id, session_key, latest_turn_id)
+            logger.info("[记忆提取] 记忆提取结果为空")
             return []
 
         # ─────────────────────────────────────────────────────────────
@@ -1197,7 +1197,7 @@ class MemoryExtractor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("同步重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            logger.warning("[记忆提取] 同步重要记忆失败")
             return None
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:

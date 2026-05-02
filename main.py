@@ -5,7 +5,7 @@ import os
 import signal
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "xueli"))
 
 # ---------------------------------------------------------------------------
 # Logging configuration - 按模块分层
@@ -38,9 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 def _log_webui_entry(address: str) -> None:
-    logger.info("---------------------------------")
-    logger.info("管理页面地址：%s", address)
-    logger.info("---------------------------------")
+    logger.info("[启动] 管理页面已就绪")
 
 
 async def main():
@@ -50,7 +48,7 @@ async def main():
 
     def handle_shutdown(signum, frame):
         del frame
-        logger.info("主程序收到退出信号：%s", signum)
+        logger.info("[启动] 收到退出信号")
         shutdown_event.set()
 
     try:
@@ -70,10 +68,10 @@ async def main():
         if webui_started:
             _log_webui_entry(webui_server.display_address)
         if api_runtime_started:
-            logger.info("开放 API 地址：%s", api_runtime_server.display_url)
+            logger.info("[启动] 开放 API 已就绪")
         await shutdown_event.wait()
     except KeyboardInterrupt:
-        logger.info("主程序收到键盘中断，准备退出")
+        logger.info("[启动] 键盘中断，准备退出")
     except Exception as exc:
         print(f"Runtime error: {exc}")
         raise

@@ -223,13 +223,13 @@ class ImportantMemoryStore:
                             )
                         )
                 except Exception as exc:
-                    logger.debug("解析重要记忆行失败：%s", exc)
+                    logger.debug("[存储] 解析重要记忆行失败")
 
             return memories
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("读取重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            logger.error("[存储] 读取重要记忆失败")
             return []
 
     async def _write_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:
@@ -257,7 +257,7 @@ class ImportantMemoryStore:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("写入重要记忆失败：用户=%s，错误=%s", user_id, exc)
+                logger.error("[存储] 写入重要记忆失败")
                 return False
 
     async def add_memory(
@@ -365,7 +365,7 @@ class ImportantMemoryStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("删除重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            logger.error("[存储] 删除重要记忆失败")
             return False
 
     async def update_memory(self, user_id: str, memory_id: str, content: str) -> bool:
@@ -399,7 +399,7 @@ class ImportantMemoryStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("清空重要记忆失败：用户=%s，错误=%s", user_id, exc)
+            logger.error("[存储] 清空重要记忆失败")
             return False
 
     async def replace_memories(self, user_id: str, memories: List[ImportantMemoryItem]) -> bool:

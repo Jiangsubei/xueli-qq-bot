@@ -97,7 +97,7 @@ class PersonFactStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("读取人物事实失败：用户=%s，错误=%s", user_id, exc)
+            logger.warning("[存储] 读取人物事实失败")
             return []
 
     async def replace_facts(self, user_id: str, facts: List[PersonFactItem]) -> bool:
@@ -118,7 +118,7 @@ class PersonFactStore:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("写入人物事实失败：用户=%s，错误=%s", user_id, exc)
+                logger.warning("[存储] 写入人物事实失败")
                 return False
 
     async def clear_facts(self, user_id: str) -> bool:
@@ -131,7 +131,7 @@ class PersonFactStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("清空人物事实失败：用户=%s，错误=%s", user_id, exc)
+            logger.warning("[存储] 清空人物事实失败")
             return False
 
     def make_fact_id(self, user_id: str, fact_kind: str, content: str) -> str:

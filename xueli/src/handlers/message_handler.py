@@ -165,7 +165,7 @@ class MessageHandler:
         self.command_handler.set_status_provider(status_provider)
 
     def _create_ai_client(self) -> AIClient:
-        logger.debug("初始化回复模型：模型=%s", self.app_config.ai_service.model)
+        logger.debug("[消息处理器] 初始化回复模型")
         return AIClient(log_label="reply", app_config=self.app_config)
 
     def _create_vision_client(self) -> VisionClient:
@@ -693,7 +693,7 @@ class MessageHandler:
     async def plan_dispatched_window(self, window: BufferedWindow, *, trace_id: str = "") -> tuple[MessageEvent, MessageHandlingPlan]:
         # stale 检查：窗口已过期则不再处理
         if self.is_window_stale(window):
-            logger.warning("窗口已过期，跳过处理：seq=%s opened_at=%s", window.seq, window.opened_at)
+            logger.warning("[消息处理器] 窗口已过期，跳过处理")
             raise StaleWindowError(f"window {window.seq} is stale")
         dispatch_event = window.latest_event if isinstance(window.latest_event, MessageEvent) else None
         if dispatch_event is None:
@@ -781,7 +781,7 @@ class MessageHandler:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("处理图片失败：%s", exc, exc_info=True)
+                logger.error("[消息处理器] 处理图片失败")
         return base64_images
 
     async def analyze_event_images(
@@ -899,7 +899,7 @@ class MessageHandler:
         reply_context = dict(getattr(plan, "reply_context", None) or {})
         window_expires_at = float(reply_context.get("expires_at", 0.0) or 0.0)
         if window_expires_at > 0 and time.time() > window_expires_at:
-            logger.warning("回复生成前检测到窗口已过期：expires_at=%s", window_expires_at)
+            logger.warning("[消息处理器] 窗口已过期")
             return ReplyResult(text="", segments=[], source="stale_suppressed")
         if plan and isinstance(plan.reply_context, dict):
             direct_reply_text = str(plan.reply_context.get("direct_reply_text") or "").strip()

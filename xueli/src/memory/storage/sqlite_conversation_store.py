@@ -225,7 +225,7 @@ class SQLiteConversationStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(_INIT_SCHEMA)
         conn.close()
-        logger.debug("SQLite conversation store initialized: %s", self._db_path)
+        logger.debug("[存储] SQLite 会话存储已初始化")
 
     def _connection(self) -> "sqlite3.Connection":
         import sqlite3
@@ -624,20 +624,9 @@ class SQLiteConversationStore:
                 ),
             )
             conn.commit()
-            logger.debug(
-                "对话轮次已写入DB：用户=%s，会话=%s，轮次=%s",
-                session.user_id,
-                session.session_id,
-                turn.turn_id,
-            )
+            logger.debug("[存储] 对话轮次已写入")
         except Exception as exc:
-            logger.error(
-                "保存对话轮次失败：用户=%s，会话=%s，错误=%s",
-                session.user_id,
-                session.session_id,
-                exc,
-                exc_info=True,
-            )
+            logger.error("[存储] 保存对话轮次失败")
         finally:
             if conn:
                 conn.close()
@@ -700,12 +689,7 @@ class SQLiteConversationStore:
                     )
                 conn.commit()
                 session.dirty_turns = 0
-                logger.debug(
-                    "对话会话已写入DB：用户=%s，会话=%s，轮次=%s",
-                    owner_user_id,
-                    session.session_id,
-                    session.turn_count,
-                )
+                logger.debug("[存储] 对话会话已写入")
             finally:
                 conn.close()
 
@@ -714,13 +698,7 @@ class SQLiteConversationStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error(
-                "保存对话会话失败：用户=%s，会话=%s，错误=%s",
-                owner_user_id,
-                session_id,
-                exc,
-                exc_info=True,
-            )
+            logger.error("[存储] 保存对话会话失败")
             return None
 
         if session.closed_at:
@@ -760,7 +738,7 @@ class SQLiteConversationStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("加载对话会话失败：用户=%s，会话=%s，错误=%s", user_id, session_id, exc)
+            logger.warning("[存储] 加载对话会话失败")
             return None
 
     async def update_session_metadata(
@@ -819,12 +797,7 @@ class SQLiteConversationStore:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "写入会话元数据失败：用户=%s，会话=%s，错误=%s",
-                user_id,
-                session_id,
-                exc,
-            )
+            logger.warning("[存储] 写入会话元数据失败")
             return None
 
     async def get_conversations(self, user_id: str, limit: int = 10) -> List[ConversationRecord]:

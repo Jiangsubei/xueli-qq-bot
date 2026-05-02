@@ -87,7 +87,7 @@ class TimingGateService:
         except asyncio.CancelledError:
             raise
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("节奏判断失败，回退到规则：%s", exc)
+            logger.warning("[节奏门] 节奏判断失败，回退到规则")
             return fallback
 
     def _build_system_prompt(self) -> str:

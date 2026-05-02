@@ -190,17 +190,17 @@ class AIClient:
             )
 
             if status == 429 or status >= 500:
-                logger.warning("[%s] HTTP %s — 需要重试", self.log_label, status)
+                logger.warning("[AI客户端] HTTP %s — 需要重试", status)
                 raise _RetryableHTTPError(status, response_text)
 
             if status != 200:
-                logger.error("[%s] 请求失败：HTTP %s", self.log_label, status)
+                logger.error("[AI客户端] 请求失败")
                 raise map_http_error(status, response_text)
 
             try:
                 data = json.loads(response_text)
             except json.JSONDecodeError:
-                logger.warning("[%s] 响应 JSON 无效，需要重试", self.log_label)
+                logger.warning("[AI客户端] 响应 JSON 无效，需要重试")
                 raise  # re-raise raw so chat_completion retry loop can catch it
 
             return self._parse_response(data)
@@ -230,32 +230,32 @@ class AIClient:
             except _RetryableHTTPError as exc:
                 last_exc = exc
                 if attempt >= max_retries:
-                    logger.error("[%s] 重试 %s 次后仍失败", self.log_label, max_retries)
+                    logger.error("[AI客户端] 重试 %s 次后仍失败", max_retries)
                     raise map_http_error(exc.status, exc.response_text)
                 delay = 2.0 ** attempt
-                logger.info("[%s] 第 %s/%s 次重试，等待 %.1fs", self.log_label, attempt + 1, max_retries, delay)
+                logger.info("[AI客户端] 第 %s/%s 次重试，等待 %.1fs", attempt + 1, max_retries, delay)
                 await asyncio.sleep(delay)
             except aiohttp.ClientError as exc:
                 last_exc = exc
                 if attempt >= max_retries:
-                    logger.error("[%s] 重试 %s 次后仍失败", self.log_label, max_retries)
+                    logger.error("[AI客户端] 重试 %s 次后仍失败", max_retries)
                     raise map_client_error(exc)
                 delay = 2.0 ** attempt
-                logger.info("[%s] 第 %s/%s 次重试（网络错误），等待 %.1fs", self.log_label, attempt + 1, max_retries, delay)
+                logger.info("[AI客户端] 第 %s/%s 次重试（网络错误），等待 %.1fs", attempt + 1, max_retries, delay)
                 await asyncio.sleep(delay)
             except asyncio.TimeoutError:
                 last_exc = asyncio.TimeoutError()
                 if attempt >= max_retries:
-                    logger.error("[%s] 请求超时（%s 次后仍失败）", self.log_label, max_retries)
+                    logger.error("[AI客户端] 请求超时（%s 次后仍失败）", max_retries)
                     raise map_timeout_error()
                 delay = 2.0 ** attempt
-                logger.info("[%s] 第 %s/%s 次重试（超时），等待 %.1fs", self.log_label, attempt + 1, max_retries, delay)
+                logger.info("[AI客户端] 第 %s/%s 次重试（超时），等待 %.1fs", attempt + 1, max_retries, delay)
                 await asyncio.sleep(delay)
             except json.JSONDecodeError as exc:
                 last_exc = exc
                 if attempt >= max_retries:
-                    logger.error("[%s] JSON 解析失败（%s 次后仍失败）", self.log_label, max_retries)
+                    logger.error("[AI客户端] JSON 解析失败（%s 次后仍失败）", max_retries)
                     raise map_json_error(exc)
                 delay = 2.0 ** attempt
-                logger.info("[%s] 第 %s/%s 次重试（JSON 解析错误），等待 %.1fs", self.log_label, attempt + 1, max_retries, delay)
+                logger.info("[AI客户端] 第 %s/%s 次重试（JSON 解析错误），等待 %.1fs", attempt + 1, max_retries, delay)
                 await asyncio.sleep(delay)

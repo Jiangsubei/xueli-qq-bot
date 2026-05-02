@@ -44,7 +44,7 @@ class SessionMessagePipeline:
     ) -> None:
         async with self._lock:
             if self._closed:
-                logger.warning("消息流水线已关闭，忽略新消息：trace=%s key=%s", trace_id, execution_key)
+                logger.warning("[流水线] 消息流水线已关闭，忽略新消息")
                 return
             queue = self._queues.get(execution_key)
             if queue is None:

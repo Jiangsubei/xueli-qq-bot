@@ -88,7 +88,7 @@ class RepeatEchoService:
         if self._runtime_metrics:
             self._runtime_metrics.record_group_repeat_echo()
         if not bool(getattr(self._app_config.bot_behavior, "log_full_prompt", False)):
-            logger.info("触发群聊复读：群=%s，触发用户数=%s", group_id, len(unique_users))
+            logger.info("[复读服务] 触发群聊复读")
         return display_text
 
     def cleanup(self) -> None:

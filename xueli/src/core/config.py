@@ -449,10 +449,10 @@ class Config:
             with open(self._path, "rb") as file:
                 payload = tomllib.load(file)
             self._raw_data = dict(payload) if isinstance(payload, dict) else {}
-            logger.debug("配置加载完成：%s", self._path)
+            logger.debug("[配置] 配置加载完成")
         except Exception as exc:
             self._load_error = f"加载配置失败 {self._path}: {exc}"
-            logger.warning(self._load_error)
+            logger.warning("[配置] 配置加载失败")
             return
         self._app = self._build_app_config()
 

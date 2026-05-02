@@ -153,7 +153,7 @@ class EmojiManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("表情包后台分类循环失败：%s", exc, exc_info=True)
+            logger.error("[表情管理] 表情包后台分类循环失败")
         finally:
             await self._sync_metrics(active_classifiers=0)
             self._worker_task = None
@@ -190,7 +190,7 @@ class EmojiManager:
             await self.repository.mark_classification_failed(emoji_id, str(exc))
             if self.runtime_metrics:
                 self.runtime_metrics.record_emoji_classification_failure(1)
-            logger.warning("表情包分类失败：ID=%s，错误=%s", emoji_id, exc)
+            logger.warning("[表情管理] 表情包分类失败")
 
     def _can_run_classification_now(self) -> bool:
         if not self.classification_enabled:

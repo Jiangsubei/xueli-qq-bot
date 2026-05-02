@@ -119,7 +119,7 @@ class CrossEncoderReranker(BaseReranker):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("本地重排失败：%s", exc)
+            logger.error("[检索] 本地重排失败")
             return candidates[:top_k]
 
 
@@ -269,7 +269,7 @@ class APIReranker(BaseReranker):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("API 重排失败：地址=%s，错误=%s", self.endpoint, exc)
+            logger.error("[检索] API 重排失败")
             return candidates[:top_k]
 
         if not ranked:
@@ -307,7 +307,7 @@ class TwoStageRetriever:
         try:
             if self.config.reranker_type == "local":
                 self._reranker = CrossEncoderReranker(model_name=self.config.local_model_name)
-                logger.debug("本地重排器初始化完成：模型=%s", self.config.local_model_name)
+                logger.debug("[检索] 本地重排器初始化完成")
             else:
                 self._reranker = APIReranker(
                     endpoint=self.config.api_endpoint,
@@ -321,11 +321,11 @@ class TwoStageRetriever:
                     total_prompt_budget=self.config.rerank_total_prompt_budget,
                     model_invocation_router=self.config.model_invocation_router,
                 )
-                logger.debug("API 重排器初始化完成：地址=%s，模型=%s", self.config.api_endpoint, self.config.api_model)
+                logger.debug("[检索] API 重排器初始化完成")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("初始化重排器失败：%s", exc)
+            logger.error("[检索] 初始化重排器失败")
             self._reranker = None
 
     async def retrieve(
@@ -357,7 +357,7 @@ class TwoStageRetriever:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("向量检索失败（非致命）：%s", exc)
+                logger.debug("[检索] 向量检索失败（非致命）")
 
         if vector_results:
             bm25_map: Dict[str, Tuple[MemoryItem, float]] = {mem.id: (mem, score) for mem, score in candidates}
@@ -375,7 +375,7 @@ class TwoStageRetriever:
             candidates.sort(key=lambda item: item[1], reverse=True)
 
         if not candidates:
-            logger.debug("记忆召回为空：用户=%s", user_id)
+            logger.debug("[检索] 记忆召回为空")
             return []
 
         locally_ranked = self._apply_local_ranking(
@@ -410,7 +410,7 @@ class TwoStageRetriever:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("记忆重排失败，回退到本地预排序：用户=%s，错误=%s", user_id, exc)
+                logger.error("[检索] 记忆重排失败，回退到本地预排序")
 
         return [
             SearchResult(

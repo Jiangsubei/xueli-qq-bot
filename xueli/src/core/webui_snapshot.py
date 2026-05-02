@@ -40,7 +40,7 @@ class WebUISnapshotPublisher:
             )
             temp_path.replace(self.path)
         except Exception as exc:
-            logger.debug("写入 WebUI 运行快照失败：%s", exc, exc_info=True)
+            logger.debug("[WebUI快照] 写入 WebUI 运行快照失败")
 
     def _build_payload(self, *, closing: bool = False) -> Dict[str, Any]:
         status = dict(self.status_provider() or {})

@@ -22,7 +22,7 @@ async def close_resource(resource: Any, *, label: Optional[str] = None) -> None:
         if asyncio.iscoroutine(result):
             await result
     except Exception as exc:
-        logger.warning("关闭资源失败：%s，错误=%s", label or type(resource).__name__, exc, exc_info=True)
+        logger.warning("[生命周期] 关闭资源失败")
 
 
 async def cancel_task(task: Optional[asyncio.Task], *, label: str = "task") -> None:
@@ -35,7 +35,7 @@ async def cancel_task(task: Optional[asyncio.Task], *, label: str = "task") -> N
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.warning("任务退出异常：%s，错误=%s", label, exc, exc_info=True)
+            logger.warning("[生命周期] 任务退出异常")
         return
 
     task.cancel()
@@ -44,7 +44,7 @@ async def cancel_task(task: Optional[asyncio.Task], *, label: str = "task") -> N
     except asyncio.CancelledError:
         return
     except Exception as exc:
-        logger.warning("取消任务失败：%s，错误=%s", label, exc, exc_info=True)
+        logger.warning("[生命周期] 取消任务失败")
 
 
 async def cancel_tasks(tasks: Iterable[asyncio.Task], *, label: str = "tasks") -> None:
@@ -53,7 +53,7 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task], *, label: str = "tasks") -
     if not pending:
         return
 
-    logger.debug("正在取消后台任务：%s，数量=%s", label, len(pending))
+        logger.debug("[生命周期] 正在取消后台任务")
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)

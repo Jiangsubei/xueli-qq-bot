@@ -95,7 +95,7 @@ class VisionClient:
             "extra_headers": dict(self.app_config.vision_service.extra_headers or {}),
             "response_path": self.app_config.vision_service.response_path or "choices.0.message.content",
         }
-        logger.debug("初始化视觉模型：模型=%s", client_config.get("model"))
+        logger.debug("[视觉服务] 初始化视觉模型")
         return AIClient(
             api_base=client_config["api_base"],
             api_key=client_config["api_key"],
@@ -281,7 +281,7 @@ class VisionClient:
         except asyncio.CancelledError:
             raise
         except AIAPIError as exc:
-            logger.warning("图片分析失败：%s", exc)
+            logger.warning("[视觉服务] 图片分析失败")
             return ImageAnalysisResult(
                 success_count=0,
                 failure_count=len(base64_images),
@@ -289,7 +289,7 @@ class VisionClient:
                 error=str(exc),
             )
         except Exception as exc:
-            logger.warning("图片分析出现异常：%s", exc, exc_info=True)
+            logger.warning("[视觉服务] 图片分析出现异常")
             return ImageAnalysisResult(
                 success_count=0,
                 failure_count=len(base64_images),

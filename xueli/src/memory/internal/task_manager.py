@@ -23,7 +23,7 @@ class MemoryTaskManager:
         tasks = [task for task in self._tasks if not task.done()]
         if not tasks:
             return
-        logger.debug("等待 memory 后台任务完成：数量=%s", len(tasks))
+        logger.debug("[任务管理] 等待 memory 后台任务完成")
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def cancel_all(self) -> None:
@@ -31,7 +31,7 @@ class MemoryTaskManager:
         if not tasks:
             return
 
-        logger.debug("取消 memory 后台任务：数量=%s", len(tasks))
+        logger.debug("[任务管理] 取消 memory 后台任务")
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

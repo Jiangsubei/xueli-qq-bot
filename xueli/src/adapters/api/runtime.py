@@ -55,7 +55,7 @@ class ApiRuntimeServer:
         try:
             self._httpd = ThreadingHTTPServer((self.host, self.port), handler_cls)
         except OSError as exc:
-            logger.warning("API runtime 启动失败，开放 API 入口不可用：%s", exc)
+            logger.warning("[API入口] API runtime 启动失败，开放 API 入口不可用")
             self._httpd = None
             self._thread = None
             return False
@@ -63,7 +63,7 @@ class ApiRuntimeServer:
         self.port = int(getattr(self._httpd, "server_port", self.port))
         self._thread = threading.Thread(target=self._serve_forever, name="api-runtime-server", daemon=True)
         self._thread.start()
-        logger.info("开放 API 入口：%s", self.display_url)
+        logger.info("[API入口] 开放 API 入口已就绪")
         return True
 
     def stop(self) -> None:
@@ -107,7 +107,7 @@ class ApiRuntimeServer:
                     self._send_json(400, {"ok": False, "error": str(exc)})
                     return
                 except Exception as exc:
-                    logger.error("开放 API 入站处理失败：%s", exc, exc_info=True)
+                    logger.error("[API入口] 开放 API 入站处理失败")
                     self._send_json(500, {"ok": False, "error": "internal_error"})
                     return
                 self._send_json(202, {"ok": True, "accepted": True})

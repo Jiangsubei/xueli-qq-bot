@@ -28,7 +28,7 @@ class _QuietWSGIRequestHandler(WSGIRequestHandler):
             return
         if request_line.startswith("GET /static/") and 200 <= status_code < 400:
             return
-        logger.debug("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
+        logger.debug("[WebUI] %s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
 
 
 class WebUIRuntimeServer:
@@ -77,7 +77,7 @@ class WebUIRuntimeServer:
                 handler_class=_QuietWSGIRequestHandler,
             )
         except OSError as exc:
-            logger.warning("WebUI 启动失败，机器人将继续运行：%s", exc)
+            logger.warning("[WebUI] WebUI 启动失败，机器人将继续运行")
             self._httpd = None
             self._thread = None
             return False
@@ -85,7 +85,7 @@ class WebUIRuntimeServer:
         self.port = int(getattr(self._httpd, "server_port", self.port))
         self._thread = threading.Thread(target=self._serve_forever, name="webui-server", daemon=True)
         self._thread.start()
-        logger.debug("WebUI 地址：%s", self.display_url)
+            logger.debug("[WebUI] WebUI 地址已就绪")
         return True
 
     def _serve_forever(self) -> None:

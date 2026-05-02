@@ -39,7 +39,7 @@ class ConversationPlanner:
 
     def _create_ai_client(self) -> Optional[AIClient]:
         if not is_group_reply_decision_configured(self.app_config):
-            logger.debug("未配置会话规划模型，统一规划器已禁用")
+            logger.debug("[规划器] 未配置会话规划模型")
             return None
 
         decision = self.app_config.group_reply_decision
@@ -51,7 +51,7 @@ class ConversationPlanner:
             "extra_headers": dict(decision.extra_headers or {}),
             "response_path": decision.response_path or "choices.0.message.content",
         }
-        logger.debug("初始化会话规划模型：模型=%s", client_config.get("model"))
+        logger.debug("[规划器] 初始化会话规划模型")
         return AIClient(log_label="planner", app_config=self.app_config, **client_config)
 
     def _assistant_name(self) -> str:
@@ -456,10 +456,7 @@ class ConversationPlanner:
         try:
             execution_key = context.execution_key if context else get_execution_key(event)
             if context and context.trace_id:
-                logger.info(
-                    "开始会话规划：%s",
-                    format_trace_log(trace_id=context.trace_id, session_key=execution_key, message_id=event.message_id),
-                )
+                logger.info("[规划器] 开始会话规划")
 
             async def run_chat():
                 return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
@@ -477,22 +474,12 @@ class ConversationPlanner:
                 response = await run_chat()
             plan = self._parse_plan(response.content, event=event, context=context)
             if context and context.trace_id:
-                temporal = getattr(context, "temporal_context", None)
-                logger.info(
-                    "会话规划完成：%s action=%s recent_gap_bucket=%s conversation_gap_bucket=%s session_gap_bucket=%s continuity_hint=%s reply_reference=%s",
-                    format_trace_log(trace_id=context.trace_id, session_key=execution_key, message_id=event.message_id),
-                    plan.action,
-                    str(getattr(temporal, "recent_gap_bucket", "unknown") or "unknown"),
-                    str(getattr(temporal, "conversation_gap_bucket", "unknown") or "unknown"),
-                    str(getattr(temporal, "session_gap_bucket", "unknown") or "unknown"),
-                    str(getattr(temporal, "continuity_hint", "unknown") or "unknown"),
-                    str(plan.reply_reference or "").strip(),
-                )
+                logger.info("[规划器] 会话规划完成")
             return plan
         except asyncio.CancelledError:
             raise
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("会话规划失败，改用回退策略：%s", exc)
+            logger.warning("[规划器] 会话规划失败，改用回退")
             return self._build_fallback_plan(event, str(exc))
 
     async def close(self) -> None:

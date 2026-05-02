@@ -72,7 +72,7 @@ class ProactiveShareScheduler:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("主动分享检查异常：%s", exc)
+                logger.debug("[主动分享] 主动分享检查异常")
 
     async def _check_and_share(self) -> None:
         if not self.enabled or self._host is None:
@@ -112,11 +112,11 @@ class ProactiveShareScheduler:
             if send_func and callable(send_func):
                 await send_func(content=content, source=str(share.get("source", "insight")))
             elif reply_pipeline:
-                logger.debug("主动分享：%s", content)
+                logger.debug("[主动分享] 主动分享")
             self.store.mark_sent(share_id)
             self.store.set_global_cooldown(self.cooldown_hours)
             self.record_interaction()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.debug("发送主动分享失败：%s", exc)
+            logger.debug("[主动分享] 发送主动分享失败")

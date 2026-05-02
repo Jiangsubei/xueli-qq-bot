@@ -49,7 +49,7 @@ class BotBootstrapper:
         model_invocation_router: Optional[ModelInvocationRouter] = None,
     ) -> BotRuntimeComponents:
         app_config = self.config.validate()
-        logger.info("开始启动助手：%s", self.config.get_assistant_name())
+        logger.info("[启动] 开始启动助手")
         self._log_runtime_config()
 
         memory_manager = await self._initialize_memory_manager(
@@ -134,7 +134,7 @@ class BotBootstrapper:
     ):
         app_config = self.config.app
         memory_config = app_config.memory
-        logger.info("记忆模块：%s", "已启用" if memory_config.enabled else "未启用")
+        logger.info("[启动] 记忆模块：%s" % ("已启用" if memory_config.enabled else "未启用"))
 
         if not memory_config.enabled:
             return None
@@ -148,9 +148,9 @@ class BotBootstrapper:
         main_ai_configured = is_ai_service_configured(app_config)
 
         if dedicated_extraction_configured:
-            logger.info("记忆提取模型：专用模型=%s", memory_client_config.get("model"))
+            logger.info("[启动] 记忆提取模型：专用模型已配置")
         elif main_ai_configured:
-            logger.info("记忆提取模型：未配置专用模型，直接使用主模型=%s", main_ai_client_config.get("model"))
+            logger.info("[启动] 记忆提取模型：使用主模型")
         else:
             logger.warning("记忆提取模型不可用：专用模型与主模型均未配置完成")
         logger.info(
@@ -300,7 +300,7 @@ class BotBootstrapper:
                 except Exception as exc:
                     if not main_available:
                         raise
-                    logger.warning("专用记忆提取模型调用失败，回退主模型：%s", exc)
+                    logger.warning("[启动] 专用记忆提取模型调用失败，回退主模型")
 
             if not main_available:
                 raise RuntimeError("主模型未配置，无法执行记忆提取")
@@ -333,11 +333,11 @@ class BotBootstrapper:
         adapter_config = self.config.app.adapter_connection
         adapter_name = str(getattr(adapter_config, "adapter", "napcat") or "napcat").strip().lower() or "napcat"
         if adapter_name in {"api", "openapi"}:
-            logger.info("准备启动 adapter：%s（平台=%s）", adapter_name, getattr(adapter_config, "platform", "api") or "api")
+            logger.info("[启动] 准备启动 adapter：%s" % adapter_name)
             return create_adapter(adapter_name, on_connect=on_connect, on_disconnect=on_disconnect)
 
         host, port = self._parse_ws_endpoint()
-        logger.info("准备启动 adapter：%s ws://%s:%s", adapter_name, host, port)
+        logger.info("[启动] 准备启动 adapter：%s" % adapter_name)
         return create_adapter(
             adapter_name,
             host=host,

@@ -62,7 +62,7 @@ class MemoryBackgroundCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("同步人物事实失败：用户=%s，错误=%s", user_id, exc)
+            logger.warning("[后台协调] 同步人物事实失败")
 
     async def _save_conversation_and_summary(
         self,
@@ -150,11 +150,11 @@ class MemoryBackgroundCoordinator:
                     force=force,
                 )
                 if result:
-                    logger.debug("对话会话已保存：用户=%s，会话=%s", user_id, result.session_id)
+                    logger.debug("[后台协调] 对话会话已保存")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("保存对话会话失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
+                logger.error("[后台协调] 保存对话会话失败")
 
         task_name = f"memory-save-{session_id or dialogue_key or user_id}"
         return self.task_manager.create_task(save_conversation(), name=task_name)
@@ -193,10 +193,10 @@ class MemoryBackgroundCoordinator:
         session_id: Optional[str] = None,
     ) -> List[MemoryItem]:
         if not self.auto_extract_memory:
-            logger.debug("自动记忆提取未启用：用户=%s", user_id)
+            logger.debug("[后台协调] 自动记忆提取未启用")
             return []
         if not self.extractor:
-            logger.debug("记忆提取器不可用：用户=%s", user_id)
+            logger.debug("[后台协调] 记忆提取器不可用")
             return []
 
         resolved_session_id = self._resolve_session_id(
@@ -248,11 +248,11 @@ class MemoryBackgroundCoordinator:
                     session_id=session_id,
                 )
                 if memories:
-                    logger.debug("后台记忆提取完成：用户=%s，写入=%s 条", user_id, len(memories))
+                    logger.debug("[后台协调] 后台记忆提取完成")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("后台记忆提取任务失败：用户=%s，错误=%s", user_id, exc, exc_info=True)
+                logger.error("[后台协调] 后台记忆提取任务失败")
 
         task_name = f"memory-extract-{session_id or dialogue_key or user_id}"
         return self.task_manager.create_task(extract(), name=task_name)
@@ -392,7 +392,7 @@ class MemoryBackgroundCoordinator:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning("记忆消化循环异常：%s", exc, exc_info=True)
+                    logger.warning("[后台协调] 记忆消化循环异常")
 
         self._digestion_task = asyncio.create_task(run_loop())
 
@@ -411,7 +411,7 @@ class MemoryBackgroundCoordinator:
         if not user_ids:
             return
 
-        logger.debug("记忆消化开始扫描：用户数=%s", len(user_ids))
+        logger.debug("[后台协调] 记忆消化开始扫描")
         insight_count = 0
         for user_id in user_ids:
             try:
@@ -425,14 +425,14 @@ class MemoryBackgroundCoordinator:
                         metadata={"insight_type": "digested", "insight_source": "periodic_digestion"},
                     )
                     insight_count += 1
-                    logger.info("记忆消化发现 insight：用户=%s，内容=%s", user_id, insight[:80])
+                    logger.info("[后台协调] 记忆消化发现 insight")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("记忆消化处理用户 %s 失败：%s", user_id, exc)
+                logger.debug("[后台协调] 记忆消化处理用户失败")
 
         if insight_count > 0:
-            logger.info("记忆消化本轮完成：发现 %s 条 insight", insight_count)
+            logger.info("[后台协调] 记忆消化本轮完成")
 
     async def _generate_insight(self, user_id: str) -> Optional[str]:
         """使用 LLM 从近期记忆中生成 insight。返回 insight 文本或 None。"""
@@ -466,10 +466,10 @@ class MemoryBackgroundCoordinator:
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
-            logger.debug("记忆消化 LLM 超时：用户=%s", user_id)
+            logger.debug("[后台协调] 记忆消化 LLM 超时")
             return None
         except Exception as exc:
-            logger.debug("记忆消化 LLM 失败：用户=%s，错误=%s", user_id, exc)
+            logger.debug("[后台协调] 记忆消化 LLM 失败")
             return None
 
     def _parse_insight_response(self, content: str) -> Optional[str]:

@@ -39,7 +39,7 @@ class NapCatConnection:
         self._last_heartbeat = 0
 
     async def start_server(self):
-        logger.info("启动 WebSocket 服务：ws://%s:%s", self.host, self.port)
+        logger.info("[NapCat] 启动 WebSocket 服务")
 
         try:
             self.server = await websockets.serve(
@@ -49,23 +49,23 @@ class NapCatConnection:
                 ping_interval=None,
                 ping_timeout=None,
             )
-            logger.info("WebSocket 服务已启动：ws://%s:%s", self.host, self.port)
-            logger.info("等待 NapCat 连接")
+            logger.info("[NapCat] WebSocket 服务已启动")
+            logger.info("[NapCat] 等待连接")
             await self.server.wait_closed()
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("WebSocket 服务启动失败：%s", e)
+            logger.error("[NapCat] WebSocket 服务启动失败")
             raise
 
     async def _handle_connection(self, websocket: WebSocketServerProtocol, path: str = None):
         del path
         client_addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-        logger.info("NapCat 已连接：%s", client_addr)
+        logger.info("[NapCat] 已连接")
 
         if self.websocket is not None and self.websocket != websocket:
-            logger.warning("检测到旧连接，准备断开")
+            logger.warning("[NapCat] 检测到旧连接，准备断开")
             try:
                 await self.websocket.close()
             except ConnectionClosed:
@@ -73,7 +73,7 @@ class NapCatConnection:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug("关闭旧连接时出错：%s", e)
+                logger.debug("[NapCat] 关闭旧连接时出错")
 
         self.websocket = websocket
         self._connected = True
@@ -86,9 +86,9 @@ class NapCatConnection:
         except ConnectionClosed:
             logger.debug("WebSocket 连接已关闭")
         except Exception as e:
-            logger.error("接收消息失败：%s", e)
+            logger.error("[NapCat] 接收消息失败")
         finally:
-            logger.info("NapCat 已断开：%s", client_addr)
+            logger.info("[NapCat] 已断开")
             self._connected = False
             self.websocket = None
 
@@ -108,7 +108,7 @@ class NapCatConnection:
     async def _handle_message(self, message: str):
         try:
             data = json.loads(message)
-            logger.debug("收到事件: post_type=%s", data.get("post_type"))
+            logger.debug("[NapCat] 收到事件")
 
             if data.get("post_type") == "meta_event":
                 await self._handle_meta_event(data)
@@ -118,9 +118,9 @@ class NapCatConnection:
                 await self._safe_callback(self.on_message, data)
 
         except json.JSONDecodeError as e:
-            logger.error("事件 JSON 解析失败：%s", e)
+            logger.error("[NapCat] 事件 JSON 解析失败")
         except Exception as e:
-            logger.error("处理事件失败：%s", e)
+            logger.error("[NapCat] 处理事件失败")
 
     async def _handle_meta_event(self, data: Dict[str, Any]):
         meta_event_type = data.get("meta_event_type")
@@ -128,7 +128,7 @@ class NapCatConnection:
             logger.debug("收到心跳")
         elif meta_event_type == "lifecycle":
             sub_type = data.get("sub_type")
-            logger.debug("生命周期事件：%s", sub_type)
+            logger.debug("[NapCat] 生命周期事件")
 
     async def _check_heartbeat(self):
         now = time.time()
@@ -147,7 +147,7 @@ class NapCatConnection:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("发送消息失败：%s", e)
+            logger.error("[NapCat] 发送消息失败")
             return False
 
     async def disconnect(self):
@@ -158,7 +158,7 @@ class NapCatConnection:
             try:
                 await self.websocket.close()
             except Exception as e:
-                logger.debug("关闭连接时出错：%s", e)
+                logger.debug("[NapCat] 关闭连接时出错")
             finally:
                 self.websocket = None
 
@@ -167,7 +167,7 @@ class NapCatConnection:
                 self.server.close()
                 await self.server.wait_closed()
             except Exception as e:
-                logger.debug("关闭服务时出错：%s", e)
+                logger.debug("[NapCat] 关闭服务时出错")
 
         logger.info("WebSocket 服务已关闭")
 
@@ -184,4 +184,4 @@ class NapCatConnection:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("回调执行失败：%s", e)
+            logger.error("[NapCat] 回调执行失败")

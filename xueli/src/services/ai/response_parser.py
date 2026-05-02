@@ -33,8 +33,8 @@ class AIResponseParser:
             if fallback_value is not None:
                 return self._stringify_content(fallback_value)
 
-        logger.error("[%s] 提取响应内容失败：路径=%s", self.log_label, self.response_path)
-        logger.debug("[%s] 响应预览：%s", self.log_label, str(data)[:300])
+        logger.error("[AI解析] 提取响应内容失败")
+        logger.debug("[AI解析] 响应预览")
         return ""
 
     def parse(self, data: Dict[str, Any]) -> AIResponse:
@@ -56,8 +56,8 @@ class AIResponseParser:
                 raw_response=data,
             )
         except Exception as exc:
-            logger.error("[%s] 解析响应失败：%s", self.log_label, exc)
-            logger.debug("[%s] 响应预览：%s", self.log_label, str(data)[:200])
+            logger.error("[AI解析] 解析响应失败")
+            logger.debug("[AI解析] 响应预览")
             return AIResponse(
                 content=str(data)[:1000],
                 model=self.default_model,

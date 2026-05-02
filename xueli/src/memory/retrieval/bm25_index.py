@@ -113,7 +113,7 @@ class BM25Index:
     def build_index(self, user_id: str, memories: List[MemoryItem]) -> bool:
         """为指定用户构建 BM25 索引。"""
         if not memories:
-            logger.debug("跳过 BM25 构建：用户=%s，原因=无记忆", user_id)
+            logger.debug("[BM25] 跳过 BM25 构建，原因=无记忆")
             self._indices[user_id] = IndexData(
                 memories=[],
                 tokenized_docs=[],
@@ -132,12 +132,12 @@ class BM25Index:
                 fallback_only=bm25 is None,
             )
             if bm25 is None:
-                logger.debug("BM25 索引已降级为回退检索：用户=%s，记忆数=%s", user_id, len(memories))
+                logger.debug("[BM25] BM25 索引已降级为回退检索")
                 return True
-            logger.debug("BM25 索引已构建：用户=%s，记忆数=%s", user_id, len(memories))
+            logger.debug("[BM25] BM25 索引已构建")
             return True
         except Exception as e:
-            logger.error("BM25 构建失败：用户=%s，错误=%s", user_id, e, exc_info=True)
+            logger.error("[BM25] BM25 构建失败")
             return False
 
     def search(
@@ -151,7 +151,7 @@ class BM25Index:
         index_data = self._indices.get(user_id)
 
         if not index_data:
-            logger.debug("BM25 索引不可用：用户=%s", user_id)
+            logger.debug("[BM25] BM25 索引不可用")
             return []
 
         if not index_data.memories:
@@ -168,7 +168,7 @@ class BM25Index:
                 results.sort(key=lambda item: item[1], reverse=True)
                 return results[:top_k]
 
-            logger.debug("BM25 回退检索：用户=%s", user_id)
+            logger.debug("[BM25] BM25 回退检索")
             return self._fallback_search(
                 memories=index_data.memories,
                 tokenized_docs=index_data.tokenized_docs,
@@ -178,7 +178,7 @@ class BM25Index:
                 min_score=min_score,
             )
         except Exception as e:
-            logger.error("BM25 检索失败：用户=%s，错误=%s", user_id, e, exc_info=True)
+            logger.error("[BM25] BM25 检索失败")
             return []
 
     def _fallback_search(
@@ -247,7 +247,7 @@ class BM25Index:
         """让指定用户的索引失效。"""
         if user_id in self._indices:
             del self._indices[user_id]
-            logger.debug("BM25 索引已失效：用户=%s", user_id)
+            logger.debug("[BM25] BM25 索引已失效")
 
 
 @dataclass

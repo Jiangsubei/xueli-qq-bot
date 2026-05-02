@@ -180,7 +180,7 @@ class EmojiReplyService:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("表情包回复意图判断失败：%s", exc)
+            logger.warning("[表情服务] 表情包回复意图判断失败")
             return EmojiReplyDecision(should_send=False, reason=f"decision_error:{exc}")
 
         data = self._extract_json_object(getattr(response, "content", ""))

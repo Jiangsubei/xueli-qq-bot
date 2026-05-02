@@ -75,7 +75,7 @@ class ConversationSessionManager:
         for key in stale_keys:
             self._conversations.pop(key, None)
         if stale_keys:
-            logger.debug("清理了 %s 个过期会话", len(stale_keys))
+            logger.debug("[会话管理器] 清理过期会话")
 
     def count_active(self) -> int:
         return len(self._conversations)
@@ -93,7 +93,7 @@ class ConversationSessionManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("加载历史会话失败：%s，错误=%s", key, exc)
+            logger.warning("[会话管理器] 加载历史会话失败")
             return
         dialogue_key = self._dialogue_key_from_session_key(key)
         for record in sessions:
@@ -130,7 +130,7 @@ class ConversationSessionManager:
                             message_id=msg_id,
                             restored=True,
                         )
-                logger.debug("已恢复历史会话：key=%s，轮次=%s", key, record.turn_count)
+                logger.debug("[会话管理器] 已恢复历史会话")
                 return
 
     def _extract_user_id_from_key(self, key: str) -> str:

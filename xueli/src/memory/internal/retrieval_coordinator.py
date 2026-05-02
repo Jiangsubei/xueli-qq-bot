@@ -879,7 +879,7 @@ class MemoryRetrievalCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("加载记忆关联对话失败：%s", exc)
+            logger.warning("[检索协调] 加载记忆关联对话失败")
             return []
         if record is None:
             return []

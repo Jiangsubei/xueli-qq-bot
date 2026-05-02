@@ -440,12 +440,7 @@ class ConversationPlanCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "规划前图片分析失败：消息ID=%s，错误=%s",
-                event.message_id,
-                exc,
-                exc_info=True,
-            )
+            logger.warning("[协调器] 规划前图片分析失败")
             return {
                 "per_image_descriptions": [],
                 "merged_description": "",

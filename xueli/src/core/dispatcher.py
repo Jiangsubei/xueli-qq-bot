@@ -169,7 +169,7 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error("标准消息归一化失败: %s", e, exc_info=True)
+                logger.error("[调度器] 标准消息归一化失败")
 
         for preprocessor in self.preprocessors:
             try:
@@ -180,15 +180,11 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(
-                    "预处理器执行失败: 名称=%s, 错误=%s",
-                    getattr(preprocessor, "__name__", preprocessor.__class__.__name__),
-                    e,
-                )
+                logger.error("[调度器] 预处理器执行失败")
 
         if not ctx.should_handle:
             await self._inc_stat("skipped_events")
-            logger.debug("事件已跳过: 原因=%s", ctx.skip_reason or "未说明")
+            logger.debug("[调度器] 事件已跳过")
             return
 
         post_type = raw_data.get("post_type", "")
@@ -211,13 +207,7 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(
-                    "处理器执行失败: 类型=%s, 名称=%s, 错误=%s",
-                    post_type,
-                    getattr(handler, "__name__", handler.__class__.__name__),
-                    e,
-                    exc_info=True,
-                )
+                logger.error("[调度器] 处理器执行失败")
 
         for postprocessor in self.postprocessors:
             try:
@@ -228,10 +218,6 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(
-                    "后处理器执行失败: 名称=%s, 错误=%s",
-                    getattr(postprocessor, "__name__", postprocessor.__class__.__name__),
-                    e,
-                )
+                logger.error("[调度器] 后处理器执行失败")
 
         await self._inc_stat("handled_events")

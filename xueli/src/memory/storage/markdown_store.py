@@ -148,7 +148,7 @@ class MemoryItem:
                 try:
                     hidden_payload = json.loads(comment_match.group(1))
                 except json.JSONDecodeError:
-                    logger.debug("解析记忆隐藏元数据失败: %s", line[:120])
+                    logger.debug("[存储] 解析记忆隐藏元数据失败")
                 continue
 
             meta_match = re.match(r"-\s*([^:]+):\s*(.+)$", line)
@@ -220,7 +220,7 @@ class MemoryItem:
                 try:
                     metadata = json.loads(parsed_meta["meta"])
                 except json.JSONDecodeError:
-                    logger.debug("解析旧版记忆元数据失败: %s", line[:120])
+                    logger.debug("[存储] 解析旧版记忆元数据失败")
 
             if "mention_count" not in metadata:
                 metadata["mention_count"] = 1
@@ -239,7 +239,7 @@ class MemoryItem:
                 owner_user_id=parsed_meta.get("owner", ""),
             )
         except (ValueError, TypeError, json.JSONDecodeError) as e:
-            logger.warning("解析记忆条目失败：错误=%s", e)
+            logger.warning("[存储] 解析记忆条目失败")
             return None
 
 
@@ -563,7 +563,7 @@ class MarkdownMemoryStore:
             incoming_importance = self._safe_float(incoming_metadata.get("importance"), current_importance)
             boosted_importance = min(5.0, max(current_importance, incoming_importance) + 1.0)
             mem.metadata["importance"] = boosted_importance
-            logger.debug("记忆已增强：用户=%s，提及次数=%s，重要度=%.1f", mem.owner_user_id or "", mention_count, boosted_importance)
+            logger.debug("[存储] 记忆已增强")
 
     async def _read_memories_async(self, file_path: Path, owner_user_id: str = "") -> List[MemoryItem]:
         if not file_path.exists():
@@ -573,7 +573,7 @@ class MarkdownMemoryStore:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
         except OSError as e:
-            logger.error("读取记忆文件失败：文件=%s，错误=%s", file_path, e)
+            logger.error("[存储] 读取记忆文件失败")
             return []
 
         memories: List[MemoryItem] = []
@@ -601,7 +601,7 @@ class MarkdownMemoryStore:
                 os.replace(tmp_path, file_path)
                 return True
             except OSError as e:
-                logger.error("写入记忆文件失败：文件=%s，错误=%s", file_path, e)
+                logger.error("[存储] 写入记忆文件失败")
                 return False
 
     async def _remove_file_if_exists(self, file_path: Path):
@@ -609,14 +609,14 @@ class MarkdownMemoryStore:
             try:
                 file_path.unlink()
             except OSError as e:
-                logger.warning("删除空归档文件失败：文件=%s，错误=%s", file_path, e)
+                logger.warning("[存储] 删除空归档文件失败")
 
     async def _sync_archive_file(self, file_path: Path, archived: List[MemoryItem], label: str):
         """同步导出软归档记忆。"""
         if archived:
             success = await self._write_memories_async(file_path, archived)
             if success:
-                logger.debug("已同步归档记忆：目标=%s，条数=%s", label, len(archived))
+                 logger.debug("[存储] 已同步归档记忆")
         else:
             await self._remove_file_if_exists(file_path)
 
@@ -680,7 +680,7 @@ class MarkdownMemoryStore:
         success = await self._write_memories_async(target_file, memories)
 
         if success:
-            logger.debug("已新增记忆：用户=%s", user_id or "")
+            logger.debug("[存储] 已新增记忆")
             return mem
         return None
 

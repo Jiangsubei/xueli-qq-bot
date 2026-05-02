@@ -33,15 +33,7 @@ class ReplyGenerationService:
     async def _request_model_reply(self, event: Any, prepared: Any) -> AIResponse:
         trace_id = prepared.message_context.trace_id if prepared.message_context else ""
         group_id = event.raw_data.get("group_id", "")
-        logger.debug(
-            "开始请求 AI：%s 用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
-            format_trace_log(trace_id=trace_id, session_key=self.host._get_conversation_key(event), message_id=event.message_id),
-            event.user_id,
-            group_id,
-            len(prepared.base64_images),
-            len(prepared.related_history_messages),
-            self.pipeline._should_use_multimodal_reply(prepared.base64_images),
-        )
+        logger.debug("[回复生成] 开始请求 AI")
         return await self._chat_with_tools(
             messages=prepared.messages,
             user_id=str(event.user_id),
@@ -75,12 +67,7 @@ class ReplyGenerationService:
         visible_text = "\n".join(segments).strip()
         trace_id = prepared.message_context.trace_id if prepared.message_context else ""
         if raw_text.startswith("[") and segments:
-            logger.info(
-                "结构化回复解析：%s segments=%s raw=%s",
-                format_trace_log(trace_id=trace_id, session_key=self.host._get_conversation_key(event), message_id=getattr(event, "message_id", "")),
-                len(segments),
-                preview_json_for_log(raw_text),
-            )
+            logger.info("[回复生成] 结构化回复解析")
         return AIResponse(
             content=visible_text,
             segments=segments,
