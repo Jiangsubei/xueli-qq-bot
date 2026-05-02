@@ -330,7 +330,6 @@ class BotRuntime:
                     else:
                         target_id = str(current_event.raw_data.get("group_id", ""))
                 await self.message_handler.check_rate_limit(target_id)
-                await self.message_handler.check_rate_limit(target_id)
 
                 # 阶段4：回复生成 — 调用 AI 生成回复内容
                 logger.debug("[运行时] 开始生成回复")

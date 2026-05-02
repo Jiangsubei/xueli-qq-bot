@@ -28,7 +28,7 @@ class RepeatEchoService:
         self._lock = lock  # type: asyncio.Lock
 
     @staticmethod
-    def _normalize_text(text: str) -> str:
+    def normalize_text(text: str) -> str:
         return re.sub(r"\s+", " ", str(text or "").strip())
 
     def is_candidate(self, event: MessageEvent, text: str, *, is_direct_mention: bool, has_image: bool) -> bool:
@@ -38,7 +38,7 @@ class RepeatEchoService:
             return False
         if is_direct_mention or has_image:
             return False
-        normalized = self._normalize_text(text)
+        normalized = self.normalize_text(text)
         if not normalized or normalized.startswith("/"):
             return False
         return 2 <= len(normalized) <= 20
@@ -50,7 +50,7 @@ class RepeatEchoService:
         *,
         normalize_text_fn=None,
     ) -> Optional[str]:
-        normalized = normalize_text_fn(display_text) if normalize_text_fn else self._normalize_text(display_text)
+        normalized = normalize_text_fn(display_text) if normalize_text_fn else self.normalize_text(display_text)
         if not self._app_config.group_reply.repeat_echo_enabled:
             return None
 

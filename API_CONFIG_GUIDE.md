@@ -125,18 +125,26 @@ response_path = "output.choices.0.message.content"
 
 ## 提示词模板结构
 
-当前版本的主提示词不再全部硬编码在 Python 里，而是拆成模板文件：
+当前版本的主提示词不再全部硬编码在 Python 里，而是拆成 11 个模板文件：
 
 - `xueli/prompts/zh-CN/planner.prompt`
 - `xueli/prompts/zh-CN/timing_gate.prompt`
 - `xueli/prompts/zh-CN/reply.prompt`
+- `xueli/prompts/zh-CN/reply_constraint.prompt`
+- `xueli/prompts/zh-CN/vision.prompt`
+- `xueli/prompts/zh-CN/vision_emotion.prompt`
+- `xueli/prompts/zh-CN/emoji_reply.prompt`
+- `xueli/prompts/zh-CN/relationship_tone.prompt`
+- `xueli/prompts/zh-CN/rerank.prompt`
+- `xueli/prompts/zh-CN/reflection.prompt`
+- `xueli/prompts/zh-CN/insight_digestion.prompt`
 
 运行时通过 `xueli/src/core/prompt_templates.py` 加载，并由各自服务补充动态 section。
 
 目前的职责划分是：
 
-- planner：判断 `reply / wait / ignore`，输出 `PromptPlan` 和 `reply_reference`
-- timing gate：只判断 `continue / wait / no_reply`
+- planner：不再做 `reply / wait / ignore` 决策，而是输出"怎么回"的策略（`PromptPlan`：上下文策略、记忆策略、语气策略等）
+- timing gate：统一负责"是否回复"的节奏判断（`continue / wait / no_reply`）
 - reply：根据 `PromptPlan + MessageContext + reply_reference + style guide` 生成最终回复数组
 
 其中 `reply_reference` 是 planner 给 reply 的自然语言方向提示，只作为软指导，不参与程序硬执行。
@@ -252,7 +260,7 @@ response_path = "choices.0.message.content"
 [vision_service.extra_headers]
 ```
 
-## 群聊判断模型配置
+## 群聊规划模型配置
 
 统一会话规划模型配置位于 `group_reply_decision`。
 
@@ -262,12 +270,93 @@ response_path = "choices.0.message.content"
 
 当前回复主链里，`group_reply_decision` 负责的是：
 
-- `ConversationPlanner` 的 `reply / wait / ignore`
-- `TimingGateService` 的 `continue / wait / no_reply`
+- `ConversationPlanner` 的"怎么回"策略规划（`PromptPlan`：上下文/记忆/语气策略）
+- `TimingGateService` 的节奏判断（`continue / wait / no_reply`）
 
 它不负责生成最终用户可见回复；最终回复仍然由 `ai_service` 主模型负责。
 
-## 记忆提取模型配置
+## 记忆冲突裁决配置
+
+`memory_dispute` 控制新记忆与旧记忆发生冲突时的裁决策略：
+
+```toml
+[memory_dispute]
+enabled = true
+high_confidence_threshold = 0.75   # 高置信度阈值：超过则直接采纳新记忆
+normal_confidence_threshold = 0.45  # 普通置信度阈值
+signal_ttl_hours = 168.0          # 裁决信号有效期（小时）
+```
+
+## 角色人设成长与关系追踪
+
+`character_growth` 控制基于用户反馈的渐进式角色调整和关系追踪：
+
+```toml
+[character_growth]
+enabled = true
+explicit_feedback_threshold = 2    # 明确反馈次数阈值
+stable_signal_threshold = 6        # 稳定信号阈值
+core_trait_threshold = 5          # 核心特质阈值
+tone_preference_threshold = 3     # 语气偏好阈值
+behavior_habit_threshold = 2      # 行为习惯阈值
+# 自主情绪引擎（关闭时保持镜像用户情绪行为）
+mood_fluctuation_enabled = false
+mood_volatility = 0.3
+mood_independence_ratio = 0.7
+mood_energy_decay_per_turn = 0.05
+mood_energy_recovery_night = 0.2
+mood_show_in_reply = false
+# 关系追踪（默认开启）
+relationship_tracking_enabled = true
+intimacy_acquaintance_threshold = 0.2
+intimacy_friend_threshold = 0.5
+intimacy_close_friend_threshold = 0.8
+intimacy_gain_per_high_quality = 0.01
+intimacy_loss_per_low_quality = 0.005
+intimacy_loss_per_friction = 0.02
+friction_signals_caution_threshold = 2
+```
+
+情绪引擎 (`mood_engine`) 不再使用正弦波驱动，而是由多因素叠加涌现：
+- `user_emotion_valence`：用户当前情感倾向
+- `recent_negative_density`：近期对话负面情感密度
+- `retrieval_failure_rate`：记忆调取失败率
+- `conversation_gap_hours`：对话间隔时长
+
+日志输出格式：`[情绪] valence=... energy=... 原因: 负面对话密度=80%; 检索失败率=35%`
+
+关系追踪支持 6 个阶段：`stranger → met_before → acquaintance → friend → close_friend → intimate`，阶段变更时输出 `[关系] 阶段变更` 日志。
+
+## 记忆系统配置
+
+记忆系统支持以下核心特性：
+
+- **动态遗忘（用进废退）**：普通记忆按指数衰减，按 `core_fact`（3x半衰期）/ `important`（1.5x）/ `casual`（0.7x）分类差异化衰减
+- **冷记忆加速衰减**：超过 `cold_memory_threshold_days`（默认90天）的记忆额外加速衰减
+- **软遗忘（归档动态折扣）**：归档记忆可被检索但分数打折，折扣按 `archive_penalty_base` + 归档时长动态调整，命中召回后折扣递减
+- **情绪标记加成**：带 `emotional_tone` 的记忆衰减时获得 +0.2 留存加成
+
+关键配置字段：
+
+```toml
+[memory]
+ordinary_decay_enabled = true
+ordinary_half_life_days = 30.0     # 半衰期（天）
+ordinary_forget_threshold = 0.5    # 遗忘阈值
+cold_memory_threshold_days = 90.0  # 冷记忆阈值（超过此天数加速衰减）
+cold_decay_multiplier = 1.5        # 冷记忆衰减倍率
+archive_penalty_base = 0.5         # 归档召回基础折扣
+# 检索权重
+local_bm25_weight = 1.0
+local_importance_weight = 0.35
+local_mention_weight = 0.2
+local_recency_weight = 0.15
+local_scene_weight = 0.3
+# 场景匹配子权重
+scene_same_group_weight = 1.5
+scene_same_type_weight = 1.0
+scene_same_user_weight = 0.8
+```
 
 记忆提取配置位于 `memory`：
 
@@ -320,6 +409,12 @@ response_path = "choices.0.message.content"
 - `memory.auto_extract`
 - `memory.extract_every_n_turns`
 
+如需要情绪引擎/关系追踪等高级特性，还要确认：
+
+- `character_growth.enabled`
+- `character_growth.relationship_tracking_enabled`
+- `character_growth.mood_fluctuation_enabled`
+
 ## 故障排查
 
 ### 主模型请求失败
@@ -348,14 +443,14 @@ response_path = "choices.0.message.content"
 
 如果为空，就会自动回退到 `ai_service`。
 
-### 群聊规划模型没有生效
+### 群聊规划/节奏模型没有生效
 
 检查：
 
 - `group_reply_decision.api_base`
 - `group_reply_decision.model`
 
-如果未完整配置，群聊不会启用统一 planner / timing gate 模型，而会退回规则路径。
+如果未完整配置，planner 和 timing gate 会退回规则路径（planner 输出默认策略，timing gate 使用规则判断）。
 
 ### 图片描述没有持久化到历史
 

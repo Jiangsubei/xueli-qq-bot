@@ -434,7 +434,7 @@ class MessageHandler:
         return is_group_reply_decision_configured(self.app_config)
 
     async def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
-        display_text = self.repeat_echo_service._normalize_text(self.extract_user_message(event))
+        display_text = self.repeat_echo_service.normalize_text(self.extract_user_message(event))
         if not self.repeat_echo_service.is_candidate(
             event, display_text,
             is_direct_mention=self._is_direct_mention(event),
@@ -746,7 +746,7 @@ class MessageHandler:
             if len(msgs) >= 2:
                 previous_message_time = float(msgs[-2].get("timestamp") or 0.0)
             else:
-                previous_message_time = float(conversation.last_update or 0.0)
+                previous_message_time = float(msgs[-1].get("timestamp") or 0.0)
 
         if getattr(conversation, "restored_session_pending", False):
             previous_session_time = float(getattr(conversation, "restored_previous_session_time", 0.0) or 0.0)

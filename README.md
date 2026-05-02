@@ -7,9 +7,10 @@
 核心特点：
 
 - 🧠 **智能对话规划** – 不只会回复，还会判断“该不该回、什么时候回、怎么回”
-- 📝 **长期记忆系统** – 记住用户说过的重要信息，支持事实沉淀、会话恢复、精准召回
+- 📝 **长期记忆系统** – 记住用户说过的重要信息，支持事实沉淀、会话恢复、精准召回，记忆会真实衰减和遗忘
+- 🧠 **自主情绪引擎** – AI 的情绪不由正弦波驱动，而是从对话情感密度、记忆检索失败率等内部状态自然涌现
 - 🔌 **平台解耦** – 同样的内核，通过不同的 adapter 接入 QQ、API 等渠道
-- 🧩 **模块化设计** – 对话规划、节奏控制、记忆检索、风格策略均可独立配置
+- 🧩 **模块化设计** – 对话规划、节奏控制、记忆检索、风格策略、情绪引擎均可独立配置
 - 🌐 **本地 WebUI** – 提供可视化控制台，方便调试和管理
 - 📡 **开放 API 接入层** – 允许第三方服务通过 HTTP 调用机器人能力
 
@@ -26,7 +27,7 @@
 | 提示词模板体系 | `planner / timing gate / reply` 主提示词已拆成模板文件，便于维护和调试 |
 | 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
 | 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
-| 多层记忆 | ```人物事实 / 会话摘要 / 用户偏好 ``` 明文存储；具有动态遗忘（用进废退）、软遗忘（归档记忆可打折召回）、情绪标记、离线消化归纳和向量语义联想等拟人化记忆特性 |
+| 多层记忆 | 三层记忆（person_fact / chat_summary / conversation_recall），Markdown + SQLite 明文存储；拟人化记忆：动态遗忘（用进废退、分类半衰期、冷记忆加速衰减）、软遗忘（归档记忆动态折扣+召回恢复）、情绪标记（emotional_tone bonus +0.2）、离线消化、语义向量联想；[归档激活]/[情绪] 等因果日志 |
 | 图片理解 | 通过视觉模型分析图片内容，增强回复内容；普通图片只做理解，不落入表情仓库，也不会被机器人主动重新发送 |
 | 表情互动 | 只使用平台原生表情能力（OneBot / NapCat `face` / `mface`），不再把本地图片当作表情包主动发出 |
 | WebUI | 实时查看会话状态、记忆内容、日志，支持在线配置 |
@@ -55,7 +56,7 @@ source venv/bin/activate        # Linux/macOS
 venv\Scripts\activate           # Windows
 
 # 安装依赖
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ### 配置
@@ -97,7 +98,7 @@ bash start.sh
 项目包含单元测试，可以快速验证环境：
 
 ```bash
-python -m unittest discover -s xueli/tests -t xueli
+.venv/bin/python -m unittest discover -s xueli/tests -t xueli
 ```
 
 ---
@@ -187,6 +188,8 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/core/dispatcher.py`
 - `xueli/src/core/config.py`
 - `xueli/src/core/models.py`
+- `xueli/src/core/mood_engine.py`  # 自主情绪引擎
+- `xueli/src/core/model_invocation_router.py`  # 模型调用路由
 - `xueli/src/core/prompt_templates.py`
 - `xueli/src/core/reply_send_orchestrator.py`
 - `xueli/src/core/platform_models.py`
@@ -219,7 +222,8 @@ export API_RUNTIME_PORT=8765
 - `xueli/src/handlers/reply_prompt_renderer.py`
 - `xueli/src/handlers/reply_generation_service.py`
 - `xueli/src/handlers/reply_style_policy.py`
-- `xueli/src/handlers/character_card_service.py`  # 角色卡服务
+- `xueli/src/handlers/character_card_service.py`  # 角色卡 + 关系追踪
+- `xueli/src/handlers/prompt_planner.py`  # PromptPlan V2 默认值与解析
 
 ## 😀 图片与表情的当前边界
 
@@ -234,33 +238,40 @@ export API_RUNTIME_PORT=8765
   - 只采集和存储 OneBot / NapCat 原生 `face / mface` 引用
   - 表情跟进也只会走 `face / mface`
   - 如果没有合适的原生表情资源，就直接不发非文本内容
-- `xueli/src/handlers/conversation_engagement.py`
-- `xueli/src/handlers/conversation_plan_coordinator.py`  # 群聊历史窗口管理
-- `xueli/src/handlers/prompt_planner.py`  # PromptPlan V2 默认值与解析
-- `xueli/src/handlers/temporal_context.py`
 
 ### 提示词模板
 
 - `xueli/prompts/zh-CN/planner.prompt`
 - `xueli/prompts/zh-CN/timing_gate.prompt`
 - `xueli/prompts/zh-CN/reply.prompt`
+- `xueli/prompts/zh-CN/reply_constraint.prompt`
+- `xueli/prompts/zh-CN/vision.prompt`
+- `xueli/prompts/zh-CN/vision_emotion.prompt`
+- `xueli/prompts/zh-CN/emoji_reply.prompt`
+- `xueli/prompts/zh-CN/relationship_tone.prompt`
+- `xueli/prompts/zh-CN/rerank.prompt`
+- `xueli/prompts/zh-CN/reflection.prompt`
+- `xueli/prompts/zh-CN/insight_digestion.prompt`
 
-当前实现采用“主模板文件 + 代码内 section 注入”的折中结构：
+当前实现采用"主模板文件 + 代码内 section 注入"的折中结构：
 
 - planner / timing gate / reply 的主 prompt 在模板文件中维护
 - 较小的动态 block 仍由 `ReplyPromptRenderer`、`ReplyStylePolicy` 和 planner user prompt 在代码里拼接
 - `reply_reference` 是 planner 给 reply 的软指导，不会被程序硬执行
 
+planner 已不再做 `reply/wait/ignore` 决策，仅输出"怎么回"的策略（`PromptPlan`：上下文策略、记忆策略、语气策略等）。"是否回"的节奏判断由 `TimingGateService` 统一负责。
+
 ### 记忆系统
 
 记忆存储基于 Markdown 明文 + SQLite，支持三层记忆（人物事实 / 重要记忆 / 普通记忆），并具有以下拟人化特性：
 
-- **动态遗忘（用进废退）** — 普通记忆按指数衰减公式计算有效重要度，检索命中的记忆自动强化（`last_recalled_at` + `mention_count`），长时间不用则自然衰减归档
-- **软遗忘** — 归档记忆仍可被 BM25 索引检索到，但分数打折（50%），AI 偶尔能说"我好像快忘了…"
-- **情绪标记** — 记忆提取时 LLM 推断对话情绪的 `emotional_tone`，检索时根据用户当前情绪加权匹配（相同情绪 +10%，互补情绪 +5%）
+- **动态遗忘（用进废退）** — 普通记忆按指数衰减公式计算有效重要度，`core_fact` (3x半衰期)/`important` (1.5x)/`casual` (0.7x) 分类差异化衰减；检索命中的记忆自动强化（`last_recalled_at` + `mention_count`），长时间不用则自然衰减归档
+- **冷记忆加速衰减** — 超过 `cold_memory_threshold_days`（默认90天）的记忆触发额外加速衰减
+- **软遗忘（归档动态折扣）** — 归档记忆仍可被 BM25 索引检索到，但分数打折扣（基础 `archive_penalty_base`，按归档时长/召回次数动态调整）；[归档激活] 日志记录归档记忆被重新唤醒
+- **情绪标记** — 记忆提取时 LLM 推断对话情绪的 `emotional_tone`，带情绪的记忆衰减时获得 +0.2 留存加成
 - **重构输出** — 注入 prompt 时对普通记忆加"用你自己的话自然融入"转述指令，避免背诵感
-- **离线消化** — 每 6 小时自动扫描近期记忆，通过 LLM 归纳模式/趋势/变化，生成 insight 存入重要记忆
-- **语义向量联想** — 基于字符 n-gram 的轻量向量索引，与 BM25 混合检索（权重 0.6:0.4），零外部依赖
+- **离线消化** — 自动扫描近期记忆，通过 LLM 归纳模式/趋势/变化，生成 insight 存入重要记忆
+- **语义向量联想** — 基于字符 n-gram 的轻量向量索引，与 BM25 混合检索，零外部依赖
 
 核心模块：
 

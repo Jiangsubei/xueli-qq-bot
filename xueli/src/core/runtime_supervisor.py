@@ -89,9 +89,11 @@ class BotRuntimeSupervisor:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
                     pass
-            raise
+                raise
 
         self._state = "running"
         return {"state": self._state, "message": "助手服务已启动"}
