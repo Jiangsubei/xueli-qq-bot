@@ -387,16 +387,12 @@ class BotRuntime:
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             await self._release_window_on_error(plan, trace_log)
-            if plan is not None and plan.should_reply:
-                await self._send_error_fallback(current_event, "抱歉，这次处理超时了，请稍后再试。", trace_log, trace_id)
         except (SendError, ModelRequestError, ModelParseError, ImageProcessingError, MemoryOperationError, PipelineExecutionError) as exc:
             category = classify_pipeline_error(exc)
             logger.error("处理消息事件失败：%s category=%s 错误=%s", trace_log, category, exc, exc_info=True)
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
             await self._release_window_on_error(plan, trace_log)
-            if plan is not None and plan.should_reply:
-                await self._send_error_fallback(current_event, "抱歉，这次处理消息时出了点问题。", trace_log, trace_id)
 
     async def _send_response(self, event: MessageEvent, reply: Any, plan: Any = None, trace_id: str = "") -> bool:
         # stale 检查：发送前检查窗口是否已过期或已被 superseded

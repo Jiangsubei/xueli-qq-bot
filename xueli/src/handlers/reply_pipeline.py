@@ -285,7 +285,7 @@ class ReplyPipeline:
             raise
         except Exception as exc:
             logger.error("回复流程异常：%s category=%s 错误=%s", trace_log, classify_pipeline_error(exc), exc, exc_info=True)
-            return ReplyResult(text="处理消息时出错，请稍后再试。", segments=["处理消息时出错，请稍后再试。"], source="fallback")
+            return ReplyResult(text="", segments=[], source="error_suppressed")
 
     async def _download_images_if_needed(self, event: MessageEvent) -> List[str]:
         if not self._event_has_image(event) or not self._vision_enabled():
@@ -1095,7 +1095,7 @@ class ReplyPipeline:
             return None
         if self._has_usable_vision_analysis(vision_analysis):
             return None
-        return "抱歉我现在看不清图片呢。"
+        return ""
 
     def _has_usable_vision_analysis(self, vision_analysis: Dict[str, Any]) -> bool:
         if not vision_analysis:
