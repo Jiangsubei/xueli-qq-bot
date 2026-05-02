@@ -239,7 +239,8 @@ class CharacterCardService:
     def _load_payload(self, user_id: str) -> Dict[str, object]:
         file_path = self._file_path(user_id)
         try:
-            return json.loads(file_path.read_text(encoding="utf-8"))
+            raw = file_path.read_text(encoding="utf-8")
+            return json.loads(raw)
         except (FileNotFoundError, json.JSONDecodeError):
             return {"explicit_feedback": [], "stable_signals": [], "snapshot": {}}
 
@@ -247,5 +248,6 @@ class CharacterCardService:
         file_path = self._file_path(user_id)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        json_content = json.dumps(payload, ensure_ascii=False, indent=2)
+        tmp_path.write_text(json_content, encoding="utf-8")
         os.replace(tmp_path, file_path)

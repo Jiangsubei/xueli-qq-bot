@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import re
-from functools import lru_cache
 from pathlib import Path
 from string import Formatter
 from typing import Any
@@ -19,18 +19,40 @@ class PromptTemplateLoader:
     def __init__(self, *, locale: str = "zh-CN") -> None:
         self.locale = locale
         self._formatter = Formatter()
+        self._cache: dict[str, str] = {}
+        self._preloaded = False
 
     @property
     def templates_dir(self) -> Path:
         return Path(__file__).resolve().parents[2] / "prompts" / self.locale
 
-    @lru_cache(maxsize=32)
+    def _preload_templates(self) -> None:
+        if self._preloaded:
+            return
+        self._preloaded = True
+        try:
+            for path in self.templates_dir.iterdir():
+                if path.suffix == ".prompt":
+                    name = path.name
+                    if name not in self._cache:
+                        raw = path.read_text(encoding="utf-8")
+                        self._cache[name] = self._normalize_spacing(self._strip_comments(raw))
+        except Exception:
+            pass
+
     def load(self, name: str) -> str:
+        if name in self._cache:
+            return self._cache[name]
+        self._preload_templates()
+        if name in self._cache:
+            return self._cache[name]
         template_path = self.templates_dir / name
         if not template_path.exists():
             raise FileNotFoundError(f"Prompt template not found: {template_path}")
         raw = template_path.read_text(encoding="utf-8")
-        return self._normalize_spacing(self._strip_comments(raw))
+        result = self._normalize_spacing(self._strip_comments(raw))
+        self._cache[name] = result
+        return result
 
     def render(self, name: str, **fields: Any) -> str:
         template = self.load(name)

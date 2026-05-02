@@ -203,8 +203,6 @@ class MessageEvent(OneBotEvent):
     message: List[MessageSegment] = field(default_factory=list)
     raw_message: str = ""
     font: int = 0  # OneBot-specific; deprecated
-    # 群聊特有
-    group_id: Optional[int] = None
     anonymous: Optional[Dict[str, Any]] = None  # OneBot-specific; deprecated
 
     @classmethod
@@ -229,7 +227,6 @@ class MessageEvent(OneBotEvent):
             message=message,
             raw_message=data.get("raw_message", ""),
             font=data.get("font", 0),
-            group_id=data.get("group_id"),
             anonymous=data.get("anonymous")
         )
 

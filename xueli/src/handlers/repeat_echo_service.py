@@ -32,7 +32,7 @@ class RepeatEchoService:
         return re.sub(r"\s+", " ", str(text or "").strip())
 
     def is_candidate(self, event: MessageEvent, text: str, *, is_direct_mention: bool, has_image: bool) -> bool:
-        if event.message_type != MessageType.GROUP.value or event.group_id is None:
+        if event.message_type != MessageType.GROUP.value or not event.raw_data.get("group_id"):
             return False
         if not self._app_config.group_reply.repeat_echo_enabled:
             return False
@@ -60,7 +60,7 @@ class RepeatEchoService:
             return None
         async with lock:
             now = time.time()
-            group_id = int(event.group_id or 0)
+            group_id = int(event.raw_data.get("group_id") or 0)
             key = normalized.casefold()
             window_seconds = float(self._app_config.group_reply.repeat_echo_window_seconds or 20.0)
             min_count = max(2, int(self._app_config.group_reply.repeat_echo_min_count or 2))

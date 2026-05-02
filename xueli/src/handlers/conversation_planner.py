@@ -279,7 +279,7 @@ class ConversationPlanner:
 
         parts = [
             "下面是当前这条群消息的判断上下文。",
-            f"当前会话：\n这是群 {event.group_id} 里的消息。",
+            f"当前会话：\n这是群 {event.raw_data.get('group_id', 'unknown')} 里的消息。",
             f"当前消息来自用户 {sender_label}：\n{planner_text}",
             f"原始文本：{raw_text}\n清洗后文本：{clean_text}\n消息里提到了这些名字或别名：{mentioned_names_text}\n" + "\n".join(image_context_lines),
         ]
@@ -489,6 +489,8 @@ class ConversationPlanner:
                     str(plan.reply_reference or "").strip(),
                 )
             return plan
+        except asyncio.CancelledError:
+            raise
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("会话规划失败，改用回退策略：%s", exc)
             return self._build_fallback_plan(event, str(exc))

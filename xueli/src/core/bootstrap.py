@@ -1,6 +1,7 @@
 """Bot bootstrap helpers for validation, dependency construction, and wiring."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional

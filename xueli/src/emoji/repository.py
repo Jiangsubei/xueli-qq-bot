@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,7 +52,7 @@ class EmojiRepository:
                 record.message_id = event.message_id
                 record.message_type = event.message_type
                 record.user_id = event.user_id
-                record.group_id = event.group_id
+                record.group_id = event.raw_data.get("group_id")
                 record.raw_segment = dict(segment.data or {})
                 record.sticker_kind = native_ref.get("kind", "")
                 record.native_id = self._resolve_native_id(native_ref)
@@ -79,7 +80,7 @@ class EmojiRepository:
                     message_id=event.message_id,
                     message_type=event.message_type,
                     user_id=event.user_id,
-                    group_id=event.group_id,
+                    group_id=event.raw_data.get("group_id"),
                     raw_segment=dict(segment.data or {}),
                 )
                 self._apply_inferred_emotion(record, inferred)
@@ -247,7 +248,9 @@ class EmojiRepository:
     async def _write_index(self, payload: Dict[str, Any]) -> None:
         def _write() -> None:
             self.root.mkdir(parents=True, exist_ok=True)
-            self.index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp_path = self.index_path.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp_path, self.index_path)
 
         await asyncio.to_thread(_write)
 

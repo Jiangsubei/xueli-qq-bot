@@ -29,7 +29,7 @@ def build_message_event_from_inbound(
 
 
 def _message_type_from_scope(scope: str) -> str:
-    if str(scope or "").strip().lower() in {"group", "channel"}:
+    if str(scope or "").strip().lower() in {"shared", "channel"}:
         return "group"
     return "private"
 
@@ -62,6 +62,6 @@ def _image_segment_from_attachment(attachment: AttachmentRef) -> Optional[Dict[s
 
 def _sender_payload(inbound_event: InboundEvent) -> Dict[str, Any]:
     display_name = str(inbound_event.sender.display_name or "")
-    if inbound_event.session.scope == "group":
+    if inbound_event.session.scope == "shared":
         return {"card": display_name, "nickname": display_name}
     return {"nickname": display_name, "card": display_name}

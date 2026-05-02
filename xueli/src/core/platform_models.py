@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional, Tuple
 
-SessionScope = Literal["private", "group", "channel", "api", "system", "unknown"]
+SessionScope = Literal["private", "shared", "channel", "api", "system", "unknown"]
 EventType = Literal["message", "notice", "request", "meta_event", "command", "unknown"]
 MessageKind = Literal["text", "image", "mixed", "unknown"]
 
@@ -104,7 +104,7 @@ class InboundEvent:
 
     @property
     def is_group(self) -> bool:
-        return self.session.scope == "group"
+        return self.session.scope == "shared"
 
 
 @dataclass(frozen=True)

@@ -79,7 +79,7 @@ class PlanningWindowServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_group_at_message_bypasses_window(self) -> None:
         handler = MessageHandler(conversation_planner=_FakePlanner())
-        result = await handler.planning_window_service.submit_group_event(event=self._group_event("看这里", at_bot=True))
+        result = await handler.planning_window_service.submit_event(event=self._group_event("看这里", at_bot=True))
 
         self.assertEqual(result.status, "bypassed")
         self.assertEqual(result.reason, "bypassed")

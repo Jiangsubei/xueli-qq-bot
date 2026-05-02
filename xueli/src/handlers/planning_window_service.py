@@ -59,7 +59,7 @@ class PlanningWindowService:
         )
         return result
 
-    async def submit_group_event(
+    async def submit_event(
         self,
         *,
         event: MessageEvent,
@@ -69,9 +69,9 @@ class PlanningWindowService:
         if not self.config.enabled:
             return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
         user_message = self.host.extract_user_message(event)
-        if self._should_bypass_group_window(event, user_message):
+        if self._should_bypass_window(event, user_message):
             return WindowDispatchResult(status="bypassed", reason="bypassed")
-        conversation_key = self.host.conversation_plan_coordinator._group_history_key(event)
+        conversation_key = self.host.conversation_plan_coordinator._history_key(event)
         result = await self.scheduler.submit_event(
             conversation_key=conversation_key,
             chat_mode="group",
@@ -80,7 +80,7 @@ class PlanningWindowService:
                 getattr(self.host, "group_proactive_window_seconds", self.config.group_proactive_window_seconds) or 0.0
             ),
             queue_expire_seconds=float(getattr(self.config, "queue_expire_seconds", 60.0) or 0.0),
-            message_builder=self._build_group_window_message,
+            message_builder=self._build_window_message,
             merge_builder=self._merge_window_text,
         )
         if result.status == "dispatch_window" and result.window is not None:
@@ -104,7 +104,7 @@ class PlanningWindowService:
     async def close(self) -> None:
         await self.scheduler.close()
 
-    def _should_bypass_group_window(self, event: MessageEvent, user_message: str) -> bool:
+    def _should_bypass_window(self, event: MessageEvent, user_message: str) -> bool:
         normalized = str(user_message or "").strip()
         if self.host._is_direct_mention(event):
             return True
@@ -133,7 +133,7 @@ class PlanningWindowService:
             "_event": event,
         }
 
-    def _build_group_window_message(self, event: MessageEvent) -> Dict[str, Any]:
+    def _build_window_message(self, event: MessageEvent) -> Dict[str, Any]:
         user_message = self.host.extract_user_message(event)
         return {
             "message_id": str(getattr(event, "message_id", "") or ""),

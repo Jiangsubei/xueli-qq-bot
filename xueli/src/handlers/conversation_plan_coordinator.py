@@ -59,10 +59,10 @@ class ConversationPlanCoordinator:
         self.context_window_size = max(0, int(context_window_size or 0))
         self._conversation_store = conversation_store
 
-        self.group_plan_locks: Dict[str, asyncio.Lock] = {}
+        self.conversation_plan_locks: Dict[str, asyncio.Lock] = {}
         max_parallel = max(1, int(self.group_reply_config.plan_request_max_parallel or 1))
-        self.group_plan_max_parallel = max_parallel
-        self.group_plan_semaphore = asyncio.Semaphore(max_parallel)
+        self.conversation_plan_max_parallel = max_parallel
+        self.conversation_plan_semaphore = asyncio.Semaphore(max_parallel)
 
     async def close(self) -> None:
         """No-op: group history is persisted in SQLite; no in-memory state to clear."""
@@ -154,7 +154,7 @@ class ConversationPlanCoordinator:
             "vision_error": vision_error,
         }
 
-    def format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
+    def format_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
         if not reply_context:
             return ""
         window_messages = reply_context.get("window_messages") or []
@@ -188,8 +188,8 @@ class ConversationPlanCoordinator:
         user_message: str,
         trace_id: str = "",
     ) -> MessageContext:
-        history_key = self._group_history_key(event)
-        history_items = await self._get_recent_group_history(history_key)
+        history_key = self._history_key(event)
+        history_items = await self._get_recent_history(history_key)
         current_message = await self._build_current_message(event=event, user_message=user_message, trace_id=trace_id)
         window_messages = self._compose_window_messages(history_items, current_message)
         execution_key = get_execution_key(event)
@@ -205,7 +205,7 @@ class ConversationPlanCoordinator:
         )
         planning_signals = self._build_planning_signals(window_messages=window_messages, temporal_context=temporal_context)
         reply_context = self._merge_reply_context(
-            self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
+            self._build_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
                 group_id=history_key,
                 mode="single",
@@ -239,9 +239,9 @@ class ConversationPlanCoordinator:
             planning_signals=planning_signals,
         )
 
-    async def plan_group_message(self, event: MessageEvent, user_message: str, *, trace_id: str = "") -> MessageHandlingPlan:
+    async def plan_message(self, event: MessageEvent, user_message: str, *, trace_id: str = "") -> MessageHandlingPlan:
         context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
-        group_id = self._group_history_key(event)
+        group_id = self._history_key(event)
         window_messages = list(context.window_messages or [])
 
         try:
@@ -254,7 +254,7 @@ class ConversationPlanCoordinator:
             )
         finally:
             if window_messages:
-                await self._record_group_user_message(group_id, window_messages[-1])
+                await self._record_user_message(group_id, window_messages[-1])
 
         reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
@@ -271,7 +271,7 @@ class ConversationPlanCoordinator:
         self._record_plan_metric(plan.action)
         return plan
 
-    async def plan_buffered_group_window(
+    async def plan_buffered_window(
         self,
         *,
         event: MessageEvent,
@@ -279,7 +279,7 @@ class ConversationPlanCoordinator:
         trace_id: str = "",
     ) -> MessageHandlingPlan:
         context = await self._build_buffered_window_context(event=event, window=window, trace_id=trace_id)
-        group_id = self._group_history_key(event)
+        group_id = self._history_key(event)
         window_messages = list(context.window_messages or [])
         planner_user_message = str(window.merged_user_message or context.user_message or "").strip()
 
@@ -293,7 +293,7 @@ class ConversationPlanCoordinator:
             )
         finally:
             for item in list(window.messages or []):
-                await self._record_group_user_message(group_id, item)
+                await self._record_user_message(group_id, item)
 
         reply_context = dict(context.reply_context or {})
         reply_mode = "proactive" if plan.should_reply else ""
@@ -320,7 +320,7 @@ class ConversationPlanCoordinator:
         trace_id: str = "",
     ) -> Dict[str, Any]:
         context = await self.build_message_context(event=event, user_message=user_message, trace_id=trace_id)
-        group_id = self._group_history_key(event)
+        group_id = self._history_key(event)
         window_messages = list(context.window_messages or [])
 
         try:
@@ -339,7 +339,7 @@ class ConversationPlanCoordinator:
             return reply_context
         finally:
             if window_messages:
-                await self._record_group_user_message(group_id, window_messages[-1])
+                await self._record_user_message(group_id, window_messages[-1])
 
     async def record_assistant_reply(self, group_id: Optional[int], message: str) -> None:
         text = str(message or "").strip()
@@ -388,7 +388,7 @@ class ConversationPlanCoordinator:
     def _message_event_time(self, item: Optional[Dict[str, Any]]) -> float:
         return normalize_event_time((item or {}).get("event_time", 0.0))
 
-    async def _get_recent_group_history(self, group_id: str) -> List[Dict[str, Any]]:
+    async def _get_recent_history(self, group_id: str) -> List[Dict[str, Any]]:
         count = self._get_context_window_size()
         if count <= 0:
             return []
@@ -397,7 +397,7 @@ class ConversationPlanCoordinator:
         messages = await self._conversation_store.get_recent_group_messages(group_id, limit=count)
         return messages
 
-    def _group_history_key(self, event: MessageEvent) -> str:
+    def _history_key(self, event: MessageEvent) -> str:
         inbound_event = get_attached_inbound_event(event)
         if inbound_event is not None:
             session = inbound_event.session
@@ -407,7 +407,8 @@ class ConversationPlanCoordinator:
                     return f"{session.platform}:{session.scope}:{channel_id}"
                 return f"{session.scope}:{channel_id}"
             return session.qualified_key
-        return f"qq:group:{event.group_id or 'unknown_group'}"
+        group_id = event.raw_data.get("group_id", "unknown_group")
+        return f"group:{group_id}"
 
     async def _build_current_message(self, *, event: MessageEvent, user_message: str, trace_id: str = "") -> Dict[str, Any]:
         image_analysis = await self._analyze_images_for_event(event, user_message, trace_id=trace_id)
@@ -515,7 +516,7 @@ class ConversationPlanCoordinator:
             window_messages.append(latest)
         return window_messages
 
-    async def _record_group_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
+    async def _record_user_message(self, group_id: str, current_message: Dict[str, Any]) -> None:
         if self._conversation_store is None:
             return
         # group_id 是 _group_history_key(event) 的结果，格式为 "qq:group:{id}" 或 "group:{id}"
@@ -533,8 +534,8 @@ class ConversationPlanCoordinator:
         window: BufferedWindow,
         trace_id: str = "",
     ) -> MessageContext:
-        history_key = self._group_history_key(event)
-        history_items = await self._get_recent_group_history(history_key)
+        history_key = self._history_key(event)
+        history_items = await self._get_recent_history(history_key)
         buffered_messages = await self._enrich_buffered_window_messages(list(window.messages or []), trace_id=trace_id)
         window_messages = self._compose_buffered_window_messages(history_items, buffered_messages)
         latest_message = next(
@@ -557,7 +558,7 @@ class ConversationPlanCoordinator:
         )
         planning_signals = self._build_planning_signals(window_messages=window_messages, temporal_context=temporal_context)
         reply_context = self._merge_reply_context(
-            self._build_group_window_reply_context(window_messages, assistant_self_id=event.self_id),
+            self._build_window_reply_context(window_messages, assistant_self_id=event.self_id),
             self._build_planner_batch_context(
                 group_id=history_key,
                 mode="buffered_window",
@@ -623,7 +624,7 @@ class ConversationPlanCoordinator:
             enriched.append(copied)
         return enriched
 
-    def _build_group_window_reply_context(self, window_messages: List[Dict[str, Any]], assistant_self_id: Any = "") -> Dict[str, Any]:
+    def _build_window_reply_context(self, window_messages: List[Dict[str, Any]], assistant_self_id: Any = "") -> Dict[str, Any]:
         return {
             "window_messages": window_messages,
             "buffered_message_count": len(window_messages),
@@ -790,7 +791,7 @@ class ConversationPlanCoordinator:
                 latest_message.get("text_content") or latest_message.get("text") or ""
             ).strip()
         planner_user_message = planner_user_message or user_message
-        return await self._execute_group_plan(
+        return await self._execute_plan(
             event=event,
             user_message=planner_user_message,
             recent_messages=recent_messages,
@@ -798,7 +799,7 @@ class ConversationPlanCoordinator:
             context=context,
         )
 
-    async def _execute_group_plan(
+    async def _execute_plan(
         self,
         event: MessageEvent,
         user_message: str,
@@ -806,12 +807,12 @@ class ConversationPlanCoordinator:
         window_messages: Optional[List[Dict[str, Any]]] = None,
         context: Optional[MessageContext] = None,
     ) -> MessageHandlingPlan:
-        group_id = str(event.group_id or "unknown_group")
+        group_id = str(event.raw_data.get("group_id", "unknown_group"))
         cooldown = self._get_plan_request_interval()
-        group_lock = self.group_plan_locks.setdefault(group_id, asyncio.Lock())
+        conversation_lock = self.conversation_plan_locks.setdefault(group_id, asyncio.Lock())
 
-        async with group_lock:
-            async with self.group_plan_semaphore:
+        async with conversation_lock:
+            async with self.conversation_plan_semaphore:
                 plan = await self.planner.plan(
                     event=event,
                     user_message=user_message,

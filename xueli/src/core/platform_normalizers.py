@@ -1,30 +1,13 @@
-"""Platform-agnostic inbound event normalization helpers.
-
-OneBot-specific normalization (normalize_onebot_message_event,
-attach_normalized_onebot_event) lives in adapters/napcat/normalizer.py.
-This module re-exports them for backward compatibility only.
-"""
+"""Platform-agnostic inbound event normalization helpers."""
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.adapters.base import ProtocolAdapter
+from typing import Any, List, Optional, Tuple
 
 from src.core.models import MessageEvent, MessageSegment
 from src.core.platform_models import InboundEvent
 
 _INBOUND_EVENT_ATTR = "_inbound_event"
-
-# ---------------------------------------------------------------------------
-# Backward-compatible re-exports (new code should import from
-# adapters.napcat.normalizer instead).
-# ---------------------------------------------------------------------------
-from src.adapters.napcat.normalizer import (  # noqa: E402  -- re-export
-    attach_normalized_onebot_event,
-    normalize_onebot_message_event,
-)
 
 
 def _extract_reply_to_message_id(segments: List[MessageSegment]) -> str:
@@ -86,25 +69,6 @@ def event_mentions_account(event: MessageEvent, account_id: Any = "") -> bool:
     return resolved_account_id in mentioned_user_ids
 
 
-def get_or_normalize_onebot_inbound_event(
-    event: MessageEvent,
-    *,
-    platform: str = "qq",
-    adapter: str = "napcat",
-    protocol_adapter: "ProtocolAdapter | None" = None,
-) -> InboundEvent:
-    """Return the attached InboundEvent, or normalize via the OneBot path."""
-    inbound_event = get_attached_inbound_event(event)
-    if inbound_event is not None:
-        return inbound_event
-    return attach_normalized_onebot_event(
-        event,
-        platform=platform,
-        adapter=adapter,
-        protocol_adapter=protocol_adapter,
-    )
-
-
 def build_generic_inbound_event(
     event: MessageEvent,
     *,
@@ -116,7 +80,7 @@ def build_generic_inbound_event(
     Used as the fallback path when no platform adapter is available.
     """
     text = str(getattr(event, "raw_message", "") or "")
-    return InboundEvent(
+    inbound_event = InboundEvent(
         platform=platform,
         adapter=adapter,
         event_type="message",
@@ -132,3 +96,5 @@ def build_generic_inbound_event(
         metadata={},
         raw_event=dict(getattr(event, "raw_data", None) or {}),
     )
+    setattr(event, _INBOUND_EVENT_ATTR, inbound_event)
+    return inbound_event

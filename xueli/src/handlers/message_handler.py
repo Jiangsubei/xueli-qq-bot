@@ -403,8 +403,8 @@ class MessageHandler:
         active_keys = list(getattr(self.session_manager, "_conversations", {}).keys())
         await self.planning_window_service.cleanup(active_keys=active_keys)
 
-    def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
-        return self.conversation_plan_coordinator.format_group_window_context(reply_context)
+    def _format_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str:
+        return self.conversation_plan_coordinator.format_window_context(reply_context)
 
     def _build_rule_plan(
         self,
@@ -429,7 +429,7 @@ class MessageHandler:
             prompt_plan=prompt_plan,
         )
 
-    def _group_planner_available(self) -> bool:
+    def _planner_available(self) -> bool:
         return is_group_reply_decision_configured(self.app_config)
 
     async def _check_repeat_echo_trigger(self, event: MessageEvent) -> Optional[str]:
@@ -442,11 +442,11 @@ class MessageHandler:
             return None
         return await self.repeat_echo_service.check_trigger(event, display_text)
 
-    async def _plan_group_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
+    async def _plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
-        dispatch = await self.planning_window_service.submit_group_event(event=event, trace_id=trace_id)
+        dispatch = await self.planning_window_service.submit_event(event=event, trace_id=trace_id)
         if dispatch.status == "bypassed":
-            return await self.conversation_plan_coordinator.plan_group_message(
+            return await self.conversation_plan_coordinator.plan_message(
                 event=event,
                 user_message=self.extract_user_message(event),
                 trace_id=trace_id,
@@ -454,11 +454,11 @@ class MessageHandler:
         if dispatch.status != "dispatch_window" or dispatch.window is None:
             return self._build_rule_plan(
                 MessagePlanAction.WAIT,
-                "群聊缓冲窗口仍在收集消息，先等待当前批次封窗",
+                "缓冲窗口仍在收集消息，先等待当前批次封窗",
                 reply_context={"trace_id": trace_id, "window_reason": dispatch.reason} if trace_id else {"window_reason": dispatch.reason},
                 event=event,
             )
-        return await self._plan_group_window(event, dispatch.window, trace_id=trace_id)
+        return await self._plan_window(event, dispatch.window, trace_id=trace_id)
 
     async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
@@ -557,7 +557,7 @@ class MessageHandler:
             reply_reference=plan.reply_reference,
         )
 
-    async def _plan_group_window(
+    async def _plan_window(
         self,
         event: MessageEvent,
         window: BufferedWindow,
@@ -565,7 +565,7 @@ class MessageHandler:
         trace_id: str = "",
     ) -> MessageHandlingPlan:
         dispatch_event = window.latest_event if isinstance(window.latest_event, MessageEvent) else event
-        plan = await self.conversation_plan_coordinator.plan_buffered_group_window(
+        plan = await self.conversation_plan_coordinator.plan_buffered_window(
             event=dispatch_event,
             window=window,
             trace_id=trace_id,
@@ -582,7 +582,7 @@ class MessageHandler:
             reply_reference=plan.reply_reference,
         )
 
-    async def _build_group_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
+    async def _build_at_reply_context(self, event: MessageEvent, *, trace_id: str = "") -> Dict[str, Any]:
         return await self.conversation_plan_coordinator.build_direct_reply_context(
             event=event,
             user_message=self.extract_user_message(event),
@@ -617,12 +617,12 @@ class MessageHandler:
                 event=event,
             )
 
-        planner_available = self._group_planner_available()
+        planner_available = self._planner_available()
         only_at_mode = self.app_config.group_reply.only_reply_when_at or not planner_available
 
         if only_at_mode:
             if self._is_direct_mention(event):
-                reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
+                reply_context = await self._build_at_reply_context(event, trace_id=trace_id)
                 if planner_available and self.app_config.group_reply.only_reply_when_at:
                     return self._build_rule_plan(
                         MessagePlanAction.REPLY,
@@ -641,7 +641,7 @@ class MessageHandler:
             return self._build_rule_plan(MessagePlanAction.IGNORE, "未配置群聊判断模型，当前仅在被 @ 时回复")
 
         if self._is_direct_mention(event):
-            reply_context = await self._build_group_at_reply_context(event, trace_id=trace_id)
+            reply_context = await self._build_at_reply_context(event, trace_id=trace_id)
             return self._build_rule_plan(
                 MessagePlanAction.REPLY,
                 "群聊消息显式 @ 了助手，直接回复",
@@ -649,7 +649,7 @@ class MessageHandler:
                 event=event,
             )
 
-        return await self._plan_group_message(event, trace_id=trace_id)
+        return await self._plan_message(event, trace_id=trace_id)
 
     def _build_window_reply_context(self, *, window: BufferedWindow, event: MessageEvent) -> Dict[str, Any]:
         sanitized_window_messages = []
@@ -699,7 +699,7 @@ class MessageHandler:
         if dispatch_event is None:
             raise ValueError("buffered window is missing latest_event")
         if str(window.chat_mode or "").strip().lower() == MessageType.GROUP.value:
-            plan = await self._plan_group_window(dispatch_event, window, trace_id=trace_id)
+            plan = await self._plan_window(dispatch_event, window, trace_id=trace_id)
         else:
             plan = await self._plan_private_window(dispatch_event, window, trace_id=trace_id)
         return dispatch_event, plan
@@ -710,7 +710,7 @@ class MessageHandler:
         if event.message_type == MessageType.PRIVATE.value:
             return True
         if event.message_type == MessageType.GROUP.value:
-            only_at_mode = self.app_config.group_reply.only_reply_when_at or not self._group_planner_available()
+            only_at_mode = self.app_config.group_reply.only_reply_when_at or not self._planner_available()
             return self._is_direct_mention(event) if only_at_mode else True
         return False
 
@@ -836,7 +836,7 @@ class MessageHandler:
         self._sync_active_conversations_metric()
         return result
 
-    def resolve_group_at_user(self, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Optional[Any]:
+    def resolve_at_user(self, event: MessageEvent, plan: Optional[MessageHandlingPlan]) -> Optional[Any]:
         if event.message_type != MessageType.GROUP.value:
             return None
         reply_context = dict(getattr(plan, "reply_context", None) or {})
@@ -849,10 +849,11 @@ class MessageHandler:
             return event.user_id
         return None
 
-    async def record_group_reply_sent(self, event: MessageEvent, message: str) -> None:
+    async def record_reply_sent(self, event: MessageEvent, message: str) -> None:
         if event.message_type != MessageType.GROUP.value:
             return
-        await self.conversation_plan_coordinator.record_assistant_reply(event.group_id, message)
+        group_id = event.raw_data.get("group_id", "")
+        await self.conversation_plan_coordinator.record_assistant_reply(group_id, message)
 
     def _get_help_text(self) -> str:
         return self.command_handler.get_help_text()
@@ -861,14 +862,16 @@ class MessageHandler:
         return self.command_handler.get_status_text()
 
     async def check_rate_limit(self, target_id: str) -> bool:
+        interval = self.app_config.bot_behavior.rate_limit_interval
+        now = time.time()
         async with self.rate_limit_lock:
-            interval = self.app_config.bot_behavior.rate_limit_interval
-            now = time.time()
             last_time = self.last_send_time.get(target_id, 0.0)
-            if now - last_time < interval:
-                await asyncio.sleep(interval - (now - last_time))
+            sleep_time = interval - (now - last_time)
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
+        async with self.rate_limit_lock:
             self.last_send_time[target_id] = time.time()
-            return True
+        return True
 
     async def _load_memory_context(
         self,
@@ -1099,5 +1102,5 @@ class MessageHandler:
             flush_current(
                 user_id=str(event.user_id),
                 message_type=event.message_type,
-                group_id=str(event.group_id or ""),
+                group_id=str(event.raw_data.get("group_id", "") or ""),
             )

@@ -95,7 +95,7 @@ class NapCatAdapter(PlatformAdapter):
                 "action": "send_private_msg",
                 "params": {"user_id": int(session.user_id), "message": message},
             }
-        if session.scope == "group":
+        if session.scope in {"group", "shared"}:
             return {
                 "action": "send_group_msg",
                 "params": {"group_id": int(session.channel_id), "message": message},
@@ -112,7 +112,7 @@ class NapCatAdapter(PlatformAdapter):
                 "action": "send_private_msg",
                 "params": {"user_id": int(session.user_id), "message": message},
             }
-        if session.scope == "group":
+        if session.scope in {"group", "shared"}:
             return {
                 "action": "send_group_msg",
                 "params": {"group_id": int(session.channel_id), "message": message},
@@ -134,7 +134,7 @@ class NapCatAdapter(PlatformAdapter):
                 "action": "send_private_msg",
                 "params": {"user_id": int(session.user_id), "message": [segment]},
             }
-        if session.scope != "group":
+        if session.scope not in {"group", "shared"}:
             raise ValueError(f"unsupported session scope for mface action: {session.scope}")
         return {
             "action": "send_group_msg",

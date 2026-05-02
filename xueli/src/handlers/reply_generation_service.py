@@ -32,11 +32,12 @@ class ReplyGenerationService:
 
     async def _request_model_reply(self, event: Any, prepared: Any) -> AIResponse:
         trace_id = prepared.message_context.trace_id if prepared.message_context else ""
+        group_id = event.raw_data.get("group_id", "")
         logger.debug(
             "开始请求 AI：%s 用户=%s，群=%s，图片数=%s，历史数=%s，多模态=%s",
             format_trace_log(trace_id=trace_id, session_key=self.host._get_conversation_key(event), message_id=event.message_id),
             event.user_id,
-            event.group_id,
+            group_id,
             len(prepared.base64_images),
             len(prepared.related_history_messages),
             self.pipeline._should_use_multimodal_reply(prepared.base64_images),

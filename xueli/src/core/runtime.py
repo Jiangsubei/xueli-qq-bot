@@ -69,6 +69,8 @@ class BotRuntime:
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
         self._processed_message_ids: set = set()
+        self._dedup_lock: Optional[asyncio.Lock] = None
+        self._close_lock: Optional[asyncio.Lock] = None
         self._message_pipeline = SessionMessagePipeline(on_state_change=self._on_pipeline_state_change)
         self._model_router = ModelInvocationRouter(
             base_timeout_seconds=max(1, int(self.config.app.bot_behavior.response_timeout or 60)),
@@ -89,6 +91,20 @@ class BotRuntime:
             "messages_sent": 0,
             "errors": 0,
         }
+
+    def _get_dedup_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_dedup_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._dedup_lock = lock
+        return lock
+
+    def _get_close_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_close_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._close_lock = lock
+        return lock
 
     async def initialize(self):
         """Initialize managed runtime dependencies."""
@@ -245,12 +261,17 @@ class BotRuntime:
     async def _handle_message_event(self, event: MessageEvent, *, trace_id: str = ""):
         # ── 去重检查 ── 防止重放攻击或平台重试导致重复处理
         msg_id = getattr(event, "message_id", 0)
-        if not hasattr(self, "_processed_message_ids"):
-            self._processed_message_ids = set()
-        if msg_id in self._processed_message_ids:
-            logger.warning("跳过重复消息: message_id=%s", msg_id)
-            return
-        self._processed_message_ids.add(msg_id)
+        async with self._get_dedup_lock():
+            if not hasattr(self, "_processed_message_ids"):
+                self._processed_message_ids = set()
+            if msg_id in self._processed_message_ids:
+                logger.warning("跳过重复消息: message_id=%s", msg_id)
+                return
+            self._processed_message_ids.add(msg_id)
+            if len(self._processed_message_ids) > 10000:
+                excess = len(self._processed_message_ids) - 5000
+                for _ in range(excess):
+                    self._processed_message_ids.pop()
 
         self.record_user_interaction()
         self.runtime_metrics.inc_messages_received()
@@ -316,9 +337,15 @@ class BotRuntime:
                     return
 
                 # 阶段3：速率限制检查
-                target_id = str(
-                    current_event.user_id if current_event.message_type == MessageType.PRIVATE.value else current_event.group_id
-                )
+                if current_event.message_type == MessageType.PRIVATE.value:
+                    target_id = str(current_event.user_id)
+                else:
+                    inbound = get_attached_inbound_event(current_event)
+                    if inbound is not None:
+                        target_id = str(inbound.session.channel_id or "")
+                    else:
+                        target_id = str(current_event.raw_data.get("group_id", ""))
+                await self.message_handler.check_rate_limit(target_id)
                 await self.message_handler.check_rate_limit(target_id)
 
                 # 阶段4：回复生成 — 调用 AI 生成回复内容
@@ -340,7 +367,7 @@ class BotRuntime:
                 sent = await self._send_response(current_event, reply_result, plan=plan, trace_id=trace_id)
                 if sent:
                     logger.info("发送完成：%s", trace_log)
-                    await self.message_handler.record_group_reply_sent(current_event, reply_result.text)
+                    await self.message_handler.record_reply_sent(current_event, reply_result.text)
                     await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
 
                 # 分发到下一窗口，处理同一会话中的后续消息
@@ -413,20 +440,25 @@ class BotRuntime:
                 else:
                     await self._send_private_msg(reply_session, part_plan.text, trace_id=trace_id)
         else:
-            at_user = self.message_handler.resolve_group_at_user(event, plan)
+            at_user = self.message_handler.resolve_at_user(event, plan)
             for index, part_plan in enumerate(parts):
                 if part_plan.delay_before_seconds > 0:
                     await asyncio.sleep(part_plan.delay_before_seconds)
                 part_at_user = at_user if index == 0 else None
-                await self._send_group_msg(reply_session, part_plan.text, part_at_user, trace_id=trace_id)
+                await self._send_scope_msg(reply_session, part_plan.text, part_at_user, trace_id=trace_id)
 
         self.runtime_metrics.inc_messages_replied(len(parts))
         self._sync_status_cache()
         if self._should_log_message_summary():
+            if event.message_type == MessageType.GROUP.value:
+                inbound = get_attached_inbound_event(event)
+                target_id = str(inbound.session.channel_id) if inbound else str(event.raw_data.get("group_id", ""))
+            else:
+                target_id = str(event.user_id)
             logger.info(
                 "回复已发送：%s 目标=%s 类型=%s 分段=%s",
                 format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
-                event.group_id if event.message_type == MessageType.GROUP.value else event.user_id,
+                target_id,
                 event.message_type,
                 len(parts),
             )
@@ -486,10 +518,12 @@ class BotRuntime:
                 raise SendError("发送表情跟进失败")
             await self.message_handler.mark_emoji_follow_up_sent(event, selection)
             if self._should_log_message_summary():
+                inbound = get_attached_inbound_event(event)
+                group_id = str(inbound.session.channel_id) if inbound else str(event.raw_data.get("group_id", ""))
                 logger.info(
                     "群聊表情跟进已发送：%s group=%s emoji_id=%s kind=%s",
                     format_trace_log(trace_id=trace_id, session_key=get_execution_key(event), message_id=getattr(event, "message_id", 0)),
-                    event.group_id,
+                    group_id,
                     getattr(selection.emoji, "emoji_id", ""),
                     getattr(selection.emoji, "sticker_kind", ""),
                 )
@@ -531,8 +565,8 @@ class BotRuntime:
             raise SendError("发送私聊分段消息失败")
         logger.debug("已发送私聊分段消息：session=%s，segments=%s", session.key, len(segments))
 
-    async def _send_group_msg(self, target: Any, message: str, at_user: Optional[Any] = None, *, trace_id: str = ""):
-        session = self._resolve_group_reply_session(target, at_user=at_user)
+    async def _send_scope_msg(self, target: Any, message: str, at_user: Optional[Any] = None, *, trace_id: str = ""):
+        session = self._resolve_reply_session(target, at_user=at_user)
         if at_user:
             segments = [self._build_mention_segment(session, at_user)]
             if message:
@@ -550,9 +584,9 @@ class BotRuntime:
             raise SendError("发送群聊消息失败")
         logger.debug("已发送群聊消息：session=%s", session.key)
 
-    async def _send_group_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
+    async def _send_scope_segments(self, target: Any, segments: List[MessageSegment], *, trace_id: str = "") -> None:
         self._ensure_no_outbound_image_segments(segments)
-        session = self._resolve_group_reply_session(target)
+        session = self._resolve_reply_session(target)
         result = await self._get_adapter_for_session(session).send_action(
             ReplyAction(
                 session=session,
@@ -667,12 +701,13 @@ class BotRuntime:
             logger.info("机器人主循环已退出")
 
     async def close(self) -> None:
-        if self._closed:
-            return
+        async with self._get_close_lock():
+            if self._closed:
+                return
 
-        self._running = False
-        self._closed = True
-        self._shutdown_event.set()
+            self._running = False
+            self._closed = True
+            self._shutdown_event.set()
 
         await self._cancel_message_tasks()
 
@@ -790,7 +825,7 @@ class BotRuntime:
         app_config = getattr(config, "app", None)
         adapter_connection = getattr(app_config, "adapter_connection", None)
         platform = str(getattr(adapter_connection, "platform", "") or "").strip()
-        return platform or "qq"
+        return platform or "unknown"
 
     def _get_adapter_for_session(self, session: SessionRef):
         adapter = None
@@ -804,7 +839,8 @@ class BotRuntime:
         if inbound_event is not None:
             return inbound_event.session
         if event.message_type == MessageType.GROUP.value:
-            return self._fallback_group_reply_session(event.group_id)
+            group_id = event.raw_data.get("group_id", "")
+            return self._fallback_reply_session(group_id)
         return self._fallback_private_reply_session(event.user_id)
 
     def _resolve_private_reply_session(self, target: Any) -> SessionRef:
@@ -812,13 +848,13 @@ class BotRuntime:
             return target if target.scope == "private" else replace(target, scope="private")
         return self._fallback_private_reply_session(target)
 
-    def _resolve_group_reply_session(self, target: Any, *, at_user: Optional[Any] = None) -> SessionRef:
+    def _resolve_reply_session(self, target: Any, *, at_user: Optional[Any] = None) -> SessionRef:
         if isinstance(target, SessionRef):
-            session = target if target.scope in {"group", "channel"} else replace(target, scope="group")
+            session = target if target.scope in {"shared", "channel"} else replace(target, scope="shared")
             if at_user not in (None, ""):
                 return replace(session, user_id=str(at_user))
             return session
-        return self._fallback_group_reply_session(target, user_id=at_user)
+        return self._fallback_reply_session(target, user_id=at_user)
 
     def _fallback_private_reply_session(self, user_id: Any) -> SessionRef:
         resolved_user_id = str(user_id or "")
@@ -829,12 +865,12 @@ class BotRuntime:
             user_id=resolved_user_id,
         )
 
-    def _fallback_group_reply_session(self, group_id: Any, *, user_id: Any = "") -> SessionRef:
+    def _fallback_reply_session(self, group_id: Any, *, user_id: Any = "") -> SessionRef:
         resolved_group_id = str(group_id or "")
         resolved_user_id = str(user_id or "")
         return SessionRef(
             platform=self._default_session_platform(),
-            scope="group",
+            scope="shared",
             conversation_id=f"group:{resolved_group_id}:{resolved_user_id or 0}",
             channel_id=resolved_group_id,
             user_id=resolved_user_id,

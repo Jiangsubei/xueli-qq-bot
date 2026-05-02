@@ -73,10 +73,10 @@ def _build_session(event: MessageEvent, platform: str) -> SessionRef:
             user_id=user_id,
             account_id=account_id,
         )
-    group_id = str(event.group_id or "")
+    group_id = str(event.raw_data.get("group_id", "") or "")
     return SessionRef(
         platform=platform,
-        scope="group",
+        scope="shared",
         conversation_id=f"group:{group_id}:{user_id}",
         user_id=user_id,
         account_id=account_id,

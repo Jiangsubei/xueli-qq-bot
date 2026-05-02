@@ -128,7 +128,8 @@ class PromptPlanner:
         context: Optional[MessageContext],
     ) -> PromptPlan:
         chat_mode = str(event.message_type or "").strip().lower() or "private"
-        continuity_hint = str((context.temporal_context.continuity_hint if context else "") or "unknown")
+        temporal_ctx = getattr(context, "temporal_context", None)
+        continuity_hint = str((temporal_ctx.continuity_hint if temporal_ctx else "") or "unknown")
         signals = dict(getattr(context, "planning_signals", {}) or {}) if context else {}
         reply_goal = self._default_reply_goal(chat_mode=chat_mode, continuity_hint=continuity_hint, signals=signals)
         continuity_mode = {

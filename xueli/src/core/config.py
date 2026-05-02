@@ -17,8 +17,8 @@ _DEFAULT_EMOTION_LABELS = ["开心", "喜欢", "惊讶", "无语", "委屈", "�
 
 @dataclass(frozen=True)
 class AdapterConnectionConfig:
-    adapter: str = "napcat"
-    platform: str = "qq"
+    adapter: str = ""
+    platform: str = ""
     ws_url: str = "ws://0.0.0.0:8095"
     http_url: str = "http://127.0.0.1:6700"
 

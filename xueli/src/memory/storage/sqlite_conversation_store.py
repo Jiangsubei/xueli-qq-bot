@@ -458,8 +458,9 @@ class SQLiteConversationStore:
         session.metadata["latest_message_id"] = str(message_id or "")
         session.dirty_turns += 1
 
-        # 每轮立即写入 SQLite，不等待会话关闭
-        self._persist_turn_sync(session)
+        # 每轮立即写入 SQLite（异步线程执行，避免阻塞事件循环）
+        import asyncio
+        asyncio.get_event_loop().run_in_executor(None, self._persist_turn_sync, session)
 
         closed_user_id = ""
         if closed_session_id:

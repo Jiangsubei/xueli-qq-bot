@@ -96,7 +96,7 @@ class BufferedGroupWindowTests(unittest.IsolatedAsyncioTestCase):
             latest_event=event,
         )
 
-        await coordinator.plan_buffered_group_window(event=event, window=window, trace_id="trace-test")
+        await coordinator.plan_buffered_window(event=event, window=window, trace_id="trace-test")
 
         latest_message = planner.last_window_messages[-1]
         self.assertEqual(latest_message.get("merged_description"), "一只猫趴在桌上")

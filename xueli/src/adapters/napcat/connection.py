@@ -144,6 +144,8 @@ class NapCatConnection:
             json_str = json.dumps(data, ensure_ascii=False)
             await self.websocket.send(json_str)
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("发送消息失败：%s", e)
             return False
@@ -179,5 +181,7 @@ class NapCatConnection:
                 await callback(*args, **kwargs)
             else:
                 callback(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("回调执行失败：%s", e)

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from src.core.models import Conversation, MessageEvent, MessageType
 from src.core.platform_models import InboundEvent, SessionRef
-from src.core.platform_normalizers import get_or_normalize_onebot_inbound_event
+from src.core.platform_normalizers import get_attached_inbound_event
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,13 @@ class ConversationSessionManager:
     def get_key(self, event: MessageEvent) -> str:
         if event.message_type not in {MessageType.PRIVATE.value, MessageType.GROUP.value}:
             return f"unknown:{event.message_type}:{event.user_id}"
-        inbound_event = get_or_normalize_onebot_inbound_event(event)
-        return self.get_key_for_inbound_event(inbound_event)
+        inbound_event = get_attached_inbound_event(event)
+        if inbound_event is not None:
+            return self.get_key_for_inbound_event(inbound_event)
+        if event.message_type == MessageType.PRIVATE.value:
+            return f"private:{event.user_id}"
+        group_id = event.raw_data.get("group_id", "")
+        return f"group:{group_id}:{event.user_id}"
 
     def get_optional(self, key: str) -> Optional[Conversation]:
         return self._conversations.get(key)

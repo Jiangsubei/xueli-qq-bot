@@ -67,7 +67,7 @@ class ReplyPipelineHost(Protocol):
     def _get_conversation_key(self, event: MessageEvent) -> str: ...
     def _get_conversation(self, key: str) -> Conversation: ...
     def _build_assistant_identity_prompt(self) -> str: ...
-    def _format_group_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str: ...
+    def _format_window_context(self, reply_context: Optional[Dict[str, Any]]) -> str: ...
     def _build_system_prompt(self) -> str: ...
     def _format_system_prompt_log_with_history(
         self,
@@ -262,11 +262,12 @@ class ReplyPipeline:
             source = "fallback" if prepared.fallback_response is not None else "ai"
             response = await self.reply_generation_service.generate_reply(event=event, prepared=prepared)
             self._persist_reply_result(event, prepared, response)
+            group_id = event.raw_data.get("group_id", "")
             logger.debug(
                 "回复生成完成：%s 用户=%s，群=%s，长度=%s",
                 trace_log,
                 event.user_id,
-                event.group_id,
+                group_id,
                 len(response.content),
             )
             normalized_text = str(response.content or "").strip()
@@ -704,7 +705,7 @@ class ReplyPipeline:
         return builder(
             user_id=str(event.user_id),
             message_type=event.message_type or MessageType.PRIVATE.value,
-            group_id=str(event.group_id or ""),
+            group_id=str(event.raw_data.get("group_id", "") or ""),
             read_scope="user",
         )
 
@@ -865,7 +866,7 @@ class ReplyPipeline:
         plan: Optional[MessageHandlingPlan],
     ) -> str:
         if str(event.message_type or "").strip().lower() == MessageType.GROUP.value:
-            history_lines = self._build_group_window_history_lines(plan=plan, current_message_id=int(event.message_id or 0))
+            history_lines = self._build_window_history_lines(plan=plan, current_message_id=int(event.message_id or 0))
             if history_lines:
                 return "\n".join(history_lines)
         return self._build_conversation_history_text(event=event, conversation=conversation, plan=plan)
@@ -909,7 +910,7 @@ class ReplyPipeline:
         time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts > 0 else "?"
         return f"[{time_str}] {speaker}: {content}"
 
-    def _build_group_window_history_lines(
+    def _build_window_history_lines(
         self,
         *,
         plan: Optional[MessageHandlingPlan],

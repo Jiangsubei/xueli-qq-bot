@@ -67,13 +67,18 @@ class MemoryFlowService:
                         image_description = "；".join(parts)
 
             # 注册本轮对话到记忆系统
+            raw_data = getattr(event, "raw_data", None)
+            if raw_data is not None:
+                group_id_value = str(raw_data.get("group_id", "") or "")
+            else:
+                group_id_value = str(getattr(event, "group_id", "") or "")
             self.memory_manager.register_dialogue_turn(
                 user_id=str(event.user_id),
                 user_message=prepared.original_user_message,
                 assistant_message=reply_text,
                 dialogue_key=dialogue_key,
                 message_type=event.message_type,
-                group_id=str(event.group_id or ""),
+                group_id=group_id_value,
                 message_id=str(event.message_id or ""),
                 image_description=image_description,
             )
@@ -85,7 +90,7 @@ class MemoryFlowService:
                     str(event.user_id),
                     dialogue_key=dialogue_key,
                     message_type=event.message_type,
-                    group_id=str(event.group_id or ""),
+                    group_id=group_id_value,
                 )
                 self._schedule_post_extraction_processing(
                     host=host,

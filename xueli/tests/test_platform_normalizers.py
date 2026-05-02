@@ -8,8 +8,8 @@ from src.core.platform_models import InboundEvent, PlatformCapabilities, SenderR
 from src.core.platform_normalizers import (
     event_mentions_account,
     get_inbound_reply_to_message_id,
-    normalize_onebot_message_event,
 )
+from src.adapters.napcat.normalizer import normalize_onebot_message_event
 from src.handlers.conversation_session_manager import ConversationSessionManager
 
 
@@ -62,7 +62,7 @@ class PlatformNormalizerTests(unittest.TestCase):
 
         inbound = normalize_onebot_message_event(event)
 
-        self.assertEqual(inbound.session.scope, "group")
+        self.assertEqual(inbound.session.scope, "shared")
         self.assertEqual(inbound.session.channel_id, "54321")
         self.assertEqual(inbound.session.key, "group:54321:12345")
         self.assertEqual(inbound.reply_to_message_id, "77")
@@ -88,7 +88,7 @@ class PlatformNormalizerTests(unittest.TestCase):
         )
 
         manager = ConversationSessionManager()
-        self.assertEqual(manager.get_key(event), "qq:group:24680:13579")
+        self.assertEqual(manager.get_key(event), "group:24680:13579")
 
     def test_inbound_helpers_read_reply_and_mentions_from_attached_event(self) -> None:
         event = MessageEvent.from_dict(
@@ -124,7 +124,7 @@ class PlatformNormalizerTests(unittest.TestCase):
                 **inbound.__dict__,
                 "platform": "api",
                 "adapter": "openapi",
-                "session": inbound.session.__class__(platform="api", scope="group", conversation_id="api:group:room-1:user-1", account_id="assistant-1", channel_id="room-1", user_id="user-1"),
+                "session": inbound.session.__class__(platform="api", scope="shared", conversation_id="api:group:room-1:user-1", account_id="assistant-1", channel_id="room-1", user_id="user-1"),
                 "reply_to_message_id": "external-parent",
                 "mentioned_user_ids": ("assistant-1",),
             }
@@ -157,7 +157,7 @@ class PlatformNormalizerTests(unittest.TestCase):
                 message_kind="text",
                 session=SessionRef(
                     platform="api",
-                    scope="group",
+                    scope="shared",
                     conversation_id="api:group:room-1:external-user",
                     user_id="external-user",
                     account_id="assistant-1",
@@ -169,7 +169,7 @@ class PlatformNormalizerTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(get_execution_key(event), "api:group:room-1")
+        self.assertEqual(get_execution_key(event), "api:shared:room-1")
 
 
 if __name__ == "__main__":

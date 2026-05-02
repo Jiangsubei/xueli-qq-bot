@@ -7,7 +7,7 @@ from src.core.platform_normalizers import get_attached_inbound_event
 
 
 class DispatcherInboundWiringTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dispatch_attaches_normalized_inbound_event_for_message(self) -> None:
+    async def test_dispatch_attaches_generic_inbound_event_without_adapter(self) -> None:
         dispatcher = EventDispatcher(platform="qq", adapter_name="napcat")
         seen = {}
 
@@ -39,8 +39,8 @@ class DispatcherInboundWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(seen["preprocessor_inbound"], seen["handler_inbound"])
         self.assertEqual(seen["handler_inbound"].platform, "qq")
         self.assertEqual(seen["handler_inbound"].adapter, "napcat")
-        self.assertEqual(seen["handler_inbound"].session.key, "group:54321:12345")
-        self.assertEqual(seen["handler_inbound"].sender.display_name, "群名片")
+        self.assertIsNone(seen["handler_inbound"].session)
+        self.assertEqual(seen["handler_inbound"].text, "hello")
 
     async def test_dispatch_uses_configured_adapter_attacher(self) -> None:
         seen = {}

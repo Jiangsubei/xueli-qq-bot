@@ -29,7 +29,7 @@ class MessageHandlerInboundEventTests(unittest.IsolatedAsyncioTestCase):
         handler.vision_enabled = lambda: False
         handler._get_assistant_name = lambda: "雪梨"
         handler._sync_active_conversations_metric = lambda count=None: None
-        handler._group_planner_available = lambda: False
+        handler._planner_available = lambda: False
         return handler
 
     def _attach_custom_inbound(self, event: MessageEvent) -> InboundEvent:

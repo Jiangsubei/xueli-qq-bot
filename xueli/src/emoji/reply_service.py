@@ -64,7 +64,8 @@ class EmojiReplyService:
             return self._skip("unsupported_message_type")
         if not assistant_reply.strip():
             return self._skip("empty_reply")
-        if self._group_cooldown_active(event.group_id):
+        group_id = event.raw_data.get("group_id", "")
+        if self._group_cooldown_active(group_id):
             return self._skip("group_cooldown")
 
         decision = await self._decide_reply_intent(
@@ -72,7 +73,7 @@ class EmojiReplyService:
             assistant_reply=assistant_reply,
             reply_context=reply_context,
             trace_id=trace_id,
-            session_key=get_execution_key(event) if event.group_id is not None else "",
+            session_key=get_execution_key(event) if group_id else "",
             message_id=getattr(event, "message_id", 0),
         )
         if self.runtime_metrics:
@@ -101,8 +102,9 @@ class EmojiReplyService:
     async def mark_follow_up_sent(self, *, event: MessageEvent, selection: EmojiReplySelection) -> Optional[EmojiRecord]:
         if not selection.emoji:
             return None
-        if event.group_id is not None:
-            self._group_last_sent_at[str(event.group_id)] = time.monotonic()
+        group_id = event.raw_data.get("group_id", "")
+        if group_id:
+            self._group_last_sent_at[str(group_id)] = time.monotonic()
         record = await self.repository.mark_auto_reply_sent(selection.emoji.emoji_id)
         if self.runtime_metrics:
             self.runtime_metrics.record_emoji_reply_sent(1)

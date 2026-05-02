@@ -47,7 +47,7 @@ class _MessageHandlerStub:
     def split_by_sentence(self, message):
         return [message]
 
-    def resolve_group_at_user(self, event, plan):
+    def resolve_at_user(self, event, plan):
         del plan
         return event.user_id if getattr(event, "message_type", "") == "group" else None
 
@@ -105,11 +105,11 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_group_msg_with_at_uses_segments(self) -> None:
         bot, adapter = self._build_bot()
 
-        await bot._send_group_msg(100, "hi", at_user=200)
+        await bot._send_scope_msg(100, "hi", at_user=200)
 
         action = adapter.actions[-1]
         self.assertIsInstance(action, ReplyAction)
-        self.assertEqual(action.session.scope, "group")
+        self.assertEqual(action.session.scope, "shared")
         self.assertEqual(action.session.channel_id, "100")
         self.assertEqual(action.session.user_id, "200")
         self.assertEqual(
@@ -124,7 +124,7 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
         bot, adapter = self._build_bot()
 
         with self.assertRaises(SendError):
-            await bot._send_group_segments(100, [MessageSegment.image("emoji.png")])
+            await bot._send_scope_segments(100, [MessageSegment.image("emoji.png")])
 
     async def test_send_private_msg_uses_platform_neutral_fallback_platform(self) -> None:
         bot, adapter = self._build_bot(platform="api", adapter_name="openapi")
@@ -139,7 +139,7 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_group_msg_with_at_uses_platform_specific_mention_for_fallback_session(self) -> None:
         bot, adapter = self._build_bot(platform="api", adapter_name="openapi")
 
-        await bot._send_group_msg("room-1", "hi", at_user="user-9")
+        await bot._send_scope_msg("room-1", "hi", at_user="user-9")
 
         action = adapter.actions[-1]
         self.assertEqual(action.session.platform, "api")
@@ -206,7 +206,7 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
                 "message_id": "api-msg-group",
                 "text": "hello from api group",
                 "session": {
-                    "scope": "group",
+                    "scope": "shared",
                     "conversation_id": "api:group:room-1:user-9",
                     "channel_id": "room-1",
                     "user_id": "user-9",
@@ -223,7 +223,7 @@ class BotRuntimeAdapterSendPathTests(unittest.IsolatedAsyncioTestCase):
 
         action = adapter.actions[-1]
         self.assertEqual(action.session.platform, "api")
-        self.assertEqual(action.session.scope, "group")
+        self.assertEqual(action.session.scope, "shared")
         self.assertEqual(action.session.conversation_id, "api:group:room-1:user-9")
         self.assertEqual(action.session.channel_id, "room-1")
         self.assertEqual(

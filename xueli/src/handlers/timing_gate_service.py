@@ -84,6 +84,8 @@ class TimingGateService:
                     str(getattr(context.temporal_context, "continuity_hint", "unknown") or "unknown"),
                 )
             return decision
+        except asyncio.CancelledError:
+            raise
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("节奏判断失败，回退到规则：%s", exc)
             return fallback
