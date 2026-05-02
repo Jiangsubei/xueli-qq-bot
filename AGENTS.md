@@ -102,6 +102,25 @@ MessageHandler
 
 ---
 
+## 提示词模板规范
+
+所有提示词必须抽象到 `xueli/prompts/` 目录下的 `.prompt` 模板文件，**禁止**在 Python 代码中硬编码提示词字符串。
+
+已模板化的提示词（通过 `PromptTemplateLoader` 加载）：
+- `planner.prompt` — 对话规划器
+- `timing_gate.prompt` — 节奏门控
+- `reply.prompt` — 回复生成
+- `reply_constraint.prompt` — 回复格式约束
+- `insight_digestion.prompt` — 离线消化
+- `vision.prompt` — 图片理解
+- `vision_emotion.prompt` — 表情分类
+- `emoji_reply.prompt` — 表情追评决策
+- `rerank.prompt` — 记忆重排
+
+涉及提示词生成的模块（`VisionClient`、`EmojiReplyService`、`APIReranker`、`ReplyPromptRenderer` 等）必须使用 `PromptTemplateLoader` 加载模板，不得内嵌字符串。
+
+---
+
 ## 高风险改动
 
 以下模块改动必须连带检查测试和所有调用点：

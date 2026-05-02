@@ -141,10 +141,15 @@ class ReplyPromptRenderer:
             platform_rule = "平台：私聊"
         format_rules = (
             "格式：只输出 JSON 字符串数组，每个元素是一条回复文本。\n"
+            "若回复内容包含多个独立句子，每句单独作为一个数组元素。\n"
             "例如：[\"晚上好喵~\"] 或 [\"第一句喵~\", \"第二句喵~\"]。\n"
             "不要输出任何其他内容（无MD、无解释、无编号）。"
         )
-        return f"- {platform_rule}\n- {format_rules}"
+        return self.template_loader.render(
+            "reply_constraint.prompt",
+            platform_rule=platform_rule,
+            format_rules=format_rules,
+        )
 
     def _continuity_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:
         lines = [

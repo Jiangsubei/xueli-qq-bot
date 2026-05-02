@@ -45,6 +45,7 @@ from src.handlers.reply_pipeline import ReplyPipeline, ReplyResult
 from src.handlers.repeat_echo_service import RepeatEchoService
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
 from src.handlers.timing_gate_service import TimingGateService
+from src.core.models import TimingDecision
 from src.memory.memory_flow_service import MemoryFlowService
 from src.memory.storage.fact_evidence_store import FactEvidenceStore
 from src.services.ai_client import AIClient, AIResponse
@@ -994,6 +995,21 @@ class MessageHandler:
             prompt_plan=plan.prompt_plan,
             reply_reference=plan.reply_reference,
         )
+
+    async def decide_timing_first(self, event: MessageEvent, trace_id: str = "") -> TimingDecision:
+        if not hasattr(self, "timing_gate_service") or self.timing_gate_service is None:
+            self.timing_gate_service = TimingGateService(
+                app_config=self.app_config,
+                model_invocation_router=self.model_invocation_router,
+            )
+        context = await self.build_message_context(
+            event,
+            plan=None,
+            trace_id=trace_id,
+            include_memory=False,
+        )
+        decision = await self.timing_gate_service.decide_timing_only(event=event, context=context)
+        return decision
 
     async def plan_emoji_follow_up(
         self,

@@ -11,6 +11,7 @@ from src.core.config import AppConfig
 from src.core.message_trace import get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.models import MessageEvent, MessageType
+from src.core.prompt_templates import PromptTemplateLoader
 from src.core.platform_models import FaceAction, MfaceAction, OutgoingAction, SessionRef
 from src.core.runtime_metrics import RuntimeMetrics
 
@@ -48,6 +49,7 @@ class EmojiReplyService:
         self.reply_tones = list(DEFAULT_REPLY_TONES)
         self._rng = random.Random()
         self._group_last_sent_at: Dict[str, float] = {}
+        self.template_loader = PromptTemplateLoader()
 
     async def plan_follow_up(
         self,
@@ -237,17 +239,10 @@ class EmojiReplyService:
         return __import__("datetime").datetime.fromisoformat(normalized).timestamp()
 
     def _build_system_prompt(self) -> str:
-        labels = " / ".join(self.emotion_labels)
-        tones = " / ".join(self.reply_tones)
-        return (
-            "你是群聊表情包回复决策助手。请同时结合用户语气、最近群聊上下文和助手最终回复，判断是否适合补发一张表情包。\n"
-            "只输出 JSON 对象，不要输出 markdown 或解释。\n"
-            "JSON 结构必须是："
-            '{"should_send":true,"tone":"安慰","emotion":"委屈","intent":"安慰-委屈","reason":"一句简短理由"}\n'
-            f"tone 只能从这些标签里选：{tones}\n"
-            f"emotion 只能从这些标签里选：{labels}\n"
-            "如果不适合发表情包，should_send 设为 false，tone/emotion/intent 置空。\n"
-            "严肃问答、命令结果、冗长说明、风险提示场景默认不要发表情包。"
+        return self.template_loader.render(
+            "emoji_reply.prompt",
+            emotion_labels=" / ".join(self.emotion_labels),
+            reply_tones=" / ".join(self.reply_tones),
         )
 
     def _extract_json_object(self, content: str) -> Dict[str, Any]:

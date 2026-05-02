@@ -287,10 +287,24 @@ class BotRuntime:
         try:
             logger.info("[运行时] 开始处理消息")
 
-            # ── 主循环 ── 每个周期完成：规划 → 节奏判断 → 回复生成 → 发送
+            # ── 主循环 ── 每个周期完成：节奏判断 → 规划 → 回复生成 → 发送
             #    循环会在以下情况持续：窗口内多条消息待处理、或需要重试
             while True:
-                # 阶段1：规划 — 调用 ConversationPlanner 决定 reply/wait/ignore
+                # 阶段1：节奏判断 — TimingGate 决定是否回复
+                logger.debug("[运行时] 开始节奏判断")
+                timing_decision = await asyncio.wait_for(
+                    self.message_handler.decide_timing_first(current_event, trace_id=trace_id),
+                    timeout=max(1, response_timeout),
+                )
+                logger.info("[运行时] 节奏判断完成")
+                if timing_decision.decision != "continue":
+                    plan = self._build_dispatch_plan_from_timing(timing_decision)
+                    current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
+                    if current_event is not None:
+                        continue
+                    return
+
+                # 阶段2：规划 — 调用 ConversationPlanner 决定 reply/wait/ignore
                 logger.debug("[运行时] 开始规划")
                 if plan is None:
                     plan = await asyncio.wait_for(
@@ -298,22 +312,8 @@ class BotRuntime:
                         timeout=max(1, response_timeout),
                     )
                 logger.info("[运行时] 规划完成")
-    
 
                 # 不需要回复：尝试分发到下一窗口（合并等待中的消息）
-                if not plan.should_reply:
-                    current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
-                    if current_event is not None:
-                        continue
-                    return
-
-                # 阶段2：节奏判断 — 调用 TimingGate 决定时机是否合适
-                logger.debug("[运行时] 开始节奏判断")
-                plan = await asyncio.wait_for(
-                    self.message_handler.apply_timing_gate(current_event, plan=plan, trace_id=trace_id),
-                    timeout=max(1, response_timeout),
-                )
-                logger.info("[运行时] 节奏判断完成")
                 if not plan.should_reply:
                     current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
                     if current_event is not None:

@@ -90,6 +90,43 @@ class TimingGateService:
             logger.warning("[节奏门] 节奏判断失败，回退到规则")
             return fallback
 
+    async def decide_timing_only(self, *, event: Any, context: MessageContext) -> TimingDecision:
+        fallback = self._fallback_decision(plan=None, context=context)
+        if self.ai_client is None:
+            return fallback
+        messages = [
+            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("user", self._build_user_prompt(event=event, plan=None, context=context)),
+        ]
+        try:
+            async def run_chat():
+                return await self.ai_client.chat_completion(messages=messages, temperature=0.1)
+
+            if self.model_invocation_router is not None:
+                response = await self.model_invocation_router.submit(
+                    purpose=ModelInvocationType.TIMING_GATE,
+                    trace_id=context.trace_id,
+                    session_key=context.execution_key or get_execution_key(event),
+                    message_id=getattr(event, "message_id", 0),
+                    label="节奏判断",
+                    runner=run_chat,
+                )
+            else:
+                response = await run_chat()
+            decision = self._parse_response(str(getattr(response, "content", "") or ""), fallback=fallback)
+            if context.trace_id:
+                logger.info(
+                    "节奏判断完成：%s decision=%s",
+                    format_trace_log(trace_id=context.trace_id, session_key=context.execution_key or get_execution_key(event), message_id=getattr(event, "message_id", 0)),
+                    decision.decision,
+                )
+            return decision
+        except asyncio.CancelledError:
+            raise
+        except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("[节奏门] 节奏判断失败，回退到规则")
+            return fallback
+
     def _build_system_prompt(self) -> str:
         """Load timing_gate.prompt — fully static, no variables."""
         return self.template_loader.load("timing_gate.prompt")
@@ -97,9 +134,10 @@ class TimingGateService:
     def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
         lines = [
             f"当前消息类型：{getattr(event, 'message_type', '') or 'private'}",
-            f"planner决定：{getattr(plan, 'reason', '')}",
-            f"当前消息：{context.user_message}",
         ]
+        if plan is not None:
+            lines.append(f"planner决定：{getattr(plan, 'reason', '')}")
+        lines.append(f"当前消息：{context.user_message}")
         if context.rendered_recent_history:
             lines.append("聊天历史（含时间戳）：")
             lines.append(context.rendered_recent_history)

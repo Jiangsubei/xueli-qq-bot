@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
+from src.core.prompt_templates import PromptTemplateLoader
 from src.services.ai_client import AIClient
 from src.memory_limits import MIN_RERANK_CANDIDATE_MAX_CHARS, MIN_RERANK_TOTAL_PROMPT_BUDGET
 
@@ -152,15 +153,10 @@ class APIReranker(BaseReranker):
             response_path=response_path or "choices.0.message.content",
             log_label="memory_rerank",
         )
+        self.template_loader = PromptTemplateLoader()
 
     def _build_system_prompt(self) -> str:
-        return (
-            "You are a memory reranker. Rank candidate memories by semantic relevance and scene fitness. "
-            "Prioritize memories that best match the query meaning, the current conversation scene, and long-term importance. "
-            "Important long-term preferences, user boundaries, and stable facts should rank above weak lexical matches. "
-            "Return JSON only in the form {\"results\": [{\"id\": \"memory-id\", \"score\": 0.95}]}. "
-            "Sort from best to worst and assign lower scores to scene-mismatched or weakly related memories."
-        )
+        return self.template_loader.load("rerank.prompt")
 
     def _build_user_prompt(
         self,

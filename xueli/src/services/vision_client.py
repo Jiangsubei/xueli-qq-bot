@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig, config, get_vision_service_status, is_vision_service_configured
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
+from src.core.prompt_templates import PromptTemplateLoader
 from src.emoji.models import DEFAULT_REPLY_TONES
 from src.services.ai_client import AIAPIError, AIClient
 
@@ -82,6 +83,7 @@ class VisionClient:
         self._owns_ai_client = ai_client is None
         self.model_invocation_router = model_invocation_router
         self.ai_client = ai_client
+        self.template_loader = PromptTemplateLoader()
         if self.ai_client is None and self.is_available():
             self.ai_client = self._create_ai_client()
 
@@ -120,18 +122,7 @@ class VisionClient:
         return get_vision_service_status(self.app_config)
 
     def _build_system_prompt(self) -> str:
-        return (
-            "你是图片理解助手。你的任务是输出简洁、可靠、可供聊天机器人继续使用的 JSON。\n"
-            "请只输出 JSON 对象，不要输出 markdown 或解释。\n"
-            "JSON 结构必须是：\n"
-            '{"images":[{"description":"第1张的简洁描述","is_sticker":true,"sticker_confidence":0.95,"sticker_reason":"判断依据"}],"merged_description":"整组图片摘要"}\n'
-            "要求：\n"
-            "1. description 只描述可见内容，不要编造细节。\n"
-            "2. is_sticker 用来判断图片是否属于聊天表情包、梗图、reaction image 或强表达性的截图拼图。\n"
-            "3. 普通照片、风景图、商品图、一般截图默认不要判成表情包。\n"
-            "4. sticker_confidence 取 0 到 1 之间的小数。\n"
-            "5. merged_description 需要概括整组图片内容。"
-        )
+        return self.template_loader.load("vision.prompt")
 
     def _build_user_text(self, user_text: str, image_count: int) -> str:
         clean_text = str(user_text or "").strip()
@@ -144,20 +135,10 @@ class VisionClient:
         return "\n".join(lines)
 
     def _build_emotion_system_prompt(self, emotion_labels: List[str]) -> str:
-        labels_text = " / ".join(emotion_labels)
-        tones_text = " / ".join(DEFAULT_REPLY_TONES)
-        return (
-            "你是表情包分类助手。请根据这张表情包图像，判断它最主要的情绪，以及适合用在哪类回复场景。\n"
-            "请只输出 JSON 对象，不要输出额外说明。\n"
-            'JSON 结构必须是：{"primary_emotion":"开心","confidence":0.9,"all_emotions":["开心","喜欢"],"reply_tones":["庆祝"],"reply_intents":["庆祝-开心"],"reason":"简短判断依据"}\n'
-            f"可选情绪标签只有：{labels_text}\n"
-            f"可选回复语气只有：{tones_text}\n"
-            "要求：\n"
-            "1. primary_emotion 必须从给定情绪标签中选择一个。\n"
-            "2. all_emotions 最多保留 3 个标签，按相关度排序。\n"
-            "3. reply_tones 最多保留 3 个标签，按适配度排序。\n"
-            "4. reply_intents 使用 tone-emotion 组合，例如 安慰-委屈。\n"
-            "5. confidence 取 0 到 1 之间的小数。"
+        return self.template_loader.render(
+            "vision_emotion.prompt",
+            emotion_labels=" / ".join(emotion_labels),
+            reply_tones=" / ".join(DEFAULT_REPLY_TONES),
         )
 
     def _extract_json_object(self, content: str) -> Dict[str, Any]:
