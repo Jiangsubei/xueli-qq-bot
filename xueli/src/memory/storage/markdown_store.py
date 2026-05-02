@@ -1,4 +1,4 @@
-﻿"""
+"""
 记忆存储层。
 
 使用 Markdown 持久化记忆，支持透明查看/编辑，以及普通记忆的衰减与归档。
@@ -366,13 +366,24 @@ class MarkdownMemoryStore:
         retention_bonus = self._get_retention_bonus(mem, age_days=age_days)
         return min(5.0, (base * decay_factor) + retention_bonus)
 
+    def _get_forget_threshold(self, mem: MemoryItem) -> float:
+        """根据记忆类别返回对应的遗忘阈值。"""
+        category = str((mem.metadata or {}).get("memory_category") or "").strip().lower()
+        thresholds = {
+            "core_fact": 0.05,
+            "important": self.ordinary_forget_threshold,
+            "casual": 0.8,
+        }
+        return thresholds.get(category, self.ordinary_forget_threshold)
+
     def _should_forget(self, mem: MemoryItem, now: Optional[datetime] = None) -> bool:
         if not self.ordinary_decay_enabled:
             return False
         if self._get_memory_kind(mem) != "ordinary":
             return False
         effective = self._get_effective_importance(mem, now=now)
-        return effective < self.ordinary_forget_threshold
+        threshold = self._get_forget_threshold(mem)
+        return effective < threshold
 
     def _partition_memories_by_decay(
         self,

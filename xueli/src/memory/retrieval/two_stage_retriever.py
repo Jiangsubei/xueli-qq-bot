@@ -48,6 +48,7 @@ class RetrievalConfig:
     local_mention_weight: float = 0.2
     local_recency_weight: float = 0.15
     local_scene_weight: float = 0.3
+    vector_weight: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -297,7 +298,7 @@ class TwoStageRetriever:
         self.config = config or RetrievalConfig()
         self.vector_index = vector_index
         self._reranker: Optional[BaseReranker] = None
-        self._vector_weight = 0.4
+        self._vector_weight = self.config.vector_weight
 
     def initialize_reranker(self):
         if not self.config.rerank_enabled:

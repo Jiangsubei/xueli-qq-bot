@@ -175,6 +175,7 @@ class MemoryConfig:
     local_mention_weight: float = 0.2
     local_recency_weight: float = 0.15
     local_scene_weight: float = 0.3
+    vector_weight: float = 0.4
 
 
 @dataclass(frozen=True)

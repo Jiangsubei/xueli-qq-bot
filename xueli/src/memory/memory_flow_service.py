@@ -175,4 +175,26 @@ class MemoryFlowService:
         final_style = getattr(message_context, "final_style_guide", None)
         if final_style and "接住" in str(getattr(final_style, "warmth_guidance", "") or ""):
             self.character_card_service.record_interaction_signal(user_id, "comfort_acceptance")
+        estimated_tone = self._estimate_user_emotion(prepared.original_user_message)
+        if estimated_tone:
+            self.character_card_service.record_emotion(user_id, estimated_tone)
         self.character_card_service.refresh_snapshot(user_id)
+
+    @staticmethod
+    def _estimate_user_emotion(text: str) -> str:
+        """Lightweight emotion estimation via keyword matching (no LLM call)."""
+        normalized = str(text or "").strip()
+        if not normalized:
+            return ""
+        patterns = {
+            "伤心": ["好难过", "难受", "哭了", "想哭", "崩溃", "绝望", "好苦", "好累", "心累"],
+            "生气": ["气死", "好气", "无语死了", "真无语", "烦死了", "受够了", "滚", "傻逼"],
+            "开心": ["哈哈", "太好了", "真棒", "开心", "高兴", "嘻嘻", "嘿嘿", "好耶", "！"],
+            "惊讶": ["不会吧", "真的假的", "居然", "竟然", "我靠", "震惊"],
+            "困惑": ["什么意思", "没懂", "不懂", "搞不懂", "怎么样", "什么情况"],
+            "平静": ["嗯", "好", "行", "没问题", "知道了"],
+        }
+        for tone, keywords in patterns.items():
+            if any(kw in normalized for kw in keywords):
+                return tone
+        return ""

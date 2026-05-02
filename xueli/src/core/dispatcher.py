@@ -147,13 +147,6 @@ class EventDispatcher:
         return self.stats.copy()
 
     def _attach_default_inbound_event(self, event: MessageEvent) -> InboundEvent:
-        # Prefer the platform adapter's normalizer when available.
-        adapter = getattr(self, "_adapter", None)
-        if adapter is not None and hasattr(adapter, "attach_inbound_event"):
-            result = adapter.attach_inbound_event(event)
-            if result is not None:
-                return result
-        # Fallback: OneBot-specific normalization (legacy path for QQ/NapCat).
         return attach_normalized_onebot_event(
             event,
             platform=self.platform,

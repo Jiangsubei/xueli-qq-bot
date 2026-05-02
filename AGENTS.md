@@ -55,6 +55,7 @@ bash start.sh
 `config.example.toml` 包含完整注释，所有字段均有说明；`config.toml` 为实际运行配置。配置项与代码默认值严格对齐。
 - 已新增 `[planning_window]`、`[memory_dispute]`、`[character_growth]` 三个 section
 - 已补充分段发送6个字段（`sentence_split_enabled`、`segmented_reply_enabled`、`max_segments` 等）
+- 已新增记忆检索融合权重 `vector_weight`（向量与 BM25 混合检索的融合比例）
 
 ### 7. README 与代码同步
 代码审查后发现 README 描述与实现完全吻合（结构化分段发送、随机延迟均已实现），无需修改 README。

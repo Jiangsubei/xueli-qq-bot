@@ -50,7 +50,16 @@ class ExtractionConfig:
         "重要记忆：[IMPORTANT][Tn] 用户123: 记忆内容\n"
         "重要记忆：[IMPORTANT][Tn-Tm] 用户123: 记忆内容\n"
         "TONE 行（可选）：[TONE:开心]\n"
-        "TONE 行（可选）：[TONE:伤心]"
+        "TONE 行（可选）：[TONE:伤心]\n"
+        "另外，你需要根据记忆的长期稳定性，使用 [CATEGORY:标签] 来标记记忆类别。标签含义：\n"
+        "核心事实：极其稳定的用户身份/背景/长期偏好，几乎不会遗忘\n"
+        "重要：一般重要的记忆，标准遗忘速度\n"
+        "闲聊：日常琐事、临时状态，容易遗忘\n"
+        "输出时在 TONE 之后（如有）加上类别行：\n"
+        "[CATEGORY:核心事实]\n"
+        "[CATEGORY:重要]\n"
+        "[CATEGORY:闲聊]\n"
+        "如果某条记忆之前已经标过类别，后面可以再次修改。如果不标，默认为[CATEGORY:重要]。"
     )
     reflection_system_prompt: str = (
         "你是一个冷静的记忆反思器。你的任务不是生成新记忆，而是判断一条新记忆与旧记忆之间是否存在真正冲突。\n"
@@ -75,6 +84,7 @@ class ExtractedMemory:
     is_important: bool = False
     importance: int = 3
     emotional_tone: str = ""
+    memory_category: str = "important"  # core_fact / important / casual
 
 
 @dataclass
@@ -330,6 +340,8 @@ class MemoryExtractor:
             )
             if item.emotional_tone:
                 metadata["emotional_tone"] = item.emotional_tone
+            if item.memory_category:
+                metadata["memory_category"] = item.memory_category
 
             # 4d. 冲突检测：与历史记忆比对，判断是否存在矛盾
             reflection = await self._reflect_on_memory_conflict(
@@ -613,6 +625,7 @@ class MemoryExtractor:
         memories: List[ExtractedMemory] = []
         lines = content.split("|") if "|" in content else content.splitlines()
         current_tone = ""
+        current_category = "important"
         for raw_line in lines:
             line = str(raw_line or "").strip()
             if not line or line.startswith("#"):
@@ -626,6 +639,12 @@ class MemoryExtractor:
                 valid_tones = {"开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑", "平静"}
                 if tone_label in valid_tones:
                     current_tone = tone_label
+                continue
+
+            category_match = re.match(r"^\[(?:CATEGORY|类别):\s*(核心事实|重要|闲聊)\s*\]$", line, re.IGNORECASE)
+            if category_match:
+                category_map = {"核心事实": "core_fact", "重要": "important", "闲聊": "casual"}
+                current_category = category_map.get(category_match.group(1), "important")
                 continue
 
             line = re.sub(r"^(?:普通记忆|重要记忆)\s*[：:]\s*", "", line)
@@ -675,6 +694,7 @@ class MemoryExtractor:
                     is_important=is_important,
                     importance=importance,
                     emotional_tone=current_tone,
+                    memory_category=current_category,
                 )
             )
         return memories

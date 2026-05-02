@@ -588,6 +588,7 @@ class CharacterCardSnapshot:
     core_traits: List[str] = field(default_factory=list)
     tone_preferences: List[str] = field(default_factory=list)
     behavior_habits: List[str] = field(default_factory=list)
+    bot_persona_hints: List[str] = field(default_factory=list)
     explicit_feedback_count: int = 0
     stable_signal_count: int = 0
     updated_at: str = ""

@@ -184,6 +184,7 @@ class BotBootstrapper:
                 local_mention_weight=memory_config.local_mention_weight,
                 local_recency_weight=memory_config.local_recency_weight,
                 local_scene_weight=memory_config.local_scene_weight,
+                vector_weight=memory_config.vector_weight,
             ),
             extraction_config=ExtractionConfig(
                 extract_every_n_turns=memory_config.extract_every_n_turns,

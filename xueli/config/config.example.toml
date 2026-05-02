@@ -164,6 +164,7 @@ local_importance_weight = 0.35     # 重要度权重
 local_mention_weight = 0.2         # 提及次数权重（用进废退）
 local_recency_weight = 0.15        # 时效性权重
 local_scene_weight = 0.3           # 场景匹配权重
+vector_weight = 0.4               # 向量语义检索与 BM25 的融合权重（向量得分 * vector_weight + BM25得分 * (1 - vector_weight)）
 
 [memory.extraction_extra_params]
 temperature = 0.3                  # 记忆提取专用温度（偏低以保证准确性）

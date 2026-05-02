@@ -53,6 +53,8 @@ class ReplyPromptRenderer:
             planning_signals=message_context.planning_signals,
         )
         message_context.final_style_guide = style_guide
+        emotional_trend = self._emotional_trend_section(event=event)
+        bot_persona_hints = self._bot_persona_hints_section(event=event)
         sections: List[Tuple[str, str]] = [
             ("identity", self._identity_section()),
             ("constraint", self._constraint_section(event=event, enabled=plan.policy.include_reply_scope)),
@@ -65,8 +67,18 @@ class ReplyPromptRenderer:
             ("dynamic_memory", self._dynamic_memory_section(message_context=message_context, enabled=plan.policy.include_dynamic_memory)),
             ("final_style", self._final_style_section(style_guide=style_guide, enabled=plan.policy.include_style_guide)),
         ]
+        if emotional_trend:
+            sections.append(("final_style_extra", "\n" + emotional_trend))
+        if bot_persona_hints:
+            sections.append(("bot_persona_extra", "\n" + bot_persona_hints))
         active_sections = [name for name, text in sections if str(text or "").strip()]
         section_texts = {name: text for name, text in sections if str(text or "").strip()}
+        # 合并 extra sections 到 final_style_block
+        final_style_text = str(section_texts.get("final_style", ""))
+        for extra_key in ("final_style_extra", "bot_persona_extra"):
+            extra = str(section_texts.get(extra_key, ""))
+            if extra and extra not in final_style_text:
+                final_style_text = final_style_text + extra
         system_prompt = self.template_loader.render(
             "reply.prompt",
             identity_block=section_texts.get("identity", ""),
@@ -78,7 +90,7 @@ class ReplyPromptRenderer:
             person_facts_block=section_texts.get("person_facts", ""),
             precise_recall_block=section_texts.get("precise_recall", ""),
             dynamic_memory_block=section_texts.get("dynamic_memory", ""),
-            final_style_block=section_texts.get("final_style", ""),
+            final_style_block=final_style_text,
         )
         return RenderedPrompt(
             system_prompt=system_prompt,
@@ -219,3 +231,33 @@ class ReplyPromptRenderer:
         if anti_patterns:
             lines.append("避免：\n" + anti_patterns)
         return "\n".join(lines)
+
+    def _emotional_trend_section(self, *, event: Any) -> str:
+        """Render emotional trend for prompt injection (from CharacterCardService)."""
+        if event is None:
+            return ""
+        card = getattr(self.host, "character_card_service", None)
+        if card is None:
+            return ""
+        try:
+            trend = card.get_emotional_trend(str(getattr(event, "user_id", "") or ""))
+        except Exception:
+            return ""
+        return trend
+
+    def _bot_persona_hints_section(self, *, event: Any) -> str:
+        """Render bot persona hints for this specific user (from CharacterCardService)."""
+        if event is None:
+            return ""
+        card = getattr(self.host, "character_card_service", None)
+        if card is None:
+            return ""
+        try:
+            user_id = str(getattr(event, "user_id", "") or "")
+            snapshot = card.get_snapshot(user_id)
+            hints = list(getattr(snapshot, "bot_persona_hints", []) or [])
+        except Exception:
+            return ""
+        if not hints:
+            return ""
+        return "Bot 对此用户的已适应习惯：\n" + "\n".join(f"- {h}" for h in hints)
