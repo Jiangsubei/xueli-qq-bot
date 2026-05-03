@@ -52,7 +52,6 @@ class PrivatePlanningTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_message_uses_planner_after_window_closes(self) -> None:
         planner = _FakePlanner()
         handler = MessageHandler(conversation_planner=planner)
-        handler.private_batch_window_seconds = 0.01
 
         plan = await handler.plan_message(self._event("帮我看看这个思路"))
 
@@ -60,25 +59,17 @@ class PrivatePlanningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.source, "planner")
         self.assertEqual(planner.calls, 1)
         self.assertIsNotNone(plan.prompt_plan)
-        self.assertEqual(plan.reply_context.get("window_seq"), 1)
 
-    async def test_private_batching_merges_inputs_into_single_dispatch(self) -> None:
+    async def test_private_bypasses_window_direct_to_planner(self) -> None:
         planner = _FakePlanner()
         handler = MessageHandler(conversation_planner=planner)
-        handler.private_batch_window_seconds = 0.05
 
-        first_task = asyncio.create_task(handler.plan_message(self._event("我补充一下", message_id=10)))
-        await asyncio.sleep(0.02)
+        first_plan = await handler.plan_message(self._event("我补充一下", message_id=10))
         second_plan = await handler.plan_message(self._event("帮我整理这个思路", message_id=11))
-        first_plan = await first_task
 
-        self.assertEqual(second_plan.action, MessagePlanAction.WAIT.value)
         self.assertEqual(first_plan.action, MessagePlanAction.REPLY.value)
-        self.assertEqual(planner.calls, 1)
-        self.assertIn("我补充一下", planner.last_user_message)
-        self.assertIn("帮我整理这个思路", planner.last_user_message)
-        self.assertIn("merged_user_message", first_plan.reply_context)
-        self.assertEqual(first_plan.reply_context.get("window_seq"), 1)
+        self.assertEqual(second_plan.action, MessagePlanAction.REPLY.value)
+        self.assertEqual(planner.calls, 2)
 
     async def test_cleanup_private_window_state_removes_idle_conversations(self) -> None:
         planner = _FakePlanner()

@@ -14,10 +14,18 @@ def build_trace_id(message_id: int | str) -> str:
 def get_execution_key(event: MessageEvent) -> str:
     inbound_event = get_attached_inbound_event(event)
     if inbound_event is not None:
-        return get_execution_key_for_session(inbound_event.session)
+        key = get_execution_key_for_session(inbound_event.session)
+        if key.startswith("qq:group:") or key.startswith("group:"):
+            user_id = str(event.user_id or "")
+            if user_id:
+                return f"{key}:{user_id}"
+        return key
     if event.message_type == MessageType.PRIVATE.value:
         return f"private:{event.user_id}"
     group_id = event.raw_data.get("group_id", "")
+    user_id = str(event.user_id or "")
+    if user_id:
+        return f"group:{group_id}:{user_id}"
     return f"group:{group_id}"
 
 
@@ -26,7 +34,8 @@ def get_execution_key_for_session(session: SessionRef) -> str:
         channel_id = str(session.channel_id or "").strip()
         if channel_id:
             if session.platform:
-                return f"{session.platform}:{session.scope}:{channel_id}"
+                scope_name = "group" if session.scope == "shared" else session.scope
+                return f"{session.platform}:{scope_name}:{channel_id}"
             return f"{session.scope}:{channel_id}"
     return session.qualified_key
 

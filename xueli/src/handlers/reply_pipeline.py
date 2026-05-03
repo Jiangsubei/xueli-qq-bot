@@ -14,6 +14,7 @@ from src.core.model_invocation_router import ModelInvocationType
 from src.core.pipeline_errors import classify_pipeline_error
 from src.core.models import Conversation, MessageEvent, MessageHandlingPlan, MessageType, PromptPlan, TemporalContext
 from src.core.runtime_metrics import RuntimeMetrics
+from src.handlers.display_utils import window_display_text
 from src.handlers.label_constants import DISPLAY_NAME_FALLBACK, SESSION_TYPE_LABEL
 from src.handlers.message_context import MessageContext
 from src.handlers.reply_generation_service import ReplyGenerationService
@@ -47,6 +48,7 @@ class ReplyResult:
     text: str
     segments: List[str] = field(default_factory=list)
     source: str = "ai"
+    emoji_intent: Optional[str] = None
 
 
 class ReplyPipelineHost(Protocol):
@@ -226,7 +228,6 @@ class ReplyPipeline:
             messages = self.build_response_messages(
                 system_prompt=system_prompt,
                 user_message=model_user_message,
-                base64_images=base64_images,
                 related_history_messages=related_history_messages,
             )
 
@@ -263,11 +264,30 @@ class ReplyPipeline:
             self._persist_reply_result(event, prepared, response)
             group_id = event.raw_data.get("group_id", "")
             logger.debug("[回复管道] 回复生成完成")
-            normalized_text = str(response.content or "").strip()
-            normalized_segments = [str(item or "").strip() for item in list(getattr(response, "segments", None) or []) if str(item or "").strip()]
+            raw_text = str(response.content or "").strip()
+
+            emoji_intent: Optional[str] = None
+            if raw_text.startswith("["):
+                try:
+                    parsed_raw = json.loads(raw_text)
+                    if isinstance(parsed_raw, list) and parsed_raw:
+                        last = parsed_raw[-1]
+                        if isinstance(last, list) and len(last) == 2 and isinstance(last[0], str):
+                            emoji_intent = str(last[1] or "").strip() or None
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            normalized_text = raw_text
+            normalized_segments = list(getattr(response, "segments", None) or [])
             if not normalized_segments and normalized_text:
                 normalized_segments = [normalized_text]
-            return ReplyResult(text=normalized_text, segments=normalized_segments, source=source)
+
+            return ReplyResult(
+                text=normalized_text,
+                segments=normalized_segments,
+                source=source,
+                emoji_intent=emoji_intent,
+            )
         except asyncio.TimeoutError:
             logger.error("[回复管道] 回复生成失败（超时）")
             return ReplyResult(text="", segments=[], source="error_suppressed")
@@ -310,11 +330,11 @@ class ReplyPipeline:
                 event.user_id,
                 self.host._get_conversation_key(event),
                 ",".join(prepared.active_sections),
-                prepared.system_prompt or "[空]",
+                prepared.system_prompt or "用户发送了空文本",
             )
             return
         else:
-            logger.info("[FULL PROMPT]\ntrace=%s\n%s", trace_id, prepared.system_prompt or "[空]")
+            logger.info("[FULL PROMPT]\ntrace=%s\n%s", trace_id, prepared.system_prompt or "用户发送了空文本")
 
     def _persist_reply_result(self, event: MessageEvent, prepared: PreparedReplyRequest, response: AIResponse) -> None:
         prepared.conversation.add_message("user", prepared.history_user_message, message_id=str(event.message_id or ""))
@@ -425,7 +445,6 @@ class ReplyPipeline:
                 "role": "system",
                 "content": self.augment_system_prompt_for_tools(str(request_messages[0].get("content", "")), tools),
             }
-        self._log_actual_prompt_messages(event=event, messages=request_messages, title="[FULL PROMPT]", trace_id=trace_id)
         response = await self._invoke_reply_model(
             messages=request_messages,
             temperature=temperature,
@@ -842,10 +861,8 @@ class ReplyPipeline:
         self,
         system_prompt: str,
         user_message: str,
-        base64_images: List[str],
         related_history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        del base64_images
         messages = [self.host.ai_client.build_text_message("system", system_prompt)]
         messages.extend(list(related_history_messages or []))
         messages.append(self.host.ai_client.build_text_message("user", user_message))
@@ -938,36 +955,21 @@ class ReplyPipeline:
         ts = float(item.get("event_time") or 0.0)
         time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts > 0 else "?"
         prefix = f"[{time_str}] "
-        text = self._window_display_text(item)
+        text = window_display_text(item)
         if text:
             return f"{prefix}{speaker}: {text}"
         merged_description = str(item.get("merged_description") or "").strip()
-        if merged_description:
-            return f"{prefix}{speaker}: 图片摘要: {merged_description}"
         per_image_descriptions = [
             str(value).strip()
             for value in (item.get("per_image_descriptions") or [])
             if str(value).strip()
         ]
+        if merged_description:
+            return f"{prefix}{speaker}: [图片] {merged_description}"
         if per_image_descriptions:
-            return f"{prefix}{speaker}: 图片摘要: " + "；".join(per_image_descriptions)
+            return f"{prefix}{speaker}: [图片] " + "；".join(per_image_descriptions)
         if bool(item.get("has_image")):
-            return f"{prefix}{speaker}: [图片]"
-        return ""
-
-    def _window_display_text(self, item: Dict[str, Any]) -> str:
-        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
-        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
-        if has_image_indicator and image_desc:
-            if text and text != "[空]":
-                return f"{text}[图片描述：{image_desc}]"
-            return f"[图片描述：{image_desc}]"
-        if text and text != "[空]":
-            return text
-        if has_image_indicator:
-            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
+            return f"{prefix}{speaker}: [图片]未成功识别"
         return ""
 
     async def _resolve_vision_analysis(
@@ -1032,8 +1034,8 @@ class ReplyPipeline:
 
     def _build_history_image_failure_note(self, original_user_message: str) -> str:
         if original_user_message.strip():
-            return f"{original_user_message}\n[图片未成功识别]"
-        return "[图片未成功识别]"
+            return f"{original_user_message}\n[图片]未成功识别"
+        return "[图片]未成功识别"
 
     def _compose_vision_augmented_text(
         self,
@@ -1060,25 +1062,20 @@ class ReplyPipeline:
 
         # 任一图片分析失败时，只输出一次统一的不确定说明
         if vision_failure_count > 0 and vision_success_count == 0:
-            lines.append("[图片未成功识别]")
+            lines.append("[图片]未成功识别")
             return "\n".join(lines).strip()
 
         # 低置信视觉描述：使用更谨慎的表达
         if merged:
-            # 检查是否是低置信描述（简单判断：描述过短或包含不确定词汇）
             is_low_confidence = len(merged) < 10 or any(
                 word in merged for word in ["好像", "可能是", "大概", "似乎", "也许"]
             )
-            if is_low_confidence:
-                lines.append("图片摘要（仅供参考）: " + merged)
-            else:
-                lines.append("图片摘要: " + merged)
+            suffix = "（仅供参考）" if is_low_confidence else ""
+            lines.append(f"[图片{suffix}] {merged}")
         elif details:
-            # P3: 只有当用户明确在问图时才展开逐图细节
-            # 这里简化处理：如果只有细节摘要，说明视觉分析置信度不够
-            lines.append("[图片]")  # 不输出具体描述，避免错误猜测
+            lines.append("[图片] " + "；".join(details))
         elif not lines and merged:
-            lines.append("图片摘要: " + merged)
+            lines.append(f"[图片] {merged}")
         return "\n".join(lines).strip()
 
     def _build_fallback_response(self, *, event: MessageEvent, original_user_message: str, vision_analysis: Dict[str, Any]) -> Optional[str]:

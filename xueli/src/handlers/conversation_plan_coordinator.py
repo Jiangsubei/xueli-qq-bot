@@ -13,6 +13,7 @@ from src.core.runtime_metrics import RuntimeMetrics
 from src.handlers.conversation_engagement import build_message_observations
 from src.handlers.conversation_planner import ConversationPlanner
 from src.handlers.conversation_session_manager import ConversationSessionManager
+from src.handlers.display_utils import window_display_text
 from src.handlers.message_context import MessageContext
 from src.handlers.conversation_window_models import BufferedWindow
 from src.handlers.temporal_context import build_temporal_context, normalize_event_time
@@ -109,10 +110,11 @@ class ConversationPlanCoordinator:
         display_text = clean_text
         image_placeholder = ""
         if has_image:
-            # 优先使用 vision 分析结果中的图片描述
             image_desc = str(merged_description or "").strip()
             if image_desc:
-                image_placeholder = f"[图片描述：{image_desc}]"
+                image_placeholder = f"[图片] {image_desc}"
+            elif vision_failure_count > 0:
+                image_placeholder = "[图片]未成功识别"
             else:
                 image_placeholder = "[图片]" if image_count == 1 else f"[图片 x{image_count}]"
             planner_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
@@ -120,15 +122,8 @@ class ConversationPlanCoordinator:
         if has_image:
             display_text = f"{clean_text} {image_placeholder}".strip() if clean_text else image_placeholder
 
-        if merged_description:
-            planner_text = f"{planner_text}\n图片摘要: {merged_description}".strip()
-        elif per_image_descriptions:
-            planner_text = f"{planner_text}\n图片描述: {'；'.join(per_image_descriptions)}".strip()
-        elif effective_has_image and vision_failure_count > 0:
-            planner_text = f"{planner_text}\n图片理解状态: 识图失败".strip()
-
         if not planner_text:
-            planner_text = "[空]"
+            planner_text = "用户发送了空文本"
 
         return {
             "event_time": self._event_time(event),
@@ -167,17 +162,17 @@ class ConversationPlanCoordinator:
         ]
         for index, item in enumerate(window_messages, 1):
             speaker = self._format_window_speaker(item)
-            text = self._window_display_text(item)
+            text = window_display_text(item)
             latest_note = " [当前消息]" if item.get("is_latest") else ""
             lines.append(f"{index}. {speaker}: {text}{latest_note}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
-                lines.append(f"   图片摘要: {merged_description}")
+                lines.append(f"   [图片] {merged_description}")
             for image_index, description in enumerate(item.get("per_image_descriptions") or [], 1):
                 lines.append(f"   第{image_index}张: {description}")
             if item.get("has_image") and item.get("vision_failure_count", 0) and not item.get("vision_available"):
-                lines.append("   图片理解: 失败")
+                lines.append("   [图片]未成功识别")
         lines.append("")
         return "\n".join(lines)
 
@@ -530,7 +525,36 @@ class ConversationPlanCoordinator:
         trace_id: str = "",
     ) -> MessageContext:
         history_key = self._history_key(event)
-        history_items = await self._get_recent_history(history_key)
+
+        context_snapshot = None
+        if window.planning_signals and isinstance(window.planning_signals, dict):
+            context_snapshot = window.planning_signals.get("context_snapshot")
+
+        if context_snapshot and hasattr(context_snapshot, "messages"):
+            from src.core.models import ConversationSnapshot
+
+            snapshot: ConversationSnapshot = context_snapshot
+            history_items = [
+                {
+                    "message_id": msg.message_id,
+                    "user_id": msg.user_id,
+                    "text": msg.content,
+                    "display_text": msg.content,
+                    "text_content": msg.content,
+                    "event_time": msg.event_time,
+                    "has_image": bool(msg.raw_data.get("has_image", False)),
+                    "raw_has_image": bool(msg.raw_data.get("has_image", False)),
+                    "per_image_descriptions": list(msg.raw_data.get("per_image_descriptions") or []),
+                    "merged_description": str(msg.raw_data.get("merged_description") or ""),
+                    "vision_available": bool(msg.raw_data.get("vision_available", False)),
+                    "vision_failure_count": int(msg.raw_data.get("vision_failure_count", 0) or 0),
+                    "vision_success_count": int(msg.raw_data.get("vision_success_count", 0) or 0),
+                }
+                for msg in snapshot.messages
+            ]
+        else:
+            history_items = await self._get_recent_history(history_key)
+
         buffered_messages = await self._enrich_buffered_window_messages(list(window.messages or []), trace_id=trace_id)
         window_messages = self._compose_buffered_window_messages(history_items, buffered_messages)
         latest_message = next(
@@ -753,7 +777,7 @@ class ConversationPlanCoordinator:
         if text_content:
             return True
         planner_text = str(latest_message.get("text") or "").strip()
-        return bool(planner_text and planner_text != "[空]")
+        return bool(planner_text and planner_text != "用户发送了空文本")
 
     async def _plan_with_window_messages(
         self,
@@ -839,27 +863,12 @@ class ConversationPlanCoordinator:
             return "在当前这条群消息之前，群里刚刚聊过的内容暂时还没有。"
         lines = ["在当前这条群消息之前，群里刚刚聊了这些内容："]
         for item in history_items:
-            lines.append(f"{self._format_window_speaker(item)}: {self._window_display_text(item)}")
+            lines.append(f"{self._format_window_speaker(item)}: {window_display_text(item)}")
         return "\n".join(lines)
 
     def _record_plan_metric(self, action: str, source: str = "") -> None:
         if self.runtime_metrics:
             self.runtime_metrics.record_planner_action(action, source=source)
-
-    def _window_display_text(self, item: Dict[str, Any]) -> str:
-        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
-        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
-        if has_image_indicator and image_desc:
-            if text and text != "[空]":
-                return f"{text}[图片描述：{image_desc}]"
-            return f"[图片描述：{image_desc}]"
-        if text and text != "[空]":
-            return text
-        if has_image_indicator:
-            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
-        return text or "[空]"
 
 
 __all__ = ["ConversationPlanCoordinator"]

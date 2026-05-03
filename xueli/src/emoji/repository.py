@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,10 +16,24 @@ from .models import EmojiEmotionResult, EmojiRecord
 class EmojiRepository:
     """Persist native emoji references and metadata on the local filesystem."""
 
-    def __init__(self, storage_path: str) -> None:
+    def __init__(
+        self,
+        storage_path: str,
+        *,
+        max_stored_emojis: int = 100,
+        overflow_policy: str = "replace_oldest",
+    ) -> None:
         self.root = Path(storage_path)
         self.index_path = self.root / "index.json"
         self._lock = asyncio.Lock()
+        self._max_stored_emojis = max_stored_emojis
+        self._overflow_policy = overflow_policy
+        self._rng = random.Random()
+        self._has_emoji_data: bool = False
+
+    @property
+    def has_emoji_data(self) -> bool:
+        return self._has_emoji_data
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
@@ -44,6 +59,23 @@ class EmojiRepository:
             index = await self._read_index()
             items = index.setdefault("items", {})
             existing = items.get(emoji_id)
+
+            if not existing:
+                current_count = sum(
+                    1 for item in items.values()
+                    if item.get("sticker_kind") in {"face", "mface"} and not item.get("disabled", False)
+                )
+                if current_count >= self._max_stored_emojis:
+                    if self._overflow_policy == "reject_new":
+                        return None
+                    if self._overflow_policy == "replace_oldest":
+                        oldest = min(
+                            (item for item in items.values() if item.get("sticker_kind") in {"face", "mface"}),
+                            key=lambda item: item.get("last_seen_at", "") or "",
+                            default=None,
+                        )
+                        if oldest:
+                            del items[oldest.get("emoji_id", "")]
 
             if existing:
                 record = EmojiRecord.from_dict(existing)
@@ -88,6 +120,8 @@ class EmojiRepository:
             items[emoji_id] = record.to_dict()
             index["version"] = 3
             await self._write_index(index)
+            if record.emotion_status == "classified":
+                self._has_emoji_data = True
             return record
 
     async def list_pending(self, *, limit: int = 1) -> List[EmojiRecord]:
@@ -201,6 +235,44 @@ class EmojiRepository:
             )
         ]
         return self._sort_candidates(emotion_match)
+
+    async def find_by_intent(self, intent: str) -> List[EmojiRecord]:
+        async with self._lock:
+            index = await self._read_index()
+            items = [
+                EmojiRecord.from_dict(item)
+                for item in index.get("items", {}).values()
+                if item.get("emotion_status") == "classified"
+                and not item.get("disabled", False)
+                and item.get("sticker_kind") in {"face", "mface"}
+            ]
+
+        exact = [item for item in items if intent and intent in set(item.reply_intents or [])]
+        if exact:
+            return self._sort_candidates(exact)[: self._max_stored_emojis]
+
+        tone = intent.split("-")[0] if "-" in intent else ""
+        emotion = intent.split("-")[1] if "-" in intent else ""
+
+        tone_match = [item for item in items if tone and tone in set(item.reply_tones or [])]
+        if tone_match:
+            return self._sort_candidates(tone_match)[: self._max_stored_emojis]
+
+        emotion_match = [
+            item
+            for item in items
+            if emotion and (item.primary_emotion == emotion or emotion in set(item.emotion_candidates or []))
+        ]
+        return self._sort_candidates(emotion_match)[: self._max_stored_emojis]
+
+    def weighted_pick(self, candidates: List[EmojiRecord]) -> Optional[EmojiRecord]:
+        if not candidates:
+            return None
+        weights = [
+            max(0.01, float(item.manual_weight) / (1.0 + float(item.auto_reply_count)))
+            for item in candidates
+        ]
+        return self._rng.choices(candidates, weights=weights, k=1)[0]
 
     async def mark_auto_reply_sent(self, emoji_id: str) -> Optional[EmojiRecord]:
         async with self._lock:

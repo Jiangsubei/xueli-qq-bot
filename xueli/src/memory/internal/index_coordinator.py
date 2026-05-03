@@ -63,15 +63,12 @@ class MemoryIndexCoordinator:
             return False
 
     async def rebuild_all_indices(self) -> None:
-        users_path = self.storage.users_path
-        if not users_path.exists():
+        user_ids = self.storage.get_user_ids()
+        if not user_ids:
             return
 
-        user_files = list(users_path.glob("*.md"))
         logger.debug("[索引协调] 开始重建索引")
-        tasks = [self.rebuild_index(path.stem) for path in user_files]
-        if not tasks:
-            return
+        tasks = [self.rebuild_index(user_id) for user_id in user_ids]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         success_count = sum(1 for item in results if item is True)

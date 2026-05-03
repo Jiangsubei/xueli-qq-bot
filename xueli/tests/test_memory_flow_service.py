@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 
@@ -19,10 +20,11 @@ class _MemoryManagerStub:
         self.scheduled.append({"user_id": user_id, **kwargs})
 
 
-class MemoryFlowServiceTests(unittest.TestCase):
-    def test_on_reply_generated_only_touches_memory_manager(self) -> None:
+class MemoryFlowServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_on_reply_generated_enqueues_and_drains(self) -> None:
         manager = _MemoryManagerStub()
         service = MemoryFlowService(manager)
+        await service.start()
         prepared = PreparedReplyRequest(
             original_user_message="我们继续聊周末安排",
             model_user_message="我们继续聊周末安排",
@@ -39,9 +41,12 @@ class MemoryFlowServiceTests(unittest.TestCase):
         event = SimpleNamespace(user_id=42, group_id=None, message_type="private", message_id=1001)
 
         service.on_reply_generated(host=host, event=event, prepared=prepared, reply_text="那我们继续定周末安排。")
+        await service._drain_queue_for_tests()
 
         self.assertEqual(len(manager.turns), 1)
         self.assertEqual(len(manager.scheduled), 1)
+
+        await service.close()
 
 
 if __name__ == "__main__":

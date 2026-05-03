@@ -58,31 +58,20 @@ class PlanningWindowServiceTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-    async def test_private_window_dispatches_single_merged_batch(self) -> None:
+    async def test_private_window_bypasses_to_planner(self) -> None:
         handler = MessageHandler(conversation_planner=_FakePlanner())
-        handler.private_batch_window_seconds = 0.01
 
-        first_task = asyncio.create_task(
-            handler.planning_window_service.submit_private_event(event=self._private_event("第一句", message_id=10))
+        result = await handler.planning_window_service.submit_private_event(
+            event=self._private_event("第一句", message_id=10)
         )
-        await asyncio.sleep(0)
-        second_result = await handler.planning_window_service.submit_private_event(
-            event=self._private_event("再说一个点", message_id=11)
-        )
-        first_result = await first_task
 
-        self.assertEqual(second_result.status, "accepted_only")
-        self.assertEqual(first_result.status, "dispatch_window")
-        self.assertEqual(first_result.window.seq, 1)
-        self.assertIn("第一句", first_result.window.merged_user_message)
-        self.assertIn("再说一个点", first_result.window.merged_user_message)
+        self.assertEqual(result.status, "bypassed")
 
     async def test_group_at_message_bypasses_window(self) -> None:
         handler = MessageHandler(conversation_planner=_FakePlanner())
         result = await handler.planning_window_service.submit_event(event=self._group_event("看这里", at_bot=True))
 
         self.assertEqual(result.status, "bypassed")
-        self.assertEqual(result.reason, "bypassed")
 
 
 if __name__ == "__main__":

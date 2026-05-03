@@ -30,7 +30,7 @@ class ConversationTimelineFormatter:
     def build_items(self, window_messages: Iterable[dict[str, Any]]) -> List[ConversationContextItem]:
         items: List[ConversationContextItem] = []
         for message in list(window_messages or []):
-            text = str(message.get("display_text") or message.get("text") or message.get("raw_text") or "[空]").strip() or "[空]"
+            text = str(message.get("display_text") or message.get("text") or message.get("raw_text") or "用户发送了空文本").strip() or "用户发送了空文本"
             speaker_label = _speaker_label(message)
             items.append(
                 ConversationContextItem(
@@ -62,7 +62,7 @@ class ConversationTimelineFormatter:
         if detail == "summary":
             lines = ["最近上下文摘要："]
             for item in previous_items[-3:]:
-                lines.append(f"- {_speaker_label(item)}：{str(item.get('display_text') or item.get('text') or '[空]').strip() or '[空]'}")
+                lines.append(f"- {_speaker_label(item)}：{str(item.get('display_text') or item.get('text') or '用户发送了空文本').strip() or '用户发送了空文本'}")
             if temporal_context and str(getattr(temporal_context, "summary_text", "")).strip():
                 lines.append(f"- 时间线观察：{temporal_context.summary_text}")
             return "\n".join(lines)
@@ -71,7 +71,7 @@ class ConversationTimelineFormatter:
         for item in previous_items:
             lines.append(
                 f"- [{_format_clock(float(item.get('event_time', 0.0) or 0.0))}] {_speaker_label(item)}："
-                f"{str(item.get('display_text') or item.get('text') or '[空]').strip() or '[空]'}"
+                f"{str(item.get('display_text') or item.get('text') or '用户发送了空文本').strip() or '用户发送了空文本'}"
             )
         if chat_mode == "group" and temporal_context and str(getattr(temporal_context, "summary_text", "")).strip():
             lines.append(f"- 时间线观察：{temporal_context.summary_text}")

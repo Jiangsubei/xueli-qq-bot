@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import aiofiles
 import os
+import shutil
 
 logger = logging.getLogger(__name__)
 _ANCHOR_METADATA_KEYS = {
@@ -260,11 +261,13 @@ class MarkdownMemoryStore:
 
         self.users_path = self.base_path / "users"
         self.users_path.mkdir(exist_ok=True)
+        (self.users_path / "group").mkdir(exist_ok=True)
 
         self.archive_path = self.base_path / "archive"
         self.archive_path.mkdir(exist_ok=True)
         self.archive_users_path = self.archive_path / "users"
         self.archive_users_path.mkdir(exist_ok=True)
+        (self.archive_users_path / "group").mkdir(exist_ok=True)
 
         self.ordinary_decay_enabled = ordinary_decay_enabled
         self.ordinary_half_life_days = max(float(ordinary_half_life_days), 0.1)
@@ -274,12 +277,31 @@ class MarkdownMemoryStore:
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
+        if user_id.startswith("group:"):
+            group_part = user_id[6:]
+            return self.users_path / "group" / f"{group_part}.md"
         return self.users_path / f"{user_id}.md"
 
     def get_user_ids(self) -> List[str]:
-        return sorted(file_path.stem for file_path in self.users_path.glob("*.md"))
+        user_ids = [file_path.stem for file_path in self.users_path.glob("*.md")]
+        group_dir = self.users_path / "group"
+        if group_dir.exists():
+            for file_path in group_dir.glob("*.md"):
+                user_ids.append(f"group:{file_path.stem}")
+        archive_user_ids = [file_path.stem for file_path in self.archive_users_path.glob("*.md")]
+        archive_group_dir = self.archive_users_path / "group"
+        if archive_group_dir.exists():
+            for file_path in archive_group_dir.glob("*.md"):
+                archive_user_ids.append(f"group:{file_path.stem}")
+        for uid in archive_user_ids:
+            if uid not in user_ids:
+                user_ids.append(uid)
+        return sorted(set(user_ids))
 
     def _get_archive_user_file(self, user_id: str) -> Path:
+        if user_id.startswith("group:"):
+            group_part = user_id[6:]
+            return self.archive_users_path / "group" / f"{group_part}.md"
         return self.archive_users_path / f"{user_id}.md"
 
     def _get_file_lock(self, file_path: str) -> asyncio.Lock:
@@ -622,7 +644,7 @@ class MarkdownMemoryStore:
                 async with aiofiles.open(tmp_path, "w", encoding="utf-8") as f:
                     await f.write(content)
 
-                os.replace(tmp_path, file_path)
+                await asyncio.to_thread(shutil.move, str(tmp_path), str(file_path))
                 return True
             except OSError as e:
                 logger.error("[存储] 写入记忆文件失败")

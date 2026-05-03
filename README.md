@@ -1,12 +1,15 @@
+
+---
+
 # xueli
 
-> 轻量对话内核 · 多平台适配 · 开放 API 接入
+> 开放 · 轻量 · 平台解耦
 
-**xueli** 是一个专注于对话能力的轻量级机器人框架。它不绑定任何特定平台，你可以把它接入 QQ（NapCat）、开放 API，或者未来任何消息渠道。
+**xueli** 是一个专门用来聊天的轻量机器人框架。它不绑定任何特定平台，你可以把它接到 QQ（通过 NapCat）、开放 API，或者任何你想要的地方。
 
 核心特点：
 
-- 🧠 **智能对话规划** – 不只会回复，还会判断“该不该回、什么时候回、怎么回”
+- 🧠 **智能对话规划** – 判断该不该回（TimingGate）、怎么回（Planner）— 节奏与策略分离
 - 📝 **长期记忆系统** – 记住用户说过的重要信息，支持事实沉淀、会话恢复、精准召回，记忆会真实衰减和遗忘
 - 🧠 **自主情绪引擎** – AI 的情绪不由正弦波驱动，而是从对话情感密度、记忆检索失败率等内部状态自然涌现
 - 🔌 **平台解耦** – 同样的内核，通过不同的 adapter 接入 QQ、API 等渠道
@@ -14,46 +17,44 @@
 - 🌐 **本地 WebUI** – 提供可视化控制台，方便调试和管理
 - 📡 **开放 API 接入层** – 允许第三方服务通过 HTTP 调用机器人能力
 
----
+## 主要功能
 
-## ✨ 主要功能
+| 模块 | 能做什么 |
+|------|---------|
+| 会话规划 (Planner) | 决定“怎么回话”，生成一个计划，告诉后面的步骤该用哪些记忆、什么语气等 |
+| 缓冲窗口调度 | 聊天消息按时间切成一段一段处理，超时自动丢弃，防止回复越堆越慢 |
+| 节奏控制 (TimingGate) | 决定“要不要插话”，避免刷屏，让对话更自然 |
+| 回复规划 | 控制回复的风格、情绪以及关联哪些记忆 |
+| 提示词模板 | 把主要的提示词（规划、节奏、回复）抽出来放在模板文件里，方便修改和调试 |
+| 结构化分段发送 | 回复默认拆成多条消息，程序负责清洗、逐条发出并加随机延迟，更像真人在打字 |
+| 会话连续性 | 私聊和群聊对话永不过期，重启后自动恢复，并记住上次说话的时间用来判断对话是否还在继续 |
+| 多层记忆 | 三层记忆（人物事实/对话摘要/普通回忆），Markdown + SQLite 明文存储。记忆会“用进废退”，太久不碰的会加速遗忘；带情绪的记忆更难被忘掉；还会后台自动消化近期对话，总结出新洞察 |
+| 图片理解 | 会分析图片内容来更好地理解你在说什么，但机器人不会把图片当成表情包发出去 |
+| 表情互动 | 只用平台自带的表情（如 QQ 的 face 表情），不再乱发本地图片当表情包 |
+| WebUI | 实时看会话状态、记忆内容和日志，还能在线调配置 |
+| API 接入 | 提供 `POST /events` 接口，任何外部系统都可以发消息给机器人并得到回复 |
 
-| 功能模块 | 说明 |
-|---------|------|
-| 会话规划 | 群聊与私聊共用一条规划链路 |
-| 缓冲窗口调度 | 每会话按时间片生成窗口，顺序消费，超时窗口自动丢弃，避免延迟叠加 |
-| 节奏控制 | 避免刷屏，让对话更自然 |
-| 回复规划 | 控制回复风格、情感、相关记忆的拼接 |
-| 提示词模板体系 | `planner / timing gate / reply` 主提示词已拆成模板文件，便于维护和调试 |
-| 结构化分段发送 | 回复模型默认输出字符串数组，程序负责清洗、逐条发送和随机延迟，正则分句仅作兜底 |
-| 会话连续性 | 私聊与群聊会话永不过期，重启后自动从历史存储恢复，并保留上一轮真实时间信息用于连续性判断 |
-| 多层记忆 | 三层记忆（person_fact / chat_summary / conversation_recall），Markdown + SQLite 明文存储；拟人化记忆：动态遗忘（用进废退、分类半衰期、冷记忆加速衰减）、软遗忘（归档记忆动态折扣+召回恢复）、情绪标记（emotional_tone bonus +0.2）、离线消化、语义向量联想；[归档激活]/[情绪] 等因果日志 |
-| 图片理解 | 通过视觉模型分析图片内容，增强回复内容；普通图片只做理解，不落入表情仓库，也不会被机器人主动重新发送 |
-| 表情互动 | 只使用平台原生表情能力（OneBot / NapCat `face` / `mface`），不再把本地图片当作表情包主动发出 |
-| WebUI | 实时查看会话状态、记忆内容、日志，支持在线配置 |
-| API 接入 | 提供 `POST /events` 接口，任何外部系统都可以发送事件并获取回复 |
+## 快速开始
 
----
+### 你需要准备
 
-## 🚀 快速开始
+- Python 3.11 或更高版本
+- 一个能用的 OpenAI 兼容接口（本地模型或云端都行）
+- 一个聊天平台，比如用 NapCat 连接 QQ，或者用 API 方式接入
 
-### 环境要求
-
-- Python 3.11+
-- 一个可用的 OpenAI 兼容接口（本地或云端）
-- 第三方聊天平台或任何可接入聊天的应用。如使用 NapCat 接入 QQ
-> 目前api接口还处于开发阶段，可能有问题
 ### 安装
 
 ```bash
-# 克隆项目
+# 先把代码下载下来
 git clone https://github.com/Jiangsubei/xueli-qq-bot.git
 cd xueli
 
-# 创建虚拟环境
+# 创建独立的虚拟环境（是个好习惯）
 python -m venv venv
-source venv/bin/activate        # Linux/macOS
-venv\Scripts\activate           # Windows
+
+# 激活虚拟环境
+source venv/bin/activate      # Linux/macOS
+venv\Scripts\activate         # Windows
 
 # 安装依赖
 uv pip install -r requirements.txt
@@ -61,254 +62,177 @@ uv pip install -r requirements.txt
 
 ### 配置
 
-1. 复制配置示例并编辑：
-
+1. 从示例复制一份配置文件：
 ```bash
 cp xueli/config/config.example.toml xueli/config/config.toml
 ```
 
-2. 修改 `xueli/config/config.toml`，至少配置：
-
-- `[adapter_connection]` – 填写你的平台连接信息（NapCat WebSocket 地址或 API 地址）
-- `[ai_service]` – 填写主模型的 API 地址、Key、模型名称
-
-> 💡 推荐从 **NapCat + QQ** 开始测试，也可以先使用 `[adapter_connection].adapter = "api"` 模式，用 `curl` 发送事件验证。
+2. 用文本编辑器打开 `xueli/config/config.toml`，至少填好这两个地方：
+   - `[adapter_connection]` – 你的 NapCat WebSocket 地址或 API 地址
+   - `[ai_service]` – 你用的 AI 模型的地址、密钥和模型名
 
 ### 启动
----
 
-- windows
+**Windows 用户**  
+直接双击 `start.bat`，或者运行 `start.ps1`。
 
-直接双击 `start.bat` 或者运行 `start.ps1`
-
-- linux
-
+**Linux / macOS 用户**  
+在终端执行：
 ```bash
 bash start.sh
 ```
----
 
 启动后你会看到：
+- 日志输出，告诉你连接状态
+- 本地网页控制台的地址（默认 `http://127.0.0.1:8080`）
 
-- 日志输出，显示 adapter 连接状态
-- 本地 WebUI 地址（默认 `http://127.0.0.1:8080`）
+### 快速测试
 
-### 测试运行
-
-项目包含单元测试，可以快速验证环境：
-
+项目自带了一些测试。在项目根目录下，运行前确保虚拟环境已激活：
 ```bash
-.venv/bin/python -m unittest discover -s xueli/tests -t xueli
+python -m unittest discover -s xueli/tests -t xueli
 ```
 
----
+## 主要配置说明
 
-## ⚙️ 主要配置说明
+配置文件 `config.toml` 里这些部分你可能需要关心：
 
-配置文件 `xueli/config/config.toml` 采用 TOML 格式，主要块如下：
+| 配置块 | 用途 |
+|--------|---------|
+| `[adapter_connection]` | 消息来源：napcat 还是 api，以及地址 |
+| `[ai_service]` | 主要聊天模型的设置 |
+| `[vision_service]` | 识图模型（可选） |
+| `[emoji]` | 是否回复表情 |
+| `[group_reply]` | 群聊回复频率、复读策略 |
+| `[group_reply_decision]` | 群聊策略可以使用单独的模型（可选） |
+| `[bot_behavior]` | 回复长度、回复拆分、延时等行为 |
+| `[planning_window]` | 私聊/群聊的消息缓冲时间和过期设置 |
+| `[memory]` | 记忆开关、上限、遗忘速度等 |
+| `[memory_rerank]` | 记忆重排序的模型（可选） |
 
-| 配置块 | 作用 |
-|--------|------|
-| `[adapter_connection]` | 设置事件来源（napcat / api），以及 WebSocket 或 HTTP 地址 |
-| `[ai_service]` | 主模型（对话生成）的接口、模型名、超时等 |
-| `[vision_service]` | 图片理解模型的配置（可选） |
-| `[emoji]` | 原生表情资源采集与跟进配置（只存 `face / mface` 引用，不存图片文件） |
-| `[group_reply]` | 群聊的回复节流、兴趣回复、复读策略 |
-| `[group_reply_decision]` | 统一规划模型（可单独指定模型） |
-| `[bot_behavior]` | 最大历史条数、回复长度限制、结构化分段发送与延迟等 |
-| `[planning_window]` | 私聊/群聊缓冲窗口时长、窗口排队过期时间 |
-| `[memory]` | 记忆开关、检索数量、半衰期等 |
-| `[memory_rerank]` | 记忆重排模型配置（可选） |
+如果你觉得机器人回复的节奏不舒服，可以调整 `[bot_behavior]` 里的这些参数：
+- `segmented_reply_enabled` – 是否开启消息分段
+- `max_segments` – 最多拆分成几条
+- `first_segment_delay_min_ms` / `first_segment_delay_max_ms` – 第一条发出前的等待时间
+- `followup_delay_min_seconds` / `followup_delay_max_seconds` – 后续每条之间的间隔
 
-几乎所有配置都提供了合理的默认值，你只需要关注 `adapter_connection` 和 `ai_service` 即可快速跑起来。
+## 开放 API 接入
 
-如果你想调整“分条发送”的手感，重点看 `bot_behavior` 里的这几个参数：
+如果你想让其他程序（比如网站、定时脚本）也能跟机器人聊天，可以打开 API 服务。
 
-- `segmented_reply_enabled`
-- `max_segments`
-- `first_segment_delay_min_ms` / `first_segment_delay_max_ms`
-- `followup_delay_min_seconds` / `followup_delay_max_seconds`
-
----
-
-## 🌐 开放 API 接入
-
-如果你希望其他程序（例如一个 Web 应用、一个定时任务）调用机器人的对话能力，可以启用 **API runtime**。
-
-设置环境变量：
-
+在启动前设置这几个环境变量：
 ```bash
 export API_RUNTIME_ENABLED=true
 export API_RUNTIME_HOST=127.0.0.1
 export API_RUNTIME_PORT=8765
 ```
 
-启动后，向 `POST http://127.0.0.1:8765/events` 发送 JSON 格式的事件即可。事件结构参考 `InboundEvent` 定义（见文档或源码）。
+然后启动机器人，用 `POST http://127.0.0.1:8765/events` 发 JSON 格式的消息就行了。消息格式参考代码里的 `InboundEvent` 定义。
 
----
+## 如果你是来改代码的
 
-## 🧩 如果你是来修改代码的
-
-这里是项目目前的结构：
+项目目录结构：
 
 ```
 .
-├── data/                # 运行时数据（记忆、缓存、webui 资源）
+├── data/                # 运行产生的数据（记忆、缓存、网页资源）
 ├── xueli/
-│   ├── prompts/         # planner / timing / reply 主提示词模板
+│   ├── prompts/         # 提示词模板文件
 │   ├── config/          # 配置文件
 │   ├── src/
-│   │   ├── adapters/    # 平台适配器（napcat, api, ...）
-│   │   ├── core/        # 核心运行时、事件分发
-│   │   ├── handlers/    # 规划、节奏、上下文、回复生成
-│   │   ├── memory/      # 记忆系统（存储、检索、摘要）
-│   │   ├── services/    # AI 调用、图片服务等
-│   │   ├── webui/       # 本地控制台后端
-│   │   └── emoji/       # 表情相关逻辑
+│   │   ├── adapters/    # 平台转接器（目前有 napcat 和 api）
+│   │   ├── core/        # 核心运行时、事件分发、情绪引擎等
+│   │   ├── handlers/    # 消息处理流程：规划、节奏、上下文、回复生成
+│   │   ├── memory/      # 记忆系统（存储、搜索、总结）
+│   │   ├── services/    # 调用 AI、图片处理等
+│   │   ├── webui/       # 网页控制台后端
+│   │   └── emoji/       # 表情相关
 │   ├── tests/           # 单元测试
 │   └── tools/           # 工具脚本
-├── main.py          # 启动入口
-├── requirements.txt     # 依赖
-├── start.bat
-├── start.ps1
-├── start.sh
+├── main.py              # 启动入口
+├── requirements.txt
+├── start.bat / start.ps1 / start.sh
 ├── README.md
-├── AGENTS.md
-└── API_CONFIG_GUIDE.md
-
+└── .docs/               # 设计文档
 ```
 
-## 🔍 当前关键模块
+### 代码地图
 
-### 核心
+**核心运行时**
+- `xueli/src/core/runtime.py` – 主循环
+- `xueli/src/core/bootstrap.py` – 启动初始化
+- `xueli/src/core/runtime_supervisor.py` – 运行时
+- `xueli/src/core/dispatcher.py` – 事件分发
+- `xueli/src/core/mood_engine.py` – 情绪
+- `xueli/src/core/model_invocation_router.py` – 模型调用路由
+- `xueli/src/core/prompt_templates.py` – 提示词管理
+- `xueli/src/core/reply_send_orchestrator.py` – 回复发送编排
+- `xueli/src/core/platform_models.py` / `platform_normalizers.py` / `platform_bridge.py` – 平台抽象相关
 
-- `xueli/src/core/runtime.py`
-- `xueli/src/core/bootstrap.py`
-- `xueli/src/core/runtime_supervisor.py`
-- `xueli/src/core/dispatcher.py`
-- `xueli/src/core/config.py`
-- `xueli/src/core/models.py`
-- `xueli/src/core/mood_engine.py`  # 自主情绪引擎
-- `xueli/src/core/model_invocation_router.py`  # 模型调用路由
-- `xueli/src/core/prompt_templates.py`
-- `xueli/src/core/reply_send_orchestrator.py`
-- `xueli/src/core/platform_models.py`
-- `xueli/src/core/platform_normalizers.py`
-- `xueli/src/core/platform_bridge.py`
+**平台适配**
+- `xueli/src/adapters/base.py` – 适配器基类
+- `xueli/src/adapters/registry.py` – 适配器注册
+- `xueli/src/adapters/napcat/` – NapCat 适配（WebSocket 连接、OneBot 消息归一化）
+- `xueli/src/adapters/api/` – API 适配与运行时
 
-### adapter
+**消息处理**
+- `xueli/src/handlers/conversation_planner.py` – 对话规划 (怎么回)
+- `xueli/src/handlers/timing_gate_service.py` – 节奏控制 (要不要回)
+- `xueli/src/handlers/conversation_context_builder.py` – 上下文构造
+- `xueli/src/handlers/reply_pipeline.py` – 回复生成流水线
+- `xueli/src/handlers/reply_prompt_renderer.py` – 回复提示词渲染
+- `xueli/src/handlers/reply_style_policy.py` – 回复风格策略
+- `xueli/src/handlers/character_card_service.py` – 角色卡与关系追踪
+- `xueli/src/handlers/planning_window_service.py` – 规划窗口服务
+- `xueli/src/handlers/conversation_window_scheduler.py` – 缓冲窗口调度
 
-- `xueli/src/adapters/base.py`
-- `xueli/src/adapters/registry.py`
-- `xueli/src/adapters/napcat/adapter.py`
-- `xueli/src/adapters/napcat/connection.py`
-- `xueli/src/adapters/napcat/normalizer.py`  # OneBot → InboundEvent 协议归一化
-- `xueli/src/adapters/api/adapter.py`
-- `xueli/src/adapters/api/runtime.py`
+**记忆系统**
+- `xueli/src/memory/memory_manager.py` 
+- `xueli/src/memory/memory_flow_service.py` – 记忆流处理
+- `xueli/src/memory/memory_dispute_resolver.py` – 记忆冲突裁决
+- `xueli/src/memory/person_fact_service.py` – 人物事实提取
+- `xueli/src/memory/chat_summary_service.py` – 对话摘要
+- `xueli/src/memory/session_restore_service.py` – 会话恢复
+- `xueli/src/memory/conversation_recall_service.py` – 普通记忆
+- `xueli/src/memory/storage/` – 各种存储实现（SQLite、Markdown、事实、重要记忆等）
+- `xueli/src/memory/retrieval/vector_index.py` – 轻量语义索引
+- `xueli/src/memory/internal/background_coordinator.py` – 后台提取
 
-### 消息处理链
+## 图片和表情
 
-- `xueli/src/handlers/message_handler.py`
-- `xueli/src/handlers/planning_window_service.py`  # 规划窗口服务
-- `xueli/src/handlers/conversation_window_scheduler.py`  # 会话缓冲窗口调度器
-- `xueli/src/handlers/conversation_window_models.py`  # 窗口批次与调度状态模型
-- `xueli/src/handlers/conversation_planner.py`
-- `xueli/src/handlers/timing_gate_service.py`
-- `xueli/src/handlers/conversation_context_builder.py`
-- `xueli/src/handlers/conversation_session_manager.py`
-- `xueli/src/handlers/conversation_timeline_formatter.py`
-- `xueli/src/handlers/message_context.py`
-- `xueli/src/handlers/reply_pipeline.py`
-- `xueli/src/handlers/reply_prompt_renderer.py`
-- `xueli/src/handlers/reply_generation_service.py`
-- `xueli/src/handlers/reply_style_policy.py`
-- `xueli/src/handlers/character_card_service.py`  # 角色卡 + 关系追踪
-- `xueli/src/handlers/prompt_planner.py`  # PromptPlan V2 默认值与解析
+- **普通图片**：只用来“看懂”（视觉理解、OCR 等），不会存储。
+- **原生表情**：只采集和存储平台自带的 `mface` 表情。
+- 表情功能目前仅为 `QQ` 适配
 
-## 😀 图片与表情的当前边界
+### 提示词都在这里
+所有提示词模板文件都放在 `xueli/prompts/zh-CN/` 下，看名字就能知道大概用途。实际运行时采用“主模板 + 代码动态拼接”的方式，方便改小段文案而不用动整个提示词。
 
-当前版本已经把普通图片和表情包彻底分开：
-
-- 普通图片：
-  - 只参与视觉理解、OCR、多图摘要
-  - 不进入 emoji 仓库
-  - 机器人不会主动以 `image` 形式重新发出
-
-- 原生表情：
-  - 只采集和存储 OneBot / NapCat 原生 `face / mface` 引用
-  - 表情跟进也只会走 `face / mface`
-  - 如果没有合适的原生表情资源，就直接不发非文本内容
-
-### 提示词模板
-
-- `xueli/prompts/zh-CN/planner.prompt`
-- `xueli/prompts/zh-CN/timing_gate.prompt`
-- `xueli/prompts/zh-CN/reply.prompt`
-- `xueli/prompts/zh-CN/reply_constraint.prompt`
-- `xueli/prompts/zh-CN/vision.prompt`
-- `xueli/prompts/zh-CN/vision_emotion.prompt`
-- `xueli/prompts/zh-CN/emoji_reply.prompt`
-- `xueli/prompts/zh-CN/relationship_tone.prompt`
-- `xueli/prompts/zh-CN/rerank.prompt`
-- `xueli/prompts/zh-CN/reflection.prompt`
-- `xueli/prompts/zh-CN/insight_digestion.prompt`
-
-当前实现采用"主模板文件 + 代码内 section 注入"的折中结构：
-
-- planner / timing gate / reply 的主 prompt 在模板文件中维护
-- 较小的动态 block 仍由 `ReplyPromptRenderer`、`ReplyStylePolicy` 和 planner user prompt 在代码里拼接
-- `reply_reference` 是 planner 给 reply 的软指导，不会被程序硬执行
-
-planner 已不再做 `reply/wait/ignore` 决策，仅输出"怎么回"的策略（`PromptPlan`：上下文策略、记忆策略、语气策略等）。"是否回"的节奏判断由 `TimingGateService` 统一负责。
+planner 不再负责判断“回不回”，只输出“怎么回”的策略；节奏的决策完全由 `TimingGateService` 统一负责。
 
 ### 记忆系统
 
-记忆存储基于 Markdown 明文 + SQLite，支持三层记忆（人物事实 / 重要记忆 / 普通记忆），并具有以下拟人化特性：
+记忆用 Markdown 文件 + SQLite 数据库保存，分三个层次：人物事实、重要记忆、日常回忆。它模仿人的记忆特点：
 
-- **动态遗忘（用进废退）** — 普通记忆按指数衰减公式计算有效重要度，`core_fact` (3x半衰期)/`important` (1.5x)/`casual` (0.7x) 分类差异化衰减；检索命中的记忆自动强化（`last_recalled_at` + `mention_count`），长时间不用则自然衰减归档
-- **冷记忆加速衰减** — 超过 `cold_memory_threshold_days`（默认90天）的记忆触发额外加速衰减
-- **软遗忘（归档动态折扣）** — 归档记忆仍可被 BM25 索引检索到，但分数打折扣（基础 `archive_penalty_base`，按归档时长/召回次数动态调整）；[归档激活] 日志记录归档记忆被重新唤醒
-- **情绪标记** — 记忆提取时 LLM 推断对话情绪的 `emotional_tone`，带情绪的记忆衰减时获得 +0.2 留存加成
-- **重构输出** — 注入 prompt 时对普通记忆加"用你自己的话自然融入"转述指令，避免背诵感
-- **离线消化** — 自动扫描近期记忆，通过 LLM 归纳模式/趋势/变化，生成 insight 存入重要记忆
-- **语义向量联想** — 基于字符 n-gram 的轻量向量索引，与 BM25 混合检索，零外部依赖
+- **越用越记得**：被回想起来的记忆会变得更加牢固，太久不碰就慢慢减弱。
+- **冷门记忆忘得快**：超过 90 天没再提起的事，遗忘速度会加快。
+- **归档不是真的忘**：被归档的记忆仍然可以被检索到，只是分数会打折扣；如果被重新唤醒，还能“激活”回来。
+- **情绪加分**：带有情绪色彩的记忆更难被遗忘。
+- **自动消化总结**：后台会定期用 AI 扫描近期记忆，归纳出一些趋势或洞察，作为重要记忆存下来。
+- **语义联想**：用一个极轻量的字符 n-gram 向量做相似记忆推荐，不依赖任何外部向量数据库。
 
-核心模块：
+## 贡献与反馈
 
-- `xueli/src/memory/memory_manager.py`
-- `xueli/src/memory/memory_flow_service.py`
-- `xueli/src/memory/memory_dispute_resolver.py`  # 记忆纠错裁决
-- `xueli/src/memory/person_fact_service.py`
-- `xueli/src/memory/chat_summary_service.py`
-- `xueli/src/memory/session_restore_service.py`
-- `xueli/src/memory/conversation_recall_service.py`
-- `xueli/src/memory/storage/fact_evidence_store.py`  # 事实证据存储
-- `xueli/src/memory/storage/sqlite_conversation_store.py`  # SQLite 持久化存储（会话历史、群聊消息）
-- `xueli/src/memory/storage/conversation_store.py`  # SQLite store 的 re-export，兼容接口
-- `xueli/src/memory/storage/important_memory_store.py`
-- `xueli/src/memory/storage/markdown_store.py`
-- `xueli/src/memory/storage/person_fact_store.py`
-- `xueli/src/memory/retrieval/vector_index.py`  # 轻量向量语义索引
-- `xueli/src/memory/internal/background_coordinator.py`  # 后台提取 + 离线消化
-
----
-
-## 🤝 贡献与反馈
-
-项目目前由个人维护，但非常欢迎你：
-
-- 报告 Bug 或提出新功能建议（提交 Issue）
+项目目前由个人维护，欢迎：
+- 报告 Bug 或提出新功能建议（直接提 Issue）
 - 提交 Pull Request 改进代码或文档
 - 分享你的使用场景和配置经验
 
-> 在提交代码前，请确保已通过现有测试，并对新增功能补充测试。
+> 提交代码前，请确保现有测试都能通过，并且为新功能补充了测试。
+
+## 许可证
+
+本项目采用 **MIT 许可证**。你可以自由使用、修改、分发，甚至是商用，只需保留原始版权声明。
 
 ---
 
-## 📄 许可证
-
-本项目采用 **MIT 许可证**。你可以自由使用、修改、分发，甚至用于商业项目，只需保留原始版权声明。
-
----
-
-**如果你有任何问题，欢迎提 Issue 或直接联系作者。**
+**有任何问题，欢迎提交 Issue**

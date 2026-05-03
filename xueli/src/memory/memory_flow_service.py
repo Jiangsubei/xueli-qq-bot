@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional
 
 from src.core.config import MemoryDisputeConfig
 from src.core.models import FactEvidenceRecord
@@ -14,8 +16,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class MemoryTask:
+    task_type: str
+    host: Any
+    event: Any
+    prepared: "PreparedReplyRequest"
+    reply_text: str
+    image_description: str = ""
+
+
 class MemoryFlowService:
     """Coordinate reply-side memory effects without leaking them into prompt compilation."""
+
+    MAX_QUEUE_SIZE = 256
 
     def __init__(
         self,
@@ -30,6 +44,87 @@ class MemoryFlowService:
         self.evidence_store = evidence_store
         self.character_card_service = character_card_service
         self.dispute_resolver = MemoryDisputeResolver(self.dispute_config)
+        self._queue: asyncio.Queue[MemoryTask] = asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
+        self._processor_task: Optional[asyncio.Task] = None
+        self._running = False
+
+    async def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._processor_task = asyncio.create_task(self._run_loop())
+
+    async def close(self) -> None:
+        self._running = False
+        if self._processor_task is not None and not self._processor_task.done():
+            self._processor_task.cancel()
+            try:
+                await self._processor_task
+            except asyncio.CancelledError:
+                pass
+            self._processor_task = None
+
+    async def _drain_queue_for_tests(self) -> None:
+        """Process all pending queue items synchronously (for tests only)."""
+        while not self._queue.empty():
+            task = self._queue.get_nowait()
+            await self._process_single_task(task)
+
+    async def _run_loop(self) -> None:
+        while self._running:
+            try:
+                task = await self._queue.get()
+                await self._process_single_task(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[记忆流] 处理记忆任务异常")
+
+    async def _process_single_task(self, task: MemoryTask) -> None:
+        host = task.host
+        event = task.event
+        prepared = task.prepared
+        reply_text = task.reply_text
+
+        try:
+            dialogue_key = host._get_conversation_key(event)
+
+            if task.task_type == "dialogue":
+                raw_data = getattr(event, "raw_data", None)
+                if raw_data is not None and raw_data.get("group_id"):
+                    group_id_value = str(raw_data.get("group_id"))
+                else:
+                    group_id_value = str(getattr(event, "group_id", "") or "")
+                self.memory_manager.register_dialogue_turn(
+                    user_id=str(event.user_id),
+                    user_message=prepared.original_user_message,
+                    assistant_message=reply_text,
+                    dialogue_key=dialogue_key,
+                    message_type=event.message_type,
+                    group_id=group_id_value,
+                    message_id=str(event.message_id or ""),
+                    image_description=task.image_description,
+                )
+
+                scheduler = getattr(self.memory_manager, "schedule_memory_extraction", None)
+                if callable(scheduler):
+                    extraction_task = scheduler(
+                        str(event.user_id),
+                        dialogue_key=dialogue_key,
+                        message_type=event.message_type,
+                        group_id=group_id_value,
+                    )
+                    self._schedule_post_extraction_processing(
+                        host=host,
+                        event=event,
+                        task=extraction_task,
+                    )
+
+            self._record_character_growth(host=host, event=event, prepared=prepared, reply_text=reply_text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[记忆流] 处理记忆任务失败")
 
     def on_reply_generated(
         self,
@@ -39,69 +134,34 @@ class MemoryFlowService:
         prepared: "PreparedReplyRequest",
         reply_text: str,
     ) -> None:
-        """回复生成后的副作用处理（记忆写入调度）。
-
-        负责：
-        1. 有效性检查（无文本且无图片则跳过）
-        2. 注册本轮对话（user ↔ assistant）到对话历史
-        3. 提取图片描述并一并注册
-        4. 调度后续记忆提取任务（异步）
-        5. 记录角色成长数据
-        所有异常均捕获并记录日志，不向上传播以避免污染主流程。
+        """回复生成后的副作用处理（异步队列写入）。
         """
         has_text = bool(str(prepared.original_user_message or "").strip())
         has_image = bool(prepared.base64_images)
         if not self.memory_manager or (not has_text and not has_image):
             return
+
+        image_description = ""
+        if prepared.message_context and prepared.message_context.vision_analysis:
+            va = prepared.message_context.vision_analysis
+            image_description = str(va.get("merged_description") or "").strip()
+            if not image_description:
+                parts = [str(p).strip() for p in (va.get("per_image_descriptions") or []) if str(p).strip()]
+                if parts:
+                    image_description = "；".join(parts)
+
+        task = MemoryTask(
+            task_type="dialogue",
+            host=host,
+            event=event,
+            prepared=prepared,
+            reply_text=reply_text,
+            image_description=image_description,
+        )
         try:
-            dialogue_key = host._get_conversation_key(event)
-
-            # 从 vision_analysis 提取图片描述（用于记忆存档）
-            image_description = ""
-            if prepared.message_context and prepared.message_context.vision_analysis:
-                va = prepared.message_context.vision_analysis
-                image_description = str(va.get("merged_description") or "").strip()
-                if not image_description:
-                    parts = [str(p).strip() for p in (va.get("per_image_descriptions") or []) if str(p).strip()]
-                    if parts:
-                        image_description = "；".join(parts)
-
-            # 注册本轮对话到记忆系统
-            raw_data = getattr(event, "raw_data", None)
-            if raw_data is not None:
-                group_id_value = str(raw_data.get("group_id", "") or "")
-            else:
-                group_id_value = str(getattr(event, "group_id", "") or "")
-            self.memory_manager.register_dialogue_turn(
-                user_id=str(event.user_id),
-                user_message=prepared.original_user_message,
-                assistant_message=reply_text,
-                dialogue_key=dialogue_key,
-                message_type=event.message_type,
-                group_id=group_id_value,
-                message_id=str(event.message_id or ""),
-                image_description=image_description,
-            )
-
-            # 调度异步记忆提取（基于阈值触发或定时）
-            scheduler = getattr(self.memory_manager, "schedule_memory_extraction", None)
-            if callable(scheduler):
-                task = scheduler(
-                    str(event.user_id),
-                    dialogue_key=dialogue_key,
-                    message_type=event.message_type,
-                    group_id=group_id_value,
-                )
-                self._schedule_post_extraction_processing(
-                    host=host,
-                    event=event,
-                    task=task,
-                )
-
-            # 角色人设成长记录
-            self._record_character_growth(host=host, event=event, prepared=prepared, reply_text=reply_text)
-        except Exception as exc:
-            logger.warning("[记忆流] 记录记忆副作用失败")
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull:
+            logger.warning("[记忆流] 记忆队列满，丢弃任务")
 
     def _schedule_post_extraction_processing(self, *, host: Any, event: Any, task: Any) -> None:
         if task is None:

@@ -55,6 +55,8 @@ class EmojiConfig:
     emotion_labels: List[str] = field(default_factory=list)
     reply_enabled: bool = False
     reply_cooldown_seconds: float = 180.0
+    max_stored_emojis: int = 100
+    overflow_policy: str = "replace_oldest"
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ class PlanningWindowConfig:
     private_window_seconds: float = 1.2
     group_proactive_window_seconds: float = 0.45
     queue_expire_seconds: float = 60.0
+    group_max_concurrent: int = 3
+    group_queue_timeout: int = 120
 
 
 @dataclass(frozen=True)
@@ -720,6 +724,20 @@ class Config:
                 "queue_expire_seconds",
                 default=60.0,
                 minimum=0.0,
+            ),
+            group_max_concurrent=self._bounded_int(
+                section,
+                "planning_window",
+                "group_max_concurrent",
+                default=3,
+                minimum=0,
+            ),
+            group_queue_timeout=self._bounded_int(
+                section,
+                "planning_window",
+                "group_queue_timeout",
+                default=120,
+                minimum=0,
             ),
         )
 

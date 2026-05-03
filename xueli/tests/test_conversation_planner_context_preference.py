@@ -68,7 +68,7 @@ class ConversationPlannerContextPreferenceTests(unittest.TestCase):
         self.assertIn("原始文本：标准事件原文", prompt)
         self.assertIn("清洗后文本：标准事件清洗文本", prompt)
         self.assertIn("图片数量：2", prompt)
-        self.assertIn("图片摘要：两张图片的摘要", prompt)
+        self.assertIn("[图片] 两张图片的摘要", prompt)
         self.assertIn("标准化历史", prompt)
         self.assertNotIn("onebot raw text", prompt)
         self.assertNotIn("OneBot 用户", prompt)

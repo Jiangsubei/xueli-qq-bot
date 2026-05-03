@@ -36,3 +36,6 @@ xueli/src/webui/**/__pycache__/
 
 # Local runtime data
 data/
+
+# Local docs
+.docs/

@@ -33,6 +33,14 @@ reply_reference 的要求：
 - 不要直接写成最终会发给用户的完整回复。
 - 不要写成长段分析，不要再套一层 JSON。
 
+表情包决策（可选）：
+- 是否适合补发一张表情包？
+- tone 优先从以下标签中选：{reply_tones}
+- emotion 优先从以下标签中选，可自定义混合：{emotion_labels}
+  - intent 格式为 tone-emotion，如"安慰-委屈"
+- 严肃问答、命令结果、冗长说明、风险提示场景默认不带表情包
+- 若判断不带表情，不输出 emoji_tone / emoji_emotion / emoji_intent 字段
+
 你必须只输出 JSON，格式必须是：
 {decision_output_schema}
 

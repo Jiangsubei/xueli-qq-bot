@@ -58,8 +58,17 @@ class MemoryRetrievalCoordinator:
     def normalize_read_scope(self, read_scope: Optional[str] = None) -> str:
         return "user"
 
-    def get_scope_user_ids(self, user_id: str, read_scope: Optional[str] = None) -> List[str]:
-        return [str(user_id)]
+    def get_scope_user_ids(
+        self,
+        user_id: str,
+        read_scope: Optional[str] = None,
+        message_type: str = "private",
+        group_id: str = "",
+    ) -> List[str]:
+        storage_ids = [str(user_id)]
+        if message_type == "group" and group_id:
+            storage_ids.append(f"group:{group_id}:{user_id}")
+        return storage_ids
 
     def get_search_result_score(self, result: SearchResult) -> float:
         if result.combined_score is not None:
@@ -91,7 +100,7 @@ class MemoryRetrievalCoordinator:
             access_context=access_context,
         )
         normalized_scope = context.read_scope
-        scope_user_ids = self.get_scope_user_ids(user_id, normalized_scope)
+        scope_user_ids = self.get_scope_user_ids(user_id, normalized_scope, context.message_type, context.group_id)
 
         aggregated: List[SearchResult] = []
         per_user_top_k = max(top_k, 1)
@@ -360,7 +369,7 @@ class MemoryRetrievalCoordinator:
         matched_memories: List[Dict[str, Any]] = []
         denied = 0
 
-        for owner_user_id in self.get_scope_user_ids(user_id, context.read_scope):
+        for owner_user_id in self.get_scope_user_ids(user_id, context.read_scope, context.message_type, context.group_id):
             matched = await self.important_memory_store.search_memories(
                 user_id=owner_user_id,
                 query=query,
@@ -417,7 +426,7 @@ class MemoryRetrievalCoordinator:
         memories: List[ImportantMemoryItem] = []
         denied = 0
 
-        for owner_user_id in self.get_scope_user_ids(user_id, context.read_scope):
+        for owner_user_id in self.get_scope_user_ids(user_id, context.read_scope, context.message_type, context.group_id):
             owner_memories = await self.important_memory_store.get_memories(
                 user_id=owner_user_id,
                 min_priority=min_priority,
@@ -533,7 +542,7 @@ class MemoryRetrievalCoordinator:
     ) -> List[MemoryItem]:
         accessible: List[MemoryItem] = []
         denied = 0
-        for owner_user_id in self.get_scope_user_ids(context.requester_user_id, context.read_scope):
+        for owner_user_id in self.get_scope_user_ids(context.requester_user_id, context.read_scope, context.message_type, context.group_id):
             owner_memories = await self.storage.get_user_memories(owner_user_id)
             for memory in owner_memories:
                 memory.owner_user_id = str(memory.owner_user_id or owner_user_id)

@@ -7,6 +7,7 @@ import random
 import time
 import signal
 import sys
+from collections import OrderedDict
 from dataclasses import replace
 from typing import Any, Dict, List, Optional, Set
 
@@ -28,10 +29,10 @@ from src.core.pipeline_errors import (
 from src.core.platform_models import InboundEvent, ReplyAction, SessionRef
 from src.handlers.message_handler import StaleWindowError
 from src.core.reply_send_orchestrator import ReplyPartPlan, ReplySendOrchestrator
-from src.core.platform_normalizers import get_attached_inbound_event
+from src.core.platform_normalizers import get_attached_inbound_event, event_mentions_account
 from src.core.session_message_pipeline import SessionMessagePipeline
 from src.core.lifecycle import cancel_task, cancel_tasks, close_resource
-from src.core.models import MessageEvent, MessageSegment, MessageType
+from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction, MessageSegment, MessageType, TimingDecision
 from src.core.runtime_metrics import RuntimeMetrics
 from src.core.webui_runtime_registry import register_runtime, unregister_runtime
 from src.core.webui_snapshot import WebUISnapshotPublisher
@@ -68,10 +69,14 @@ class BotRuntime:
         self._closed = False
         self._shutdown_event = asyncio.Event()
         self._message_tasks: Set[asyncio.Task] = set()
-        self._processed_message_ids: set = set()
+        self._processed_message_ids: OrderedDict = OrderedDict()
         self._dedup_lock: Optional[asyncio.Lock] = None
         self._close_lock: Optional[asyncio.Lock] = None
-        self._message_pipeline = SessionMessagePipeline(on_state_change=self._on_pipeline_state_change)
+        self._message_pipeline = SessionMessagePipeline(
+            on_state_change=self._on_pipeline_state_change,
+            group_max_concurrent=self.config.app.planning_window.group_max_concurrent,
+            group_queue_timeout=self.config.app.planning_window.group_queue_timeout,
+        )
         self._model_router = ModelInvocationRouter(
             base_timeout_seconds=max(1, int(self.config.app.bot_behavior.response_timeout or 60)),
             on_state_change=self._on_model_router_state_change,
@@ -238,6 +243,18 @@ class BotRuntime:
             return await self.message_handler.plan_dispatched_window(next_dispatch.window, trace_id=trace_id)
         return None, None
 
+    def _build_dispatch_plan_from_timing(self, timing_decision: TimingDecision) -> MessageHandlingPlan:
+        """Build a MessageHandlingPlan from TimingDecision when timing says wait/no_reply."""
+        if timing_decision.decision == "wait":
+            action = MessagePlanAction.WAIT.value
+        else:
+            action = MessagePlanAction.IGNORE.value
+        return MessageHandlingPlan(
+            action=action,
+            reason=timing_decision.reason,
+            source="timing",
+        )
+
     async def _release_window_on_error(self, plan, trace_log: str) -> None:
         try:
             await self.message_handler.complete_window_dispatch(plan)
@@ -259,15 +276,16 @@ class BotRuntime:
         msg_id = getattr(event, "message_id", 0)
         async with self._get_dedup_lock():
             if not hasattr(self, "_processed_message_ids"):
-                self._processed_message_ids = set()
+                from collections import OrderedDict
+                self._processed_message_ids = OrderedDict()
             if msg_id in self._processed_message_ids:
                 logger.warning("[运行时] 跳过重复消息")
                 return
-            self._processed_message_ids.add(msg_id)
+            self._processed_message_ids[msg_id] = None
             if len(self._processed_message_ids) > 10000:
                 excess = len(self._processed_message_ids) - 5000
                 for _ in range(excess):
-                    self._processed_message_ids.pop()
+                    self._processed_message_ids.popitem(last=False)
 
         self.record_user_interaction()
         self.runtime_metrics.inc_messages_received()
@@ -289,13 +307,22 @@ class BotRuntime:
 
             # ── 主循环 ── 每个周期完成：节奏判断 → 规划 → 回复生成 → 发送
             #    循环会在以下情况持续：窗口内多条消息待处理、或需要重试
-            while True:
+            #    最多执行 6 轮，防止单会话长时间占用
+            max_rounds = 6
+            for round_index in range(max_rounds):
                 # 阶段1：节奏判断 — TimingGate 决定是否回复
                 logger.debug("[运行时] 开始节奏判断")
-                timing_decision = await asyncio.wait_for(
-                    self.message_handler.decide_timing_first(current_event, trace_id=trace_id),
-                    timeout=max(1, response_timeout),
-                )
+                if event_mentions_account(current_event):
+                    timing_decision = TimingDecision(
+                        decision="continue",
+                        reason="显式@消息，直接回复",
+                        source="rule",
+                    )
+                else:
+                    timing_decision = await asyncio.wait_for(
+                        self.message_handler.decide_timing_first(current_event, trace_id=trace_id),
+                        timeout=max(1, response_timeout),
+                    )
                 logger.info("[运行时] 节奏判断完成")
                 if timing_decision.decision != "continue":
                     plan = self._build_dispatch_plan_from_timing(timing_decision)
@@ -351,7 +378,13 @@ class BotRuntime:
                 if sent:
                     logger.info("[运行时] 发送完成")
                     await self.message_handler.record_reply_sent(current_event, reply_result.text)
-                    await self._send_emoji_follow_up_if_needed(current_event, reply_result, plan, trace_id=trace_id)
+                    emoji_action = await self.message_handler.send_emoji_by_intent(
+                        current_event, reply_result, self._reply_session_for_event(current_event)
+                    )
+                    if emoji_action:
+                        await self._get_adapter_for_session(
+                            self._reply_session_for_event(current_event)
+                        ).send_action(emoji_action)
 
                 # 分发到下一窗口，处理同一会话中的后续消息
                 current_event, plan = await self._try_dispatch_next_window(plan, trace_id=trace_id)
@@ -649,8 +682,10 @@ class BotRuntime:
         if self._manage_signals:
             def signal_handler(signum, frame):
                 del frame
-                logger.info("[运行时] 收到系统信号")
+                logger.info("[运行时] 收到系统信号，正在关闭所有任务")
                 self._shutdown_event.set()
+                if self._event_loop is not None:
+                    self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
             try:
                 signal.signal(signal.SIGINT, signal_handler)
@@ -845,7 +880,7 @@ class BotRuntime:
         return SessionRef(
             platform=self._default_session_platform(),
             scope="shared",
-            conversation_id=f"group:{resolved_group_id}:{resolved_user_id or 0}",
+            conversation_id=f"group:{resolved_group_id}",
             channel_id=resolved_group_id,
             user_id=resolved_user_id,
         )
@@ -912,6 +947,5 @@ class BotRuntime:
         normalized_source = str(source or "").strip() or "unknown"
         segments = list(getattr(reply, "segments", None) or [])
         if segments:
-            logger.info("[运行时] 回复预览")
-            return
-        logger.info("[运行时] 回复预览")
+            preview = preview_text_for_log("; ".join(str(s) for s in segments if s))
+        logger.info("[运行时] 回复预览 source=%s preview=%s", normalized_source, preview)

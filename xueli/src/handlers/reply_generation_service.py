@@ -65,7 +65,6 @@ class ReplyGenerationService:
         if not segments:
             segments = [raw_text] if raw_text else []
         visible_text = "\n".join(segments).strip()
-        trace_id = prepared.message_context.trace_id if prepared.message_context else ""
         if raw_text.startswith("[") and segments:
             logger.info("[回复生成] 结构化回复解析")
         return AIResponse(
@@ -90,9 +89,12 @@ class ReplyGenerationService:
             return []
         result: List[str] = []
         for item in payload:
-            if not isinstance(item, str):
-                return []
-            normalized = str(item or "").strip()
-            if normalized:
-                result.append(normalized)
+            if isinstance(item, str):
+                normalized = str(item or "").strip()
+                if normalized:
+                    result.append(normalized)
+            elif isinstance(item, list) and len(item) >= 1:
+                first = str(item[0] or "").strip()
+                if first:
+                    result.append(first)
         return result

@@ -524,6 +524,10 @@ class PromptPlan:
     expression_profile: str = "plain"
     policy: PromptSectionPolicy = field(default_factory=PromptSectionPolicy)
     notes: str = ""
+    emoji_should_send: bool = False
+    emoji_tone: str = ""
+    emoji_emotion: str = ""
+    emoji_intent: str = ""
 
 
 @dataclass
@@ -640,6 +644,38 @@ class MoodState:
             mood_cycle_day=int(data.get("mood_cycle_day", 0)),
             updated_at=str(data.get("updated_at", "")),
         )
+
+
+@dataclass(frozen=True)
+class ImmutableMessage:
+    """不可变消息 - 消息一旦创建，内容和时间均不可变"""
+
+    message_id: str
+    user_id: str
+    content: str
+    event_time: float
+    received_time: float
+    raw_data: Dict[str, Any]
+
+    def with_content(self, content: str) -> "ImmutableMessage":
+        return ImmutableMessage(
+            message_id=self.message_id,
+            user_id=self.user_id,
+            content=content,
+            event_time=self.event_time,
+            received_time=self.received_time,
+            raw_data=self.raw_data,
+        )
+
+
+@dataclass
+class ConversationSnapshot:
+    """会话快照 - 基于时间点的静态群聊上下文视图"""
+
+    group_id: str
+    messages: List["ImmutableMessage"]
+    snapshot_time: float
+    created_at: float
 
 
 @dataclass

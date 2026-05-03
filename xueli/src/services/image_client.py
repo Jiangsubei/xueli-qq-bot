@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import base64
 import binascii
+import html
 import logging
 from typing import Optional, Dict, Any
 
@@ -177,3 +178,18 @@ class ImageClient:
         except Exception as e:
             logger.error("[图片服务] 处理图片消息失败")
             return None
+
+    async def get_mface_image_url(self, key: str, api_base: str) -> Optional[str]:
+        """POST /get_image API，用 mface 的 key 换取临时下载 URL"""
+        await self._init_session()
+        try:
+            async with self.session.post(
+                f"{api_base.rstrip('/')}/get_image",
+                json={"file": key},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                data = await resp.json()
+        except Exception:
+            return None
+        url = data.get("data", {}).get("url")
+        return html.unescape(url) if url else None

@@ -372,6 +372,8 @@ class RuntimeConversationFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         await runtime._handle_message_event(self._event(), trace_id="trace-integration")
 
+        await handler.memory_flow_service._drain_queue_for_tests()
+
         self.assertEqual(metrics.received, 1)
         self.assertEqual(metrics.replied, 1)
         self.assertEqual(len(adapter.actions), 1)

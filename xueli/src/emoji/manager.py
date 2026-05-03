@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 from datetime import datetime, time as local_time
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from src.core.config import AppConfig
@@ -11,8 +13,8 @@ from src.core.models import MessageEvent, MessageSegment
 from src.core.runtime_metrics import RuntimeMetrics
 from src.services.vision_client import ImageAnalysisResult, VisionClient
 
+from .database import EmojiDatabase
 from .models import DEFAULT_EMOTION_LABELS, DEFAULT_REPLY_TONES, EmojiEmotionResult
-from .repository import EmojiRepository
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,12 @@ class EmojiManager:
         self.enabled = bool(emoji_config and emoji_config.enabled)
         self.capture_enabled = bool(self.enabled and getattr(emoji_config, "capture_enabled", True))
         self.classification_enabled = bool(getattr(emoji_config, "classification_enabled", False))
-        self.repository = EmojiRepository(
-            getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis"
+        http_url = getattr(app_config.adapter_connection, "http_url", "http://127.0.0.1:6700") if app_config else "http://127.0.0.1:6700"
+        self.repository = EmojiDatabase(
+            getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis",
+            http_url=http_url,
+            max_stored_emojis=int(getattr(emoji_config, "max_stored_emojis", 100)),
+            overflow_policy=str(getattr(emoji_config, "overflow_policy", "replace_oldest")),
         )
         self.idle_seconds = float(getattr(emoji_config, "idle_seconds_before_classify", 45.0))
         self.classification_interval_seconds = float(
@@ -77,7 +83,6 @@ class EmojiManager:
     async def initialize(self) -> None:
         if not self.enabled or self._initialized:
             return
-        await self.repository.initialize()
         self._initialized = True
         await self._sync_metrics()
 
@@ -94,14 +99,15 @@ class EmojiManager:
 
         captured = 0
         for segment in list(event.message or []):
-            if not segment.is_native_sticker():
+            if segment.type != "mface":
                 continue
-            await self.repository.save_native_emoji(
-                event=event,
-                segment=segment,
-                description=str(segment.data.get("summary", "") or "").strip(),
-            )
-            captured += 1
+            record = self.repository.save_mface(event=event, segment=segment)
+            if record:
+                captured += 1
+                self.task_manager.create_task(
+                    self._download_and_classify(record),
+                    name=f"emoji-{record.emoji_id}",
+                )
         if captured and self.runtime_metrics:
             self.runtime_metrics.record_emoji_detection(captured)
         if captured:
@@ -143,7 +149,7 @@ class EmojiManager:
                     await asyncio.sleep(self._next_wait_seconds())
                     continue
 
-                pending = await self.repository.list_pending(limit=1)
+                pending = self.repository.list_pending(limit=1)
                 if not pending:
                     return
 
@@ -158,39 +164,70 @@ class EmojiManager:
             await self._sync_metrics(active_classifiers=0)
             self._worker_task = None
 
-    async def _classify_one(self, emoji_id: str) -> None:
-        del emoji_id
-        return
-
-        availability = getattr(self.vision_client, "is_available", None)
-        if callable(availability) and not availability():
+    async def _download_and_classify(self, record) -> None:
+        emoji_id = record.emoji_id
+        key = record.key
+        if not key:
             return
-
-        image_base64 = await self.repository.get_image_base64(emoji_id)
-        if not image_base64:
-            return
-
+        self.repository.update_emotion_status(emoji_id, "processing")
         try:
-            payload = await self.vision_client.classify_sticker_emotion(
-                image_base64=image_base64,
-                emotion_labels=self.emotion_labels,
+            local_path = await self.repository.download_preview_image(emoji_id, key)
+            if not local_path or not Path(local_path).exists():
+                return
+            image_bytes = Path(local_path).read_bytes()
+            image_b64 = base64.b64encode(image_bytes).decode()
+
+            availability = getattr(self.vision_client, "is_available", None)
+            if callable(availability) and not availability():
+                return
+
+            vision_r, emotion_r = await asyncio.gather(
+                self.vision_client.analyze_images(
+                    base64_images=[image_b64],
+                    user_text="这是表情包图片，请描述其内容",
+                ),
+                self.vision_client.classify_sticker_emotion(
+                    image_base64=image_b64,
+                    emotion_labels=self.emotion_labels,
+                ),
             )
-            result = EmojiEmotionResult(
-                primary_emotion=payload.get("primary_emotion", ""),
-                confidence=payload.get("confidence", 0.0),
-                reason=payload.get("reason", ""),
-                all_emotions=list(payload.get("all_emotions") or []),
-                reply_tones=list(payload.get("reply_tones") or []),
-                reply_intents=list(payload.get("reply_intents") or []),
-            )
-            await self.repository.update_emotion(emoji_id, result)
+
+            if vision_r:
+                desc = (vision_r.merged_description or "") or (
+                    (vision_r.per_image_descriptions or [""])[0] if vision_r.per_image_descriptions else ""
+                )
+                if desc:
+                    self.repository.update_description(emoji_id, desc)
+
+            if emotion_r:
+                result = EmojiEmotionResult(
+                    primary_emotion=emotion_r.get("primary_emotion", ""),
+                    confidence=float(emotion_r.get("confidence", 0.0)),
+                    reason=emotion_r.get("reason", ""),
+                    all_emotions=list(emotion_r.get("all_emotions") or []),
+                    reply_tones=list(emotion_r.get("reply_tones") or []),
+                    reply_intents=list(emotion_r.get("reply_intents") or []),
+                )
+                self.repository.update_emotion(emoji_id, result)
+                for intent in result.reply_intents:
+                    parts = intent.split("-", 1) if "-" in intent else ("", "")
+                    if len(parts) == 2 and parts[0] and parts[1]:
+                        self.repository.add_reply_intent(emoji_id, parts[0], parts[1], intent)
+
             if self.runtime_metrics:
                 self.runtime_metrics.record_emoji_classification(1)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            await self.repository.mark_classification_failed(emoji_id, str(exc))
+            logger.warning("[表情管理] 表情包分类失败: %s", exc)
             if self.runtime_metrics:
                 self.runtime_metrics.record_emoji_classification_failure(1)
-            logger.warning("[表情管理] 表情包分类失败")
+
+    async def _classify_one(self, emoji_id: str) -> None:
+        record = self.repository.get_record(emoji_id)
+        if not record:
+            return
+        await self._download_and_classify(record)
 
     def _can_run_classification_now(self) -> bool:
         if not self.classification_enabled:
@@ -242,7 +279,7 @@ class EmojiManager:
         return datetime.now().time()
 
     async def _sync_metrics(self, *, active_classifiers: Optional[int] = None) -> None:
-        stats = await self.repository.stats() if self.enabled else {
+        stats = self.repository.stats() if self.enabled else {
             "emoji_total": 0,
             "emoji_pending_classification": 0,
             "emoji_disabled": 0,

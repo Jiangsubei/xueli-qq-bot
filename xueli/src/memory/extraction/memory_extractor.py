@@ -232,6 +232,9 @@ class MemoryExtractor:
         if not pending_turns:
             return []
 
+        source_group_id = str(pending_turns[0].get("source_group_id", "") or "") if pending_turns else ""
+        storage_user_id = f"group:{source_group_id}:{user_id}" if source_group_id else user_id
+
         # ─────────────────────────────────────────────────────────────
         # 阶段1：准备
         # ─────────────────────────────────────────────────────────────
@@ -358,7 +361,7 @@ class MemoryExtractor:
             importance = 5 if item.is_important else max(1, min(int(item.importance), 5))
             mem = await self.memory_store.add_memory(
                 content=item.content,
-                user_id=user_id,
+                user_id=storage_user_id,
                 source=f"extraction_{session_key}",
                 tags=["auto_extracted", memory_type],
                 metadata={
@@ -389,7 +392,7 @@ class MemoryExtractor:
             important_memory = None
             if item.is_important:
                 important_memory = await self._sync_important_memory(
-                    user_id=user_id,
+                    user_id=storage_user_id,
                     content=item.content,
                     source="extraction",
                     priority=3,
@@ -398,7 +401,7 @@ class MemoryExtractor:
             # 4g. 普通记忆达到晋升条件时也写入重要记忆
             elif mem and self._should_promote_to_important(mem):
                 important_memory = await self._sync_important_memory(
-                    user_id=user_id,
+                    user_id=storage_user_id,
                     content=mem.content,
                     source="promoted_from_ordinary",
                     priority=4,
@@ -410,7 +413,7 @@ class MemoryExtractor:
                 successor_memory_id = str((important_memory.id if important_memory and item.is_important else mem.id) or "")
                 successor_memory_type = "important" if important_memory and item.is_important else memory_type
                 await self._apply_patch_merge(
-                    user_id=user_id,
+                    user_id=storage_user_id,
                     successor_memory_id=successor_memory_id,
                     successor_memory_type=successor_memory_type,
                     reflection=reflection,

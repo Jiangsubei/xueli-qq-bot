@@ -18,17 +18,20 @@ from src.core.config import (
     is_group_reply_decision_configured,
     is_vision_service_configured,
 )
+from src.core.context_recorder import ContextRecorder
 from src.core.message_trace import format_trace_log, get_execution_key
 from src.core.model_invocation_router import ModelInvocationRouter
 from src.core.pipeline_errors import ImageProcessingError, wrap_image_error
 from src.core.platform_normalizers import event_mentions_account, get_attached_inbound_event, get_inbound_reply_to_message_id
 from src.core.models import (
     Conversation,
+    ConversationSnapshot,
     MessageEvent,
     MessageHandlingPlan,
     MessagePlanAction,
     MessageType,
 )
+from src.core.platform_models import FaceAction, MfaceAction, OutgoingAction, SessionRef
 from src.core.runtime_metrics import RuntimeMetrics
 from src.emoji.manager import EmojiManager
 from src.emoji.reply_service import EmojiReplyService
@@ -98,6 +101,7 @@ class MessageHandler:
         self.conversation_planner = conversation_planner or ConversationPlanner(
             app_config=self.app_config,
             model_invocation_router=self.model_invocation_router,
+            emoji_repository=self.emoji_manager.repository,
         )
 
         self.session_manager = ConversationSessionManager(
@@ -147,6 +151,9 @@ class MessageHandler:
         )
         self.reply_pipeline = ReplyPipeline(self)
         self.planning_window_service = PlanningWindowService(self, self.app_config.planning_window)
+        self.context_recorder = ContextRecorder(
+            conversation_store=getattr(memory_manager, "conversation_store", None) if memory_manager else None,
+        )
 
         self.repeat_echo_service = RepeatEchoService(self.app_config, self.runtime_metrics)
         self.repeat_echo_service.set_lock(asyncio.Lock())
@@ -161,6 +168,8 @@ class MessageHandler:
     async def initialize(self) -> None:
         if self.emoji_manager:
             await self.emoji_manager.initialize()
+        if self.memory_flow_service is not None:
+            await self.memory_flow_service.start()
 
     def set_status_provider(self, status_provider: Any) -> None:
         self.command_handler.set_status_provider(status_provider)
@@ -331,7 +340,7 @@ class MessageHandler:
             f"会话: {self._get_conversation_key(event)}",
             "",
             "--- 完整提示词 ---",
-            system_prompt or "[空]",
+            system_prompt or "用户发送了空文本",
         ]
         return "\n".join(line for line in lines if line is not None).rstrip()
 
@@ -445,35 +454,20 @@ class MessageHandler:
 
     async def _plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
-        dispatch = await self.planning_window_service.submit_event(event=event, trace_id=trace_id)
-        if dispatch.status == "bypassed":
-            return await self.conversation_plan_coordinator.plan_message(
-                event=event,
-                user_message=self.extract_user_message(event),
-                trace_id=trace_id,
-            )
-        if dispatch.status != "dispatch_window" or dispatch.window is None:
-            return self._build_rule_plan(
-                MessagePlanAction.WAIT,
-                "缓冲窗口仍在收集消息，先等待当前批次封窗",
-                reply_context={"trace_id": trace_id, "window_reason": dispatch.reason} if trace_id else {"window_reason": dispatch.reason},
-                event=event,
-            )
-        return await self._plan_window(event, dispatch.window, trace_id=trace_id)
+        await self._record_group_context(event)
+        return await self.conversation_plan_coordinator.plan_message(
+            event=event,
+            user_message=self.extract_user_message(event),
+            trace_id=trace_id,
+        )
 
     async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
-        dispatch = await self.planning_window_service.submit_private_event(event=event, trace_id=trace_id)
-        if dispatch.status == "dropped":
-            return self._build_rule_plan(MessagePlanAction.IGNORE, "私聊缓冲窗口排队超时，本轮直接丢弃")
-        if dispatch.status != "dispatch_window" or dispatch.window is None:
-            return MessageHandlingPlan(
-                action=MessagePlanAction.WAIT.value,
-                reason="私聊缓冲窗口仍在收集消息，先等待当前批次封窗",
-                source="window_buffer",
-                reply_context={"trace_id": trace_id, "window_reason": dispatch.reason} if trace_id else {"window_reason": dispatch.reason},
-            )
-        return await self._plan_private_window(event, dispatch.window, trace_id=trace_id)
+        return await self.conversation_plan_coordinator.plan_message(
+            event=event,
+            user_message=self.extract_user_message(event),
+            trace_id=trace_id,
+        )
 
     async def _plan_private_window(
         self,
@@ -566,6 +560,9 @@ class MessageHandler:
         trace_id: str = "",
     ) -> MessageHandlingPlan:
         dispatch_event = window.latest_event if isinstance(window.latest_event, MessageEvent) else event
+        snapshot = await self._get_context_snapshot(dispatch_event)
+        if snapshot and snapshot.messages:
+            window.planning_signals["context_snapshot"] = snapshot
         plan = await self.conversation_plan_coordinator.plan_buffered_window(
             event=dispatch_event,
             window=window,
@@ -651,6 +648,39 @@ class MessageHandler:
             )
 
         return await self._plan_message(event, trace_id=trace_id)
+
+    async def _record_group_context(self, event: MessageEvent) -> None:
+        """Record group message to ContextRecorder for immutable timeline snapshot."""
+        if not hasattr(self, "context_recorder") or self.context_recorder is None:
+            return
+        if event.message_type != MessageType.GROUP.value:
+            return
+        group_id = str(event.raw_data.get("group_id", "") or "")
+        if not group_id:
+            return
+        try:
+            await self.context_recorder.record_from_event(event, group_id=group_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[消息处理器] 记录群聊上下文失败: {exc}")
+
+    async def _get_context_snapshot(self, event: MessageEvent) -> Optional[ConversationSnapshot]:
+        """Get immutable snapshot from ContextRecorder for planning."""
+        if not hasattr(self, "context_recorder") or self.context_recorder is None:
+            return None
+        if event.message_type != MessageType.GROUP.value:
+            return None
+        group_id = str(event.raw_data.get("group_id", "") or "")
+        if not group_id:
+            return None
+        try:
+            return await self.context_recorder.get_snapshot_for_event(event, group_id=group_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[消息处理器] 获取上下文快照失败: {exc}")
+            return None
 
     def _build_window_reply_context(self, *, window: BufferedWindow, event: MessageEvent) -> Dict[str, Any]:
         sanitized_window_messages = []
@@ -1039,6 +1069,35 @@ class MessageHandler:
         if self.emoji_reply_service and selection:
             await self.emoji_reply_service.mark_follow_up_sent(event=event, selection=selection)
 
+    async def send_emoji_by_intent(
+        self,
+        event: MessageEvent,
+        reply_result: Any,
+        session: SessionRef,
+    ) -> Optional[OutgoingAction]:
+        emoji_intent = getattr(reply_result, "emoji_intent", None) or None
+        if not emoji_intent:
+            return None
+        if not self.emoji_manager or not self.emoji_manager.enabled:
+            return None
+        repo = self.emoji_manager.repository
+        candidates = repo.find_by_intent(emoji_intent)
+        if not candidates:
+            return None
+        picked = self.emoji_reply_service._weighted_pick(candidates)
+        if not picked:
+            return None
+        repo.mark_auto_reply_sent(picked.emoji_id)
+        if picked.key and picked.emoji_id_str:
+            return MfaceAction(
+                session=session,
+                emoji_id=picked.emoji_id_str,
+                emoji_package_id=picked.package_id,
+                key=picked.key,
+                summary=picked.summary,
+            )
+        return None
+
     def split_by_sentence(self, message: str) -> List[str]:
         """按句末标点（。！？）切分为语义独立的短句。"""
         enabled = getattr(self.app_config.bot_behavior, "sentence_split_enabled", True)
@@ -1092,6 +1151,7 @@ class MessageHandler:
         await self._close_resource(self.vision_client)
         await self._close_resource(self.image_client)
         await self._close_resource(self.ai_client)
+        await self._close_resource(self.memory_flow_service)
         self._sync_active_conversations_metric()
 
     async def _close_resource(self, resource: Any) -> None:

@@ -128,7 +128,7 @@ class ReplyPromptRenderer:
                 pass
         time_prefix = f"[{time_str}] " if time_str else ""
         scene = f"这是和 {sender} 的{session_label}对话。"
-        target = f"用户于 {time_prefix}说：{str(current_message or '').strip() or '[空]'}"
+        target = f"用户于 {time_prefix}说：{str(current_message or '').strip() or '用户发送了空文本'}"
         return f"{scene}\n{target}"
 
     def _constraint_section(self, *, event: Any, enabled: bool) -> str:
@@ -148,7 +148,6 @@ class ReplyPromptRenderer:
         return self.template_loader.render(
             "reply_constraint.prompt",
             platform_rule=platform_rule,
-            format_rules=format_rules,
         )
 
     def _continuity_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:
@@ -188,7 +187,7 @@ class ReplyPromptRenderer:
         merged = str(vision.get("merged_description", "") or "").strip()
         if not merged:
             return ""
-        return f"[图片上下文]\n{merged}"
+        return f"[图片] {merged}"
 
     def _person_facts_section(self, message_context: MessageContext, enabled: bool) -> str:
         if not enabled:

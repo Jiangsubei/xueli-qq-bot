@@ -7,6 +7,9 @@ aiohttp>=3.9.0
 # Async file operations (required by the memory module)
 aiofiles>=23.0.0
 
+# Async SQLite (required by immutable_message_log and emoji module)
+aiosqlite>=0.19.0
+
 # Chinese tokenization (used by memory module and BM25 retrieval)
 jieba>=0.42.1
 

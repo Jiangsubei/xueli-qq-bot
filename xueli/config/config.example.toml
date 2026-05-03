@@ -61,6 +61,8 @@ enabled = true
 private_window_seconds = 1.2       # 私聊缓冲窗口时长（秒），窗口内多条消息合并为一次回复
 group_proactive_window_seconds = 0.45  # 群聊主动回复缓冲窗口（秒）
 queue_expire_seconds = 60.0        # 排队窗口过期时间，超时自动丢弃
+group_max_concurrent = 3           # 群内最大并发数（0=不限）
+group_queue_timeout = 120           # 群消息队列超时(秒)，超时丢弃（@mention除外）
 
 # =============================================================================
 # 记忆冲突裁决
@@ -149,6 +151,8 @@ classification_windows = []        # 分类时间段，如 ["09:00-12:00", "14:0
 emotion_labels = ["开心", "喜欢", "惊讶", "无语", "委屈", "生气", "伤心", "嘲讽", "害怕", "困惑", "焦虑", "疲惫", "温暖", "内疚", "感动"]
 reply_enabled = true              # 是否启用表情追评（根据情绪回复对应表情）
 reply_cooldown_seconds = 180.0     # 表情追评冷却时间（秒）
+max_stored_emojis = 100           # 表情仓库最大存储条数
+overflow_policy = "replace_oldest"  # replace_oldest（最久未使用淘汰）| reject_new（拒绝新增）
 
 # =============================================================================
 # 记忆系统配置

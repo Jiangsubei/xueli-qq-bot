@@ -83,6 +83,9 @@ class ImportantMemoryStore:
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
+        if user_id.startswith("group:"):
+            group_part = user_id[6:]
+            return self.base_path / "group" / f"{group_part}.md"
         return self.base_path / f"{user_id}.md"
 
     def _get_file_lock(self, file_path: str) -> asyncio.Lock:
@@ -91,7 +94,12 @@ class ImportantMemoryStore:
         return self._locks[file_path]
 
     def get_user_ids(self) -> List[str]:
-        return sorted(file_path.stem for file_path in self.base_path.glob("*.md"))
+        user_ids = [file_path.stem for file_path in self.base_path.glob("*.md")]
+        group_dir = self.base_path / "group"
+        if group_dir.exists():
+            for file_path in group_dir.glob("*.md"):
+                user_ids.append(f"group:{file_path.stem}")
+        return sorted(user_ids)
 
     def _normalize_text(self, text: str) -> str:
         normalized = (text or "").lower().strip()

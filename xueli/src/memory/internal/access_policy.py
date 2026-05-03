@@ -293,7 +293,12 @@ class MemoryAccessPolicy:
             }
 
         if category in self._SHARED_CATEGORIES:
-            return {"kind": MemoryApplicabilityScope.SHARED.value}
+            if source_group_id:
+                return {
+                    "kind": MemoryApplicabilityScope.GROUP.value,
+                    "group_id": source_group_id,
+                }
+            return {"kind": MemoryApplicabilityScope.DEFAULT.value}
 
         return {"kind": MemoryApplicabilityScope.DEFAULT.value}
 
@@ -309,7 +314,7 @@ class MemoryAccessPolicy:
         if kind == MemoryApplicabilityScope.DEFAULT.value:
             return True
         if kind == MemoryApplicabilityScope.SHARED.value:
-            return True
+            return str(message_type or "") == "group" and str(applicability_scope.get("group_id") or "") == str(group_id or "")
         if kind == MemoryApplicabilityScope.PRIVATE_CHAT.value:
             return str(message_type or "private") == "private" and (
                 not applicability_scope.get("user_id")

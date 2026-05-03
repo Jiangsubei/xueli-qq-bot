@@ -149,7 +149,19 @@ class TimingGateService:
         ]
         if plan is not None:
             lines.append(f"planner决定：{getattr(plan, 'reason', '')}")
-        lines.append(f"当前消息：{context.user_message}")
+        current_message = context.user_message or ""
+        vision_analysis = getattr(context, "vision_analysis", None) or {}
+        merged_desc = str(vision_analysis.get("merged_description", "") or "").strip()
+        failure_count = int(vision_analysis.get("vision_failure_count", 0) or 0)
+        if merged_desc:
+            image_part = f"[图片] {merged_desc}"
+        elif failure_count > 0:
+            image_part = "[图片]未成功识别"
+        else:
+            image_part = ""
+        if image_part:
+            current_message = f"{current_message.strip()}\n{image_part}" if current_message.strip() else image_part
+        lines.append(f"当前消息：{current_message}")
         if context.rendered_recent_history:
             lines.append("聊天历史（含时间戳）：")
             lines.append(context.rendered_recent_history)
@@ -194,6 +206,12 @@ class TimingGateService:
 
     def _fallback_decision(self, *, plan: Any, context: MessageContext) -> TimingDecision:
         signals = dict(context.planning_signals or {})
+        if bool(signals.get("_force_timing_continue")):
+            return TimingDecision(
+                decision=TimingDecisionAction.CONTINUE.value,
+                reason="高优先级消息，强制继续",
+                source="rule",
+            )
         if bool(signals.get("has_image_without_text")):
             return TimingDecision(decision=TimingDecisionAction.WAIT.value, reason="当前更像是等待图片相关补充", source="rule")
         return TimingDecision(

@@ -13,15 +13,17 @@ from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocat
 from src.core.models import MessageEvent, MessageHandlingPlan, MessagePlanAction
 from src.core.platform_normalizers import event_mentions_account
 from src.core.prompt_templates import PromptTemplateLoader
+from src.handlers.display_utils import window_display_text
 from src.handlers.message_context import MessageContext
 from src.handlers.prompt_planner import PromptPlanner
 from src.services.ai_client import AIAPIError, AIClient
+from src.emoji.models import DEFAULT_EMOTION_LABELS, DEFAULT_REPLY_TONES
 
 logger = logging.getLogger(__name__)
 
 
 class ConversationPlanner:
-    """Use a dedicated model to plan reply/wait/ignore for private and group chats."""
+    """Plan how to reply — produce PromptPlan and reply_reference. Does not decide wait/ignore (that is TimingGate's responsibility)."""
 
     def __init__(
         self,
@@ -29,11 +31,13 @@ class ConversationPlanner:
         *,
         app_config: Optional[AppConfig] = None,
         model_invocation_router: Optional[ModelInvocationRouter] = None,
+        emoji_repository: Optional[Any] = None,
     ) -> None:
         self.app_config = app_config or config.app
         self.ai_client = ai_client or self._create_ai_client()
         self._owns_ai_client = ai_client is None
         self.model_invocation_router = model_invocation_router
+        self.emoji_repository = emoji_repository
         self.prompt_planner = PromptPlanner()
         self.template_loader = PromptTemplateLoader()
 
@@ -90,16 +94,18 @@ class ConversationPlanner:
     def _decision_output_schema(self) -> str:
         return self.prompt_planner.decision_output_schema()
 
-    def _build_system_prompt(self, chat_mode: str) -> str:
+    def _build_system_prompt(self, chat_mode: str, *, emoji_enabled: bool = False) -> str:
         """Render planner.prompt template.
 
-        Template variables: chat_mode_label, decision_output_schema.
+        Template variables: chat_mode_label, decision_output_schema, reply_tones, emotion_labels.
         All scene guidance is fixed text inside the template.
         """
         return self.template_loader.render(
             "planner.prompt",
             chat_mode_label="私聊" if chat_mode == "private" else "群聊",
             decision_output_schema=self._decision_output_schema(),
+            reply_tones=" / ".join(DEFAULT_REPLY_TONES) if emoji_enabled else "",
+            emotion_labels=" / ".join(DEFAULT_EMOTION_LABELS) if emoji_enabled else "",
         )
 
     def _format_window_messages(self, window_messages: List[Dict[str, Any]]) -> str:
@@ -113,16 +119,16 @@ class ConversationPlanner:
                 if role == "assistant"
                 else f"用户 {self._format_identity_label(item.get('user_id'), str(item.get('speaker_name') or ''))}"
             )
-            text = self._window_display_text(item)
+            text = window_display_text(item)
             event_time = float(item.get("event_time") or 0)
             time_str = datetime.fromtimestamp(event_time).strftime("%m-%d %H:%M") if event_time > 0 else "?"
             lines.append(f"[{time_str}] {speaker}: {text}")
 
             merged_description = str(item.get("merged_description") or "").strip()
             if merged_description:
-                lines.append(f"  图片摘要: {merged_description}")
+                lines.append(f"  [图片] {merged_description}")
             for image_index, description in enumerate(item.get("per_image_descriptions") or [], 1):
-                lines.append(f"  第{image_index}张图片: {description}")
+                lines.append(f"  第{image_index}张: {description}")
             if item.get("has_image") and not item.get("vision_available"):
                 failure_count = int(item.get("vision_failure_count", 0) or 0)
                 if failure_count > 0:
@@ -131,22 +137,6 @@ class ConversationPlanner:
                 if vision_error:
                     lines.append(f"  图片理解错误: {vision_error}")
         return "\n".join(lines)
-
-    def _window_display_text(self, item: Dict[str, Any]) -> str:
-        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0 or bool(item.get("image_description"))
-        image_desc = str(item.get("image_description") or item.get("merged_description") or "").strip()
-        # 如果有图片描述，即使 text 非空也追加描述
-        if has_image_indicator and image_desc:
-            if text and text != "[空]":
-                return f"{text}[图片描述：{image_desc}]"
-            return f"[图片描述：{image_desc}]"
-        if text and text != "[空]":
-            return text
-        if has_image_indicator:
-            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
-        return text or "[空]"
 
     def _build_recent_history_text(self, window_messages: List[Dict[str, Any]]) -> str:
         history_items = [item for item in window_messages if not bool(item.get("is_latest"))]
@@ -170,14 +160,14 @@ class ConversationPlanner:
             return str(latest_message.get("display_text") or "").strip()
         if str(user_message or "").strip():
             return str(user_message or "").strip()
-        return str(event.extract_text().strip() or "[空]")
+        return str(event.extract_text().strip() or "用户发送了空文本")
 
     def _resolve_prompt_clean_text(self, latest_message: Dict[str, Any], event: MessageEvent, user_message: str) -> str:
         if str(latest_message.get("text_content") or "").strip():
             return str(latest_message.get("text_content") or "").strip()
         if str(user_message or "").strip():
             return str(user_message or "").strip()
-        return str(event.extract_text().strip() or "[空]")
+        return str(event.extract_text().strip() or "用户发送了空文本")
 
     def _resolve_prompt_has_image(self, latest_message: Dict[str, Any], event: MessageEvent) -> bool:
         if "has_image" in latest_message:
@@ -222,14 +212,14 @@ class ConversationPlanner:
         window_messages = list((context.window_messages if context else window_messages) or [])
         latest_message = self._latest_window_message(window_messages)
 
-        raw_text = self._resolve_prompt_raw_text(latest_message, event, user_message) or "[空]"
-        clean_text = self._resolve_prompt_clean_text(latest_message, event, user_message) or "[空]"
-        planner_text = user_message.strip() or "[空]"
+        raw_text = self._resolve_prompt_raw_text(latest_message, event, user_message) or "用户发送了空文本"
+        clean_text = self._resolve_prompt_clean_text(latest_message, event, user_message) or "用户发送了空文本"
+        planner_text = user_message.strip() or "用户发送了空文本"
         has_image_flag = self._resolve_prompt_has_image(latest_message, event)
         image_count = self._resolve_prompt_image_count(latest_message, event)
         message_shape = str(
             latest_message.get("message_shape")
-            or ("image_only" if has_image_flag and clean_text == "[空]" else "text_only")
+            or ("image_only" if has_image_flag and clean_text == "用户发送了空文本" else "text_only")
         )
         merged_description = str(latest_message.get("merged_description") or "").strip() or "无"
         per_image_descriptions = latest_message.get("per_image_descriptions") or []
@@ -248,11 +238,12 @@ class ConversationPlanner:
         if has_image_flag:
             image_context_lines.append(f"这条消息的内容形态：{self._describe_message_shape(message_shape)}。")
             image_context_lines.append(f"图片数量：{image_count}。")
-            image_context_lines.append(f"图片摘要：{merged_description}")
+            if merged_description != "无":
+                image_context_lines.append(f"[图片] {merged_description}")
             if per_image_text != "无":
                 image_context_lines.append(f"逐图描述：\n{per_image_text}")
             if vision_available == "否":
-                image_context_lines.append("这条消息里的图片信息目前不完整，理解结果有限。")
+                image_context_lines.append("[图片]未成功识别")
         else:
             image_context_lines.append(f"这条消息的内容形态：{self._describe_message_shape(message_shape)}。")
 
@@ -265,8 +256,8 @@ class ConversationPlanner:
                 recent_history_text,
                 "补充判断提醒：\n"
                 "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
-                "- 如果用户仍在补充、消息可能未完整、或需要等待更多信息，可以自行判断是否 wait\n"
-                "- 只有在明显无需响应时才考虑 ignore",
+                "- 如果用户仍在补充或消息可能未完整，reply_reference 注明不要急于追问，prompt_plan 用 light_presence\n"
+                "- 如果消息无明显互动需要，reply_reference 注明用轻存在感简短应一声即可",
             ]
             return "\n\n".join(part for part in parts if str(part or "").strip()).strip()
 
@@ -279,8 +270,8 @@ class ConversationPlanner:
             "补充判断提醒：\n"
             "- 根据聊天记录里的时间戳，自行判断当前消息和上下文的连续性\n"
             "- 请围绕当前消息做判断，不要把前面的话当成当前要回复的内容\n"
-            "- 如果最近记录显示助手刚刚接过话，这是强烈信号：优先选 ignore 或 wait，不要连续回复\n"
-            "- 群聊里如果消息没有明确指向助手，优先选 ignore，不要刷存在感",
+            "- 如果最近记录显示助手刚刚接过话，reply_reference 注明不要连续接话，prompt_plan 用 light_presence\n"
+            "- 群聊里如果消息没有明确指向助手，reply_reference 注明用极轻存在感回应",
         ]
         return "\n\n".join(part for part in parts if str(part or "").strip()).strip()
 
@@ -305,16 +296,6 @@ class ConversationPlanner:
             return json.loads(json_match.group(0))
 
         raise ValueError(f"invalid planner response: {text[:200]}")
-
-    def _normalize_action(self, action: str) -> str:
-        value = action.strip().lower()
-        mapping = {
-            "reply": MessagePlanAction.REPLY.value,
-            "respond": MessagePlanAction.REPLY.value,
-            "回复": MessagePlanAction.REPLY.value,
-        }
-        normalized = mapping.get(value, MessagePlanAction.REPLY.value)
-        return normalized
 
     def _parse_plan(self, content: str, *, event: MessageEvent, context: Optional[MessageContext] = None) -> MessageHandlingPlan:
         decision = self._extract_json_object(content)
@@ -408,8 +389,16 @@ class ConversationPlanner:
                 source="rule",
             )
 
+        emoji_config = getattr(self.app_config, "emoji", None)
+        emoji_enabled = bool(
+            emoji_config
+            and emoji_config.enabled
+            and self.emoji_repository
+            and self.emoji_repository.has_emoji_data()
+        )
+
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt(str(event.message_type or "").strip().lower())),
+            self.ai_client.build_text_message("system", self._build_system_prompt(str(event.message_type or "").strip().lower(), emoji_enabled=emoji_enabled)),
             self.ai_client.build_text_message(
                 "user",
                 self._build_user_prompt(

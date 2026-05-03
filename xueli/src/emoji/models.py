@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
@@ -70,16 +70,15 @@ class EmojiReplyDecision:
 @dataclass
 class EmojiRecord:
     emoji_id: str
-    sticker_kind: str = ""
-    native_id: str = ""
-    emoji_package_id: str = ""
-    native_key: str = ""
-    native_summary: str = ""
+    emoji_id_str: str = ""
+    package_id: str = ""
+    key: str = ""
+    summary: str = ""
+    local_path: str = ""
     description: str = ""
     emotion_status: str = "pending"
     primary_emotion: str = ""
-    emotion_confidence: float = 0.0
-    emotion_reason: str = ""
+    confidence: float = 0.0
     emotion_candidates: List[str] = field(default_factory=list)
     reply_tones: List[str] = field(default_factory=list)
     reply_intents: List[str] = field(default_factory=list)
@@ -95,15 +94,6 @@ class EmojiRecord:
     message_type: str = ""
     user_id: int = 0
     group_id: Optional[int] = None
-    raw_segment: Dict[str, Any] = field(default_factory=dict)
-    tags: List[str] = field(default_factory=list)
-    emotion_error: str = ""
-    # Legacy fields kept for backward compatibility with existing indexes/UI.
-    sha256: str = ""
-    image_path: str = ""
-    file_ext: str = ""
-    sticker_confidence: float = 0.0
-    sticker_reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -114,8 +104,6 @@ class EmojiRecord:
         payload["emotion_candidates"] = list(payload.get("emotion_candidates") or [])
         payload["reply_tones"] = list(payload.get("reply_tones") or [])
         payload["reply_intents"] = list(payload.get("reply_intents") or [])
-        payload["raw_segment"] = dict(payload.get("raw_segment") or {})
-        payload["tags"] = list(payload.get("tags") or [])
         payload["manual_weight"] = float(payload.get("manual_weight", 1.0) or 1.0)
         payload["auto_reply_count"] = int(payload.get("auto_reply_count", 0) or 0)
         payload["last_auto_reply_at"] = str(payload.get("last_auto_reply_at", "") or "")

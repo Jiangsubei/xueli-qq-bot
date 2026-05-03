@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
 import websockets
@@ -14,8 +15,19 @@ from websockets.server import WebSocketServerProtocol
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class QueuedMessage:
+    """在队列中传递的消息对象，避免重复 JSON 解析。"""
+    raw: str
+    data: Dict[str, Any]
+
+
 class NapCatConnection:
     """NapCat WebSocket server transport."""
+
+    MESSAGE_QUEUE_SIZE = 0
+    NOTICE_QUEUE_SIZE = 100
+    CONSUME_THROTTLE_MS = 50
 
     def __init__(
         self,
@@ -37,6 +49,13 @@ class NapCatConnection:
         self._connected = False
         self._heartbeat_interval = 30
         self._last_heartbeat = 0
+        self._notice_dropped_count = 0
+
+        self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._notice_queue: asyncio.Queue = asyncio.Queue(maxsize=self.NOTICE_QUEUE_SIZE)
+        self._receive_task: Optional[asyncio.Task] = None
+        self._consume_task: Optional[asyncio.Task] = None
+        self._notice_task: Optional[asyncio.Task] = None
 
     async def start_server(self):
         logger.info("[NapCat] 启动 WebSocket 服务")
@@ -81,10 +100,14 @@ class NapCatConnection:
         if self.on_connect:
             await self._safe_callback(self.on_connect)
 
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        self._consume_task = asyncio.create_task(self._consume_loop())
+        self._notice_task = asyncio.create_task(self._notice_loop())
+
         try:
-            await self._receive_loop()
-        except ConnectionClosed:
-            logger.debug("WebSocket 连接已关闭")
+            await asyncio.gather(self._receive_task, self._consume_task, self._notice_task)
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             logger.error("[NapCat] 接收消息失败")
         finally:
@@ -92,22 +115,72 @@ class NapCatConnection:
             self._connected = False
             self.websocket = None
 
+            await self._cancel_all_tasks()
+
             if self.on_disconnect:
                 await self._safe_callback(self.on_disconnect)
+
+    async def _cancel_all_tasks(self) -> None:
+        """取消所有内部任务并等待其退出。"""
+        for task in [self._receive_task, self._consume_task, self._notice_task]:
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        self._receive_task = None
+        self._consume_task = None
+        self._notice_task = None
 
     async def _receive_loop(self):
         while self._connected and self.websocket:
             try:
                 message = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
-                await self._handle_message(message)
-
+                try:
+                    data = json.loads(message)
+                    post_type = data.get("post_type", "")
+                    if post_type == "notice":
+                        try:
+                            self._notice_queue.put_nowait(data)
+                        except asyncio.QueueFull:
+                            self._notice_dropped_count += 1
+                            logger.warning("[NapCat] Notice队列满，丢弃事件 (累计 %d)", self._notice_dropped_count)
+                        continue
+                except json.JSONDecodeError:
+                    pass
+                # 传递 (raw, parsed) 给 consume_loop，避免重复解析
+                try:
+                    parsed = json.loads(message)
+                    self._message_queue.put_nowait(QueuedMessage(raw=message, data=parsed))
+                except json.JSONDecodeError:
+                    self._message_queue.put_nowait(QueuedMessage(raw=message, data={}))
             except asyncio.TimeoutError:
                 await self._check_heartbeat()
                 continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
 
-    async def _handle_message(self, message: str):
+    async def _consume_loop(self):
+        while self._connected:
+            item = await self._message_queue.get()
+            await self._handle_message(item)
+
+    async def _notice_loop(self):
+        while self._connected:
+            try:
+                data = await asyncio.wait_for(self._notice_queue.get(), timeout=1.0)
+                await self._handle_meta_event(data)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _handle_message(self, item: QueuedMessage) -> None:
         try:
-            data = json.loads(message)
+            data = item.data
             logger.debug("[NapCat] 收到事件")
 
             if data.get("post_type") == "meta_event":
@@ -117,8 +190,6 @@ class NapCatConnection:
             if self.on_message:
                 await self._safe_callback(self.on_message, data)
 
-        except json.JSONDecodeError as e:
-            logger.error("[NapCat] 事件 JSON 解析失败")
         except Exception as e:
             logger.error("[NapCat] 处理事件失败")
 
@@ -153,6 +224,9 @@ class NapCatConnection:
     async def disconnect(self):
         self._running = False
         self._connected = False
+
+        # 立即取消所有内部任务
+        await self._cancel_all_tasks()
 
         if self.websocket:
             try:

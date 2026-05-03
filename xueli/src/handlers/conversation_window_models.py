@@ -20,6 +20,7 @@ class BufferedWindow:
     planning_signals: Dict[str, Any] = field(default_factory=dict)
     window_reason: str = ""
     latest_event: Optional[Any] = None
+    min_messages: int = 1
 
 
 @dataclass

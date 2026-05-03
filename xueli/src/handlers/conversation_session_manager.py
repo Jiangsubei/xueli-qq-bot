@@ -17,6 +17,8 @@ class ConversationSessionManager:
     def __init__(self, conversation_store: Optional[Any] = None) -> None:
         self._conversations: Dict[str, Conversation] = {}
         self._conversation_store = conversation_store
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._meta_lock = asyncio.Lock()
 
     def get_key_for_session(self, session: SessionRef) -> str:
         return session.qualified_key
@@ -33,7 +35,7 @@ class ConversationSessionManager:
         if event.message_type == MessageType.PRIVATE.value:
             return f"private:{event.user_id}"
         group_id = event.raw_data.get("group_id", "")
-        return f"group:{group_id}:{event.user_id}"
+        return f"group:{group_id}"
 
     def get_optional(self, key: str) -> Optional[Conversation]:
         return self._conversations.get(key)
@@ -46,14 +48,41 @@ class ConversationSessionManager:
         return conversation
 
     async def get_or_restore(self, key: str) -> Conversation:
-        """获取会话，若为新建空会话则从数据库恢复历史消息（供异步上下文调用）。"""
-        conversation = self._conversations.get(key)
-        if conversation is None:
-            conversation = Conversation()
-            self._conversations[key] = conversation
-        if not conversation.messages and self._conversation_store:
-            await self.restore(conversation, key)
-        return conversation
+        """获取会话，若为新建空会话则从数据库恢复历史消息（供异步上下文调用）。
+
+        使用双检锁确保并发安全：
+        1. 快速路径：已存在且有消息或无需恢复时，直接返回
+        2. 获取锁：meta_lock 保护 locks 字典访问
+        3. 双检：获取锁后再次检查是否已创建
+        4. 创建/恢复：在锁内创建，锁外恢复
+        """
+        if key in self._conversations:
+            conv = self._conversations[key]
+            if conv.messages or not self._conversation_store:
+                return conv
+            async with self._locks.setdefault(key, asyncio.Lock()):
+                if not conv.messages:
+                    await self.restore(conv, key)
+                return conv
+
+        async with self._meta_lock:
+            if key in self._locks:
+                lock = self._locks[key]
+            else:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+
+        async with lock:
+            if key in self._conversations:
+                return self._conversations[key]
+
+            conv = Conversation()
+            self._conversations[key] = conv
+
+        if self._conversation_store:
+            await self.restore(conv, key)
+
+        return conv
 
     def clear(self, key: str) -> bool:
         if key not in self._conversations:

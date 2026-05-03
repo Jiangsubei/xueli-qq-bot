@@ -16,6 +16,7 @@ from src.core.prompt_templates import PromptTemplateLoader
 from src.core.platform_models import FaceAction, MfaceAction, OutgoingAction, SessionRef
 from src.core.runtime_metrics import RuntimeMetrics
 
+from .database import EmojiDatabase
 from .models import (
     DEFAULT_EMOTION_LABELS,
     DEFAULT_REPLY_TONES,
@@ -23,7 +24,6 @@ from .models import (
     EmojiReplyDecision,
     EmojiReplySelection,
 )
-from .repository import EmojiRepository
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class EmojiReplyService:
     def __init__(
         self,
         *,
-        repository: EmojiRepository,
+        repository: EmojiDatabase,
         ai_client: Any,
         runtime_metrics: Optional[RuntimeMetrics],
         app_config: AppConfig,
@@ -84,7 +84,7 @@ class EmojiReplyService:
         if not decision.should_send:
             return self._skip("model_declined", decision=decision)
 
-        candidates = await self.repository.find_reply_candidates(
+        candidates = self.repository.find_reply_candidates(
             target_intent=decision.target_intent,
             target_tone=decision.target_tone,
             target_emotion=decision.target_emotion,
@@ -108,7 +108,7 @@ class EmojiReplyService:
         group_id = event.raw_data.get("group_id", "")
         if group_id:
             self._group_last_sent_at[str(group_id)] = time.monotonic()
-        record = await self.repository.mark_auto_reply_sent(selection.emoji.emoji_id)
+        record = self.repository.mark_auto_reply_sent(selection.emoji.emoji_id)
         if self.runtime_metrics:
             self.runtime_metrics.record_emoji_reply_sent(1)
         return record
@@ -122,15 +122,13 @@ class EmojiReplyService:
         if not selection.emoji:
             return None
         emoji = selection.emoji
-        if emoji.sticker_kind == "face" and emoji.native_id:
-            return FaceAction(session=session, face_id=emoji.native_id)
-        if emoji.sticker_kind == "mface" and emoji.native_id:
+        if emoji.key and emoji.emoji_id_str:
             return MfaceAction(
                 session=session,
-                emoji_id=emoji.native_id,
-                emoji_package_id=emoji.emoji_package_id,
-                key=emoji.native_key,
-                summary=emoji.native_summary,
+                emoji_id=emoji.emoji_id_str,
+                emoji_package_id=emoji.package_id,
+                key=emoji.key,
+                summary=emoji.summary,
             )
         return None
 

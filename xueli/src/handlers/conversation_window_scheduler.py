@@ -15,6 +15,8 @@ MergeBuilder = Callable[[List[Dict[str, Any]]], str]
 class ConversationWindowScheduler:
     """Keep one rolling active buffer per conversation and queue sealed windows."""
 
+    DEFAULT_AVG_REPLY_LATENCY = 5.0
+
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._states: Dict[str, ConversationWindowState] = {}
@@ -63,6 +65,7 @@ class ConversationWindowScheduler:
                     messages=[],
                     window_reason="buffer_opened",
                     latest_event=event,
+                    min_messages=1,
                 )
                 state.active_buffer = active_buffer
                 state.next_seq += 1
@@ -78,6 +81,8 @@ class ConversationWindowScheduler:
                             window_seconds=max(0.0, float(window_seconds or 0.0)),
                             queue_expire_seconds=max(0.0, float(queue_expire_seconds or 0.0)),
                             merge_builder=merge_builder,
+                            min_messages=active_buffer.min_messages,
+                            average_reply_latency=self.DEFAULT_AVG_REPLY_LATENCY,
                         )
                     ),
                 )
@@ -158,6 +163,8 @@ class ConversationWindowScheduler:
         window_seconds: float,
         queue_expire_seconds: float,
         merge_builder: MergeBuilder,
+        min_messages: int = 1,
+        average_reply_latency: float = 5.0,
     ) -> None:
         waiters_to_resolve: list[tuple[asyncio.Future[Any], WindowDispatchResult]] = []
         try:
@@ -170,6 +177,27 @@ class ConversationWindowScheduler:
                 active = state.active_buffer
                 if int(active.seq or 0) != int(seq or 0):
                     return
+                pending_count = len(active.messages)
+                trigger_threshold = max(1, min_messages)
+
+                if pending_count < trigger_threshold:
+                    idle_seconds = time.time() - state.last_activity_at
+                    equivalent = pending_count + idle_seconds / average_reply_latency
+                    if equivalent < trigger_threshold:
+                        state.active_buffer = None
+                        state.active_buffer = BufferedWindow(
+                            conversation_key=conversation_key,
+                            seq=state.next_seq,
+                            chat_mode=active.chat_mode,
+                            opened_at=time.time(),
+                            messages=list(active.messages),
+                            window_reason="buffer_kept_idle",
+                            latest_event=active.latest_event,
+                            min_messages=min_messages,
+                        )
+                        state.next_seq += 1
+                        return
+
                 now = time.time()
                 active.closed_at = now
                 active.expires_at = now + max(0.0, float(queue_expire_seconds or 0.0))
@@ -247,26 +275,16 @@ class ConversationWindowScheduler:
         return dispatch, dropped_count, waiters
 
     def _is_window_superseded(self, state: ConversationWindowState, conversation_key: str, now: float) -> bool:
-        """群聊专用：检查当前 processing window 是否已被更新的 active/queued window 替代。"""
+        """群聊专用：检查当前 processing window 是否已被更新的 queued window 替代。"""
         if state.processing is None:
             return False
         processing_seq = int(state.processing.seq or 0)
-        processing_opened_at = float(state.processing.opened_at or 0.0)
 
-        # 检查是否有更新的 queued window
         for queued_window in state.queued_windows:
             queued_seq = int(queued_window.seq or 0)
             if queued_seq > processing_seq:
                 return True
 
-        # 检查是否有更新的 active buffer（已在处理过程中有新消息到达）
-        # active buffer 的 opened_at 会比 processing 更新
-        # 注意：这里需要通过 conversation_key 查找对应的 state
-        # 由于 _states 是内部状态，可以通过 active_buffer 判断
-        # 如果有新的 active_buffer 且其 opened_at 更晚，则表示有新消息
-        # 但 processing 是在 queued 之后，所以这里只检查 queued 是否更新
-        # 实际上 active_buffer 不会出现在 processing 阶段
-        # 所以只需检查 queued 是否有更新的 seq 即可（上面已处理）
         return False
 
     def _replace_close_task_locked(self, *, conversation_key: str, task: asyncio.Task[Any]) -> None:

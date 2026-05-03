@@ -116,12 +116,15 @@ class ConversationContextBuilder:
                 recent_gap_bucket=str(getattr(temporal_context, "recent_gap_bucket", "unknown") or "unknown"),
                 recent_history_count=len(conversation.messages),
             )
-        rendered_recent_history = self.timeline_formatter.render_recent_history(
-            window_messages=window_messages,
-            prompt_plan=prompt_plan,
-            temporal_context=temporal_context,
-            chat_mode=str(getattr(context_event, "message_type", "private") or "private"),
-        )
+        if prompt_plan is None:
+            rendered_recent_history = ""
+        else:
+            rendered_recent_history = self.timeline_formatter.render_recent_history(
+                window_messages=window_messages,
+                prompt_plan=prompt_plan,
+                temporal_context=temporal_context,
+                chat_mode=str(getattr(context_event, "message_type", "private") or "private"),
+            )
         rendered_timeline_summary = self.timeline_formatter.render_summary(temporal_context)
         context_items = self.timeline_formatter.build_items(window_messages)
         context_items.extend(self._memory_items("person_fact", person_fact_context, count_in_context=False))

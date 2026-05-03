@@ -64,7 +64,7 @@ class PlatformNormalizerTests(unittest.TestCase):
 
         self.assertEqual(inbound.session.scope, "shared")
         self.assertEqual(inbound.session.channel_id, "54321")
-        self.assertEqual(inbound.session.key, "group:54321:12345")
+        self.assertEqual(inbound.session.key, "group:54321")
         self.assertEqual(inbound.reply_to_message_id, "77")
         self.assertEqual(inbound.mentioned_user_ids, ("99999",))
         self.assertEqual(inbound.message_kind, "mixed")
@@ -88,7 +88,7 @@ class PlatformNormalizerTests(unittest.TestCase):
         )
 
         manager = ConversationSessionManager()
-        self.assertEqual(manager.get_key(event), "group:24680:13579")
+        self.assertEqual(manager.get_key(event), "group:24680")
 
     def test_inbound_helpers_read_reply_and_mentions_from_attached_event(self) -> None:
         event = MessageEvent.from_dict(
@@ -169,7 +169,7 @@ class PlatformNormalizerTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(get_execution_key(event), "api:shared:room-1")
+        self.assertEqual(get_execution_key(event), "api:group:room-1")
 
 
 if __name__ == "__main__":

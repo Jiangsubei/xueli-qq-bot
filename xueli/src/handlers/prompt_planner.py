@@ -32,6 +32,9 @@ class PromptPlanner:
             '"include_reply_scope":true,'
             '"include_style_guide":true},'
             '"notes":"可选说明"},'
+            '"emoji_tone":"tone标签，可选",'
+            '"emoji_emotion":"emotion标签，可选",'
+            '"emoji_intent":"tone-emotion格式，可选",'
             '"reply_reference":"给回复模型看的自然语言参考，可选"}'
         )
 
@@ -105,6 +108,10 @@ class PromptPlanner:
             ),
             policy=policy,
             notes=str(raw_plan.get("notes") or default_plan.notes or "").strip(),
+            emoji_should_send=bool(str(decision.get("emoji_intent") or "").strip()),
+            emoji_tone=str(decision.get("emoji_tone") or "").strip(),
+            emoji_emotion=str(decision.get("emoji_emotion") or "").strip(),
+            emoji_intent=str(decision.get("emoji_intent") or "").strip(),
         )
 
     def parse_reply_reference(
@@ -146,7 +153,7 @@ class PromptPlanner:
             and not bool(signals.get("follows_assistant_recently"))
         ):
             continuity_mode = "resume_recent_topic"
-        timeline_detail = "summary"
+        timeline_detail = "per_message"
         if continuity_hint == "old_topic_resume":
             timeline_detail = "per_message"
         elif continuity_hint == "unknown":

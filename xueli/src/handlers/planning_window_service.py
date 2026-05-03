@@ -27,37 +27,7 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
-        if not self.config.enabled:
-            return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
-        conversation_key = self.host._get_conversation_key(event)
-        result = await self.scheduler.submit_event(
-            conversation_key=conversation_key,
-            chat_mode="private",
-            event=event,
-            window_seconds=float(getattr(self.host, "private_batch_window_seconds", self.config.private_window_seconds) or 0.0),
-            queue_expire_seconds=float(getattr(self.config, "queue_expire_seconds", 60.0) or 0.0),
-            message_builder=self._build_private_window_message,
-            merge_builder=self._merge_window_text,
-        )
-        if result.status != "dispatch_window" or result.window is None:
-            if result.status == "accepted_only" and not str(result.reason or "").strip():
-                result.reason = "buffer_opened"
-            return result
-        latest_event = result.window.latest_event if isinstance(result.window.latest_event, MessageEvent) else event
-        conversation = self.host._get_conversation(conversation_key)
-        temporal_context = self.host._build_temporal_context(
-            event=latest_event,
-            conversation=conversation,
-            reply_context={"window_messages": list(result.window.messages or [])},
-        )
-        result.window.planning_signals = self._build_private_planning_signals(
-            event=latest_event,
-            user_message=result.window.merged_user_message,
-            conversation=conversation,
-            temporal_context=temporal_context,
-            pending_items=list(result.window.messages or []),
-        )
-        return result
+        return WindowDispatchResult(status="bypassed", reason="window_disabled")
 
     async def submit_event(
         self,
@@ -66,28 +36,7 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
-        if not self.config.enabled:
-            return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
-        user_message = self.host.extract_user_message(event)
-        if self._should_bypass_window(event, user_message):
-            return WindowDispatchResult(status="bypassed", reason="bypassed")
-        conversation_key = self.host.conversation_plan_coordinator._history_key(event)
-        result = await self.scheduler.submit_event(
-            conversation_key=conversation_key,
-            chat_mode="group",
-            event=event,
-            window_seconds=float(
-                getattr(self.host, "group_proactive_window_seconds", self.config.group_proactive_window_seconds) or 0.0
-            ),
-            queue_expire_seconds=float(getattr(self.config, "queue_expire_seconds", 60.0) or 0.0),
-            message_builder=self._build_window_message,
-            merge_builder=self._merge_window_text,
-        )
-        if result.status == "dispatch_window" and result.window is not None:
-            result.window.planning_signals = {"window_batch_size": max(1, len(result.window.messages or []))}
-        if result.status == "accepted_only" and not str(result.reason or "").strip():
-            result.reason = "buffer_opened"
-        return result
+        return WindowDispatchResult(status="bypassed", reason="window_disabled")
 
     async def mark_window_complete(self, conversation_key: str, seq: int) -> WindowDispatchResult:
         return await self.scheduler.mark_window_complete(conversation_key, seq)
@@ -104,15 +53,14 @@ class PlanningWindowService:
     async def close(self) -> None:
         await self.scheduler.close()
 
-    def _should_bypass_window(self, event: MessageEvent, user_message: str) -> bool:
+    def _should_bypass_window(self, event: MessageEvent, user_message: str) -> tuple[bool, bool]:
         normalized = str(user_message or "").strip()
-        if self.host._is_direct_mention(event):
-            return True
+        is_at = self.host._is_direct_mention(event)
         if normalized.startswith("/"):
-            return True
+            return True, False
         if str(self.host._get_reply_to_message_id(event) or "").strip():
-            return True
-        return False
+            return True, False
+        return False, is_at
 
     def _build_private_window_message(self, event: MessageEvent) -> Dict[str, Any]:
         user_message = self.host.extract_user_message(event)
@@ -142,8 +90,8 @@ class PlanningWindowService:
             "user_id": str(event.user_id),
             "event_time": float(getattr(event, "time", 0.0) or time.time()),
             "text_content": str(user_message or "").strip(),
-            "text": str(user_message or "").strip() or "[空]",
-            "display_text": str(user_message or "").strip() or "[空]",
+            "text": str(user_message or "").strip() or "用户发送了空文本",
+            "display_text": str(user_message or "").strip() or "用户发送了空文本",
             "raw_text": str(self.host._get_event_text(event) or "").strip(),
             "has_image": bool(self.host._has_image_input(event)),
             "raw_has_image": bool(self.host._has_image_input(event)),
@@ -176,7 +124,7 @@ class PlanningWindowService:
         lines: List[str] = []
         for item in items:
             text = str(item.get("text_content") or item.get("text") or "").strip()
-            if text and text != "[空]":
+            if text and text != "用户发送了空文本":
                 lines.append(text)
         if not lines:
             return ""

@@ -162,7 +162,7 @@ class NapCatAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(inbound_event)
         self.assertEqual(inbound_event.platform, "qq")
         self.assertEqual(inbound_event.adapter, "napcat")
-        self.assertEqual(inbound_event.session.key, "group:54321:12345")
+        self.assertEqual(inbound_event.session.key, "group:54321")
 
 
 if __name__ == "__main__":
