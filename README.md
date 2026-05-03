@@ -166,8 +166,8 @@ export API_RUNTIME_PORT=8765
 │   │   ├── webui/       # 本地控制台后端
 │   │   └── emoji/       # 表情相关逻辑
 │   ├── tests/           # 单元测试
-│   ├── tools/           # 工具脚本
-│   └── main.py          # 启动入口
+│   └── tools/           # 工具脚本
+├── main.py          # 启动入口
 ├── requirements.txt     # 依赖
 ├── start.bat
 ├── start.ps1

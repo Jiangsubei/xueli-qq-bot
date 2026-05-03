@@ -3,6 +3,8 @@
 支持从 WebSocket 消息中的 URL 直接下载图片
 无需依赖平台专属 HTTP API
 """
+import asyncio
+
 import aiohttp
 import base64
 import binascii
