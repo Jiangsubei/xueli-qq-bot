@@ -59,10 +59,15 @@ class EmojiManager:
         self.enabled = bool(emoji_config and emoji_config.enabled)
         self.capture_enabled = bool(self.enabled and getattr(emoji_config, "capture_enabled", True))
         self.classification_enabled = bool(getattr(emoji_config, "classification_enabled", False))
+<<<<<<< HEAD
         http_url = getattr(app_config.adapter_connection, "http_url", "http://127.0.0.1:6700") if app_config else "http://127.0.0.1:6700"
         self.repository = EmojiDatabase(
             getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis",
             http_url=http_url,
+=======
+        self.repository = EmojiRepository(
+            getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis",
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             max_stored_emojis=int(getattr(emoji_config, "max_stored_emojis", 100)),
             overflow_policy=str(getattr(emoji_config, "overflow_policy", "replace_oldest")),
         )

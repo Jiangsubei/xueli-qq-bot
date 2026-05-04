@@ -67,11 +67,19 @@ class PlanningWindowServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "bypassed")
 
-    async def test_group_at_message_bypasses_window(self) -> None:
+    async def test_group_at_message_triggers_force_continue(self) -> None:
         handler = MessageHandler(conversation_planner=_FakePlanner())
         result = await handler.planning_window_service.submit_event(event=self._group_event("看这里", at_bot=True))
 
+<<<<<<< HEAD
         self.assertEqual(result.status, "bypassed")
+=======
+        self.assertEqual(result.status, "dispatch_window")
+        self.assertTrue(
+            result.window.planning_signals.get("_force_timing_continue", False),
+            "@mention should set _force_timing_continue signal",
+        )
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
 
 if __name__ == "__main__":

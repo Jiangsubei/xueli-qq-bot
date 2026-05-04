@@ -168,6 +168,10 @@ class ReplyPromptRenderer:
         history = str(message_context.recent_history_text or "").strip()
         if history:
             lines.append(f"\n最近对话：\n{history}")
+        emoji_intent = str(getattr(prompt_plan, "emoji_intent", "") or "").strip()
+        emoji_manager = getattr(self.host, "emoji_manager", None)
+        if emoji_intent and emoji_manager and emoji_manager.enabled and emoji_manager.repository.has_emoji_data:
+            lines.append(f"\n表情参考：{emoji_intent}（仅供参考，可自行判断是否输出或调整）")
         return "\n".join(lines)
 
     def _planner_reference_section(self, *, message_context: MessageContext) -> str:

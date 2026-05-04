@@ -138,6 +138,22 @@ class ConversationPlanner:
                     lines.append(f"  图片理解错误: {vision_error}")
         return "\n".join(lines)
 
+<<<<<<< HEAD
+=======
+    def _window_display_text(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0
+        merged_desc = str(item.get("merged_description") or "").strip()
+        if has_image_indicator and merged_desc:
+            return f"{text} [图片] {merged_desc}" if text and text != "用户发送了空文本" else f"[图片] {merged_desc}"
+        if text and text != "用户发送了空文本":
+            return text
+        if has_image_indicator:
+            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
+        return text or "用户发送了空文本"
+
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
     def _build_recent_history_text(self, window_messages: List[Dict[str, Any]]) -> str:
         history_items = [item for item in window_messages if not bool(item.get("is_latest"))]
         if not history_items:
@@ -390,12 +406,16 @@ class ConversationPlanner:
             )
 
         emoji_config = getattr(self.app_config, "emoji", None)
+<<<<<<< HEAD
         emoji_enabled = bool(
             emoji_config
             and emoji_config.enabled
             and self.emoji_repository
             and self.emoji_repository.has_emoji_data()
         )
+=======
+        emoji_enabled = bool(emoji_config and emoji_config.enabled)
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
         messages = [
             self.ai_client.build_text_message("system", self._build_system_prompt(str(event.message_type or "").strip().lower(), emoji_enabled=emoji_enabled)),

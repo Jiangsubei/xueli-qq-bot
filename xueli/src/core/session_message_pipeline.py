@@ -134,7 +134,10 @@ class SessionMessagePipeline:
                 queue = self._queues.get(execution_key)
             if queue is None:
                 return
+<<<<<<< HEAD
 
+=======
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             queued = None
             try:
                 queued = await queue.get()
@@ -143,6 +146,7 @@ class SessionMessagePipeline:
                     queue.task_done()
                 raise
 
+<<<<<<< HEAD
             dropped = False
             if not is_at_mention and self.group_queue_timeout > 0:
                 wait_time = time.time() - queued.enqueue_time
@@ -200,6 +204,21 @@ class SessionMessagePipeline:
                 if user_id and group_key:
                     self._group_active.get(group_key, set()).discard(user_id)
             else:
+=======
+            try:
+                await queued.handler(queued.event, queued.trace_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "消息流水线任务异常：trace=%s key=%s 错误=%s",
+                    queued.trace_id,
+                    execution_key,
+                    exc,
+                    exc_info=True,
+                )
+            finally:
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
                 if queue is not None:
                     queue.task_done()
 

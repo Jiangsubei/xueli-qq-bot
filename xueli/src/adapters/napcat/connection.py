@@ -169,6 +169,10 @@ class NapCatConnection:
         while self._connected:
             item = await self._message_queue.get()
             await self._handle_message(item)
+<<<<<<< HEAD
+=======
+            await asyncio.sleep(self.CONSUME_THROTTLE_MS / 1000.0)
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def _notice_loop(self):
         while self._connected:

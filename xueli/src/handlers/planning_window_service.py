@@ -36,7 +36,36 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
+<<<<<<< HEAD
         return WindowDispatchResult(status="bypassed", reason="window_disabled")
+=======
+        if not self.config.enabled:
+            return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
+        user_message = self.host.extract_user_message(event)
+        bypass, force_timing_continue = self._should_bypass_window(event, user_message)
+        if bypass:
+            return WindowDispatchResult(status="bypassed", reason="bypassed")
+        conversation_key = self.host.conversation_plan_coordinator._history_key(event)
+        result = await self.scheduler.submit_event(
+            conversation_key=conversation_key,
+            chat_mode="group",
+            event=event,
+            window_seconds=float(
+                getattr(self.host, "group_proactive_window_seconds", self.config.group_proactive_window_seconds) or 0.0
+            ),
+            queue_expire_seconds=float(getattr(self.config, "queue_expire_seconds", 60.0) or 0.0),
+            message_builder=self._build_window_message,
+            merge_builder=self._merge_window_text,
+        )
+        if result.status == "dispatch_window" and result.window is not None:
+            planning_signals = {"window_batch_size": max(1, len(result.window.messages or []))}
+            if force_timing_continue:
+                planning_signals["_force_timing_continue"] = True
+            result.window.planning_signals = planning_signals
+        if result.status == "accepted_only" and not str(result.reason or "").strip():
+            result.reason = "buffer_opened"
+        return result
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def mark_window_complete(self, conversation_key: str, seq: int) -> WindowDispatchResult:
         return await self.scheduler.mark_window_complete(conversation_key, seq)

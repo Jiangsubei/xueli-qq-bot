@@ -39,6 +39,13 @@ class EmojiRepository:
         await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
         if not self.index_path.exists():
             await self._write_index({"version": 3, "items": {}})
+        else:
+            index = await self._read_index()
+            items = index.get("items", {})
+            self._has_emoji_data = any(
+                item.get("emotion_status") == "classified" and not item.get("disabled", False)
+                for item in items.values()
+            )
 
     async def save_native_emoji(
         self,

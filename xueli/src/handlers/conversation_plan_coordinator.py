@@ -870,5 +870,21 @@ class ConversationPlanCoordinator:
         if self.runtime_metrics:
             self.runtime_metrics.record_planner_action(action, source=source)
 
+<<<<<<< HEAD
+=======
+    def _window_display_text(self, item: Dict[str, Any]) -> str:
+        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
+        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
+        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0
+        merged_desc = str(item.get("merged_description") or "").strip()
+        if has_image_indicator and merged_desc:
+            return f"{text} [图片] {merged_desc}" if text and text != "用户发送了空文本" else f"[图片] {merged_desc}"
+        if text and text != "用户发送了空文本":
+            return text
+        if has_image_indicator:
+            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
+        return text or "用户发送了空文本"
+
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
 __all__ = ["ConversationPlanCoordinator"]

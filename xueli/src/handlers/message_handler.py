@@ -455,11 +455,29 @@ class MessageHandler:
     async def _plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
         await self._record_group_context(event)
+<<<<<<< HEAD
         return await self.conversation_plan_coordinator.plan_message(
             event=event,
             user_message=self.extract_user_message(event),
             trace_id=trace_id,
         )
+=======
+        dispatch = await self.planning_window_service.submit_event(event=event, trace_id=trace_id)
+        if dispatch.status == "bypassed":
+            return await self.conversation_plan_coordinator.plan_message(
+                event=event,
+                user_message=self.extract_user_message(event),
+                trace_id=trace_id,
+            )
+        if dispatch.status != "dispatch_window" or dispatch.window is None:
+            return self._build_rule_plan(
+                MessagePlanAction.WAIT,
+                "缓冲窗口仍在收集消息，先等待当前批次封窗",
+                reply_context={"trace_id": trace_id, "window_reason": dispatch.reason} if trace_id else {"window_reason": dispatch.reason},
+                event=event,
+            )
+        return await self._plan_window(event, dispatch.window, trace_id=trace_id)
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
@@ -1081,6 +1099,7 @@ class MessageHandler:
         if not self.emoji_manager or not self.emoji_manager.enabled:
             return None
         repo = self.emoji_manager.repository
+<<<<<<< HEAD
         candidates = repo.find_by_intent(emoji_intent)
         if not candidates:
             return None
@@ -1095,6 +1114,24 @@ class MessageHandler:
                 emoji_package_id=picked.package_id,
                 key=picked.key,
                 summary=picked.summary,
+=======
+        candidates = await repo.find_by_intent(emoji_intent)
+        if not candidates:
+            return None
+        picked = repo.weighted_pick(candidates)
+        if not picked:
+            return None
+        await repo.mark_auto_reply_sent(picked.emoji_id)
+        if picked.sticker_kind == "face" and picked.native_id:
+            return FaceAction(session=session, face_id=picked.native_id)
+        if picked.sticker_kind == "mface" and picked.native_id:
+            return MfaceAction(
+                session=session,
+                emoji_id=picked.native_id,
+                emoji_package_id=picked.emoji_package_id,
+                key=picked.native_key,
+                summary=picked.native_summary,
+>>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             )
         return None
 
