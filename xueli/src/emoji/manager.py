@@ -15,6 +15,7 @@ from src.services.vision_client import ImageAnalysisResult, VisionClient
 
 from .database import EmojiDatabase
 from .models import DEFAULT_EMOTION_LABELS, DEFAULT_REPLY_TONES, EmojiEmotionResult
+from .repository import EmojiRepository
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +60,8 @@ class EmojiManager:
         self.enabled = bool(emoji_config and emoji_config.enabled)
         self.capture_enabled = bool(self.enabled and getattr(emoji_config, "capture_enabled", True))
         self.classification_enabled = bool(getattr(emoji_config, "classification_enabled", False))
-<<<<<<< HEAD
-        http_url = getattr(app_config.adapter_connection, "http_url", "http://127.0.0.1:6700") if app_config else "http://127.0.0.1:6700"
-        self.repository = EmojiDatabase(
-            getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis",
-            http_url=http_url,
-=======
         self.repository = EmojiRepository(
             getattr(emoji_config, "storage_path", "data/emojis") if self.enabled else "data/emojis",
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             max_stored_emojis=int(getattr(emoji_config, "max_stored_emojis", 100)),
             overflow_policy=str(getattr(emoji_config, "overflow_policy", "replace_oldest")),
         )
@@ -90,6 +84,7 @@ class EmojiManager:
             return
         self._initialized = True
         await self._sync_metrics()
+        self._ensure_worker()
 
     def record_activity(self) -> None:
         if not self.enabled:
@@ -154,7 +149,7 @@ class EmojiManager:
                     await asyncio.sleep(self._next_wait_seconds())
                     continue
 
-                pending = self.repository.list_pending(limit=1)
+                pending = await self.repository.list_pending(limit=1)
                 if not pending:
                     return
 
@@ -284,12 +279,15 @@ class EmojiManager:
         return datetime.now().time()
 
     async def _sync_metrics(self, *, active_classifiers: Optional[int] = None) -> None:
-        stats = self.repository.stats() if self.enabled else {
-            "emoji_total": 0,
-            "emoji_pending_classification": 0,
-            "emoji_disabled": 0,
-            "emoji_classified": 0,
-        }
+        if self.enabled:
+            stats = await self.repository.stats()
+        else:
+            stats = {
+                "emoji_total": 0,
+                "emoji_pending_classification": 0,
+                "emoji_disabled": 0,
+                "emoji_classified": 0,
+            }
         self._sync_metrics_now(
             emoji_active_classifiers=(
                 active_classifiers if active_classifiers is not None else self.task_manager.count()

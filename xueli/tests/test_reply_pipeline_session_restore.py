@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
@@ -39,18 +40,18 @@ class ReplyPipelineSessionRestorePromptTests(unittest.TestCase):
     def test_system_prompt_includes_session_restore_block(self) -> None:
         pipeline = ReplyPipeline(_FakeHost())
 
-        prompt = pipeline.build_response_system_prompt(
+        prompt = asyncio.run(pipeline.build_response_system_prompt(
             event=None,
             message_context=MessageContext(
                 user_message="继续聊这个",
                 person_fact_context="1. 用户正在写毕业论文",
                 persistent_memory_context="1. 用户喜欢简洁回答",
                 session_restore_context="1. 上一轮会话（2轮）：用户刚开始写毕业论文",
-                precise_recall_context="1. 第一次提到相关话题（第2轮）：用户说“准备写毕业论文”",
+                precise_recall_context='1. 第一次提到相关话题（第2轮）：用户说"准备写毕业论文"',
                 dynamic_memory_context="",
                 is_first_turn=True,
             ),
-        )
+        ))
 
         self.assertIn("[人格事实]", prompt)
         self.assertIn("用户刚开始写毕业论文", prompt)

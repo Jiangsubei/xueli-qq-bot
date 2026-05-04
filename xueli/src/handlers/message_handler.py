@@ -455,13 +455,6 @@ class MessageHandler:
     async def _plan_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
         await self._record_group_context(event)
-<<<<<<< HEAD
-        return await self.conversation_plan_coordinator.plan_message(
-            event=event,
-            user_message=self.extract_user_message(event),
-            trace_id=trace_id,
-        )
-=======
         dispatch = await self.planning_window_service.submit_event(event=event, trace_id=trace_id)
         if dispatch.status == "bypassed":
             return await self.conversation_plan_coordinator.plan_message(
@@ -477,7 +470,6 @@ class MessageHandler:
                 event=event,
             )
         return await self._plan_window(event, dispatch.window, trace_id=trace_id)
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def _plan_private_message(self, event: MessageEvent, *, trace_id: str = "") -> MessageHandlingPlan:
         self._ensure_extended_services()
@@ -1099,22 +1091,6 @@ class MessageHandler:
         if not self.emoji_manager or not self.emoji_manager.enabled:
             return None
         repo = self.emoji_manager.repository
-<<<<<<< HEAD
-        candidates = repo.find_by_intent(emoji_intent)
-        if not candidates:
-            return None
-        picked = self.emoji_reply_service._weighted_pick(candidates)
-        if not picked:
-            return None
-        repo.mark_auto_reply_sent(picked.emoji_id)
-        if picked.key and picked.emoji_id_str:
-            return MfaceAction(
-                session=session,
-                emoji_id=picked.emoji_id_str,
-                emoji_package_id=picked.package_id,
-                key=picked.key,
-                summary=picked.summary,
-=======
         candidates = await repo.find_by_intent(emoji_intent)
         if not candidates:
             return None
@@ -1131,7 +1107,6 @@ class MessageHandler:
                 emoji_package_id=picked.emoji_package_id,
                 key=picked.native_key,
                 summary=picked.native_summary,
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             )
         return None
 
@@ -1145,7 +1120,7 @@ class MessageHandler:
         parts = re.split(r"(?<=[。！？])", message)
         if len(parts) < 2:
             return [message]
-        filtered = [p.strip() for p in parts if len(p.strip()) >= 2]
+        filtered = [p.strip() for p in parts if len(p.strip()) >= 1]
         if len(filtered) < 2:
             return [message]
         return filtered

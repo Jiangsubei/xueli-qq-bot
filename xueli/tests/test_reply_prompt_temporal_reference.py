@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from src.core.models import MessageEvent, PromptPlan, TemporalContext
@@ -52,13 +53,13 @@ class ReplyPromptTemporalReferenceTests(unittest.TestCase):
             ),
         )
 
-        rendered = renderer.render(
+        rendered = asyncio.run(renderer.render(
             event=event,
             message_context=context,
             prompt_plan=PromptPlan(reply_goal="continue", continuity_mode="resume_recent_topic", notes="像重新接上话题"),
             current_message="早上好",
             planner_reason="适合直接回应",
-        )
+        ))
 
         self.assertIn("回复目标：continue", rendered.system_prompt)
         self.assertIn("连续性策略：resume_recent_topic", rendered.system_prompt)

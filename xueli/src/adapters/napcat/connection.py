@@ -25,7 +25,7 @@ class QueuedMessage:
 class NapCatConnection:
     """NapCat WebSocket server transport."""
 
-    MESSAGE_QUEUE_SIZE = 0
+    MESSAGE_QUEUE_SIZE = 256
     NOTICE_QUEUE_SIZE = 100
     CONSUME_THROTTLE_MS = 50
 
@@ -51,7 +51,7 @@ class NapCatConnection:
         self._last_heartbeat = 0
         self._notice_dropped_count = 0
 
-        self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self._notice_queue: asyncio.Queue = asyncio.Queue(maxsize=self.NOTICE_QUEUE_SIZE)
         self._receive_task: Optional[asyncio.Task] = None
         self._consume_task: Optional[asyncio.Task] = None
@@ -169,10 +169,7 @@ class NapCatConnection:
         while self._connected:
             item = await self._message_queue.get()
             await self._handle_message(item)
-<<<<<<< HEAD
-=======
             await asyncio.sleep(self.CONSUME_THROTTLE_MS / 1000.0)
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def _notice_loop(self):
         while self._connected:
@@ -194,6 +191,8 @@ class NapCatConnection:
             if self.on_message:
                 await self._safe_callback(self.on_message, data)
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("[NapCat] 处理事件失败")
 
@@ -255,7 +254,7 @@ class NapCatConnection:
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         try:
-            if inspect.iscoroutinefunction(callback):
+            if inspect.iscoroutinefunction(inspect.unwrap(callback)):
                 await callback(*args, **kwargs)
             else:
                 callback(*args, **kwargs)

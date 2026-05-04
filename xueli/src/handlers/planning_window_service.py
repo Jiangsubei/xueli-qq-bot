@@ -36,9 +36,6 @@ class PlanningWindowService:
         trace_id: str = "",
     ) -> WindowDispatchResult:
         del trace_id
-<<<<<<< HEAD
-        return WindowDispatchResult(status="bypassed", reason="window_disabled")
-=======
         if not self.config.enabled:
             return WindowDispatchResult(status="bypassed", reason="planning_window_disabled")
         user_message = self.host.extract_user_message(event)
@@ -65,7 +62,6 @@ class PlanningWindowService:
         if result.status == "accepted_only" and not str(result.reason or "").strip():
             result.reason = "buffer_opened"
         return result
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     async def mark_window_complete(self, conversation_key: str, seq: int) -> WindowDispatchResult:
         return await self.scheduler.mark_window_complete(conversation_key, seq)

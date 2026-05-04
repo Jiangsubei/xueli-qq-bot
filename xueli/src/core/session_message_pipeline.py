@@ -129,64 +129,36 @@ class SessionMessagePipeline:
         return None
 
     async def _run_worker(self, execution_key: str, is_at_mention: bool = False) -> None:
-        while True:
-            async with self._lock:
-                queue = self._queues.get(execution_key)
-            if queue is None:
-                return
-<<<<<<< HEAD
+        group_key = self._extract_group_key(execution_key)
+        group_key_for_active: Optional[str] = None
 
-=======
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
-            queued = None
-            try:
-                queued = await queue.get()
-            except asyncio.CancelledError:
-                if queue is not None:
-                    queue.task_done()
-                raise
+        async with self._lock:
+            if group_key and self.group_max_concurrent > 0:
+                if group_key not in self._group_active:
+                    self._group_active[group_key] = set()
+                active_in_group = len(self._group_active[group_key])
+                if active_in_group >= self.group_max_concurrent:
+                    self._workers.pop(execution_key, None)
+                    self._notify_state_change()
+                    return
+                self._group_active[group_key].add(execution_key)
+                group_key_for_active = group_key
 
-<<<<<<< HEAD
-            dropped = False
-            if not is_at_mention and self.group_queue_timeout > 0:
-                wait_time = time.time() - queued.enqueue_time
-                if wait_time > self.group_queue_timeout:
-                    logger.info(
-                        "[流水线] 消息等待超时已丢弃 key=%s trace=%s wait=%.1fs",
-                        execution_key,
-                        queued.trace_id,
-                        wait_time,
-                    )
-                    dropped = True
-
-            group_key = self._extract_group_key(execution_key)
-            user_id = self._extract_user_id(execution_key)
-
-            if not dropped:
-                if group_key and self.group_max_concurrent > 0:
-                    active = self._group_active.setdefault(group_key, set())
-                    if len(active) >= self.group_max_concurrent:
-                        if queue is not None:
-                            queue.task_done()
-                        async with self._lock:
-                            current_queue = self._queues.get(execution_key)
-                            if current_queue is None or current_queue.empty():
-                                self._queues.pop(execution_key, None)
-                                self._workers.pop(execution_key, None)
-                                self._notify_state_change()
-                        await asyncio.sleep(0.05)
-                        async with self._lock:
-                            worker = self._workers.get(execution_key)
-                            if worker is None or worker.done():
-                                worker = asyncio.create_task(
-                                    self._run_worker(execution_key, is_at_mention=is_at_mention),
-                                    name=f"session-pipeline-{execution_key}",
-                                )
-                                self._workers[execution_key] = worker
-                        continue
-
-                if user_id and group_key:
-                    self._group_active.setdefault(group_key, set()).add(user_id)
+        try:
+            while True:
+                async with self._lock:
+                    if group_key_for_active and self.group_max_concurrent > 0:
+                        active_now = len(self._group_active.get(group_key_for_active, set()))
+                        if active_now >= self.group_max_concurrent:
+                            break
+                    queue = self._queues.get(execution_key)
+                if queue is None:
+                    return
+                queued = None
+                try:
+                    queued = await queue.get()
+                except asyncio.CancelledError:
+                    raise
 
                 try:
                     await queued.handler(queued.event, queued.trace_id)
@@ -200,39 +172,28 @@ class SessionMessagePipeline:
                         exc,
                         exc_info=True,
                     )
+                finally:
+                    if queue is not None:
+                        queue.task_done()
 
-                if user_id and group_key:
-                    self._group_active.get(group_key, set()).discard(user_id)
-            else:
-=======
-            try:
-                await queued.handler(queued.event, queued.trace_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.error(
-                    "消息流水线任务异常：trace=%s key=%s 错误=%s",
-                    queued.trace_id,
-                    execution_key,
-                    exc,
-                    exc_info=True,
-                )
-            finally:
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
-                if queue is not None:
-                    queue.task_done()
-
-            async with self._lock:
-                current_queue = self._queues.get(execution_key)
-                if current_queue is None:
-                    self._workers.pop(execution_key, None)
-                    self._notify_state_change()
-                    return
-                if current_queue.empty():
-                    self._queues.pop(execution_key, None)
-                    self._workers.pop(execution_key, None)
-                    self._notify_state_change()
-                    return
+                async with self._lock:
+                    current_queue = self._queues.get(execution_key)
+                    if current_queue is None:
+                        self._workers.pop(execution_key, None)
+                        self._notify_state_change()
+                        return
+                    if current_queue.empty():
+                        self._queues.pop(execution_key, None)
+                        self._workers.pop(execution_key, None)
+                        self._notify_state_change()
+                        return
+        finally:
+            if group_key_for_active:
+                async with self._lock:
+                    if group_key_for_active in self._group_active:
+                        self._group_active[group_key_for_active].discard(execution_key)
+                        if not self._group_active[group_key_for_active]:
+                            del self._group_active[group_key_for_active]
 
     def _notify_state_change(self) -> None:
         if not callable(self._on_state_change):

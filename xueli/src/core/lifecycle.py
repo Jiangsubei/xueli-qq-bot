@@ -21,6 +21,8 @@ async def close_resource(resource: Any, *, label: Optional[str] = None) -> None:
         result = close_method()
         if asyncio.iscoroutine(result):
             await result
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         logger.warning("[生命周期] 关闭资源失败")
 
@@ -53,7 +55,7 @@ async def cancel_tasks(tasks: Iterable[asyncio.Task], *, label: str = "tasks") -
     if not pending:
         return
 
-        logger.debug("[生命周期] 正在取消后台任务")
+    logger.debug("[生命周期] 正在取消后台任务")
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)

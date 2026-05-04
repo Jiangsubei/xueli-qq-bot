@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 _template_loader = PromptTemplateLoader()
 
 
-def _insight_system_prompt() -> str:
-    return _template_loader.load("insight_digestion.prompt")
+async def _insight_system_prompt() -> str:
+    return await _template_loader.load("insight_digestion.prompt")
 
 
 class MemoryBackgroundCoordinator:
@@ -424,6 +424,7 @@ class MemoryBackgroundCoordinator:
                         priority=2,
                         metadata={"insight_type": "digested", "insight_source": "periodic_digestion"},
                     )
+                    self.on_memory_changed(user_id)
                     insight_count += 1
                     logger.info("[后台协调] 记忆消化发现 insight")
             except asyncio.CancelledError:
@@ -452,7 +453,7 @@ class MemoryBackgroundCoordinator:
         user_prompt = "以下是用户最近的记忆列表。请分析其中是否存在值得记录的模式、趋势或变化：\n" + "\n".join(memory_lines)
 
         try:
-            insight_prompt = _insight_system_prompt()
+            insight_prompt = await _insight_system_prompt()
             messages = [
                 {"role": "system", "content": insight_prompt},
                 {"role": "user", "content": user_prompt},

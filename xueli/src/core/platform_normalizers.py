@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, List, Optional, Tuple
 
 from src.core.models import MessageEvent, MessageSegment
-from src.core.platform_models import InboundEvent
+from src.core.platform_models import InboundEvent, SenderRef, SessionRef
 
 _INBOUND_EVENT_ATTR = "_inbound_event"
 
@@ -85,8 +85,8 @@ def build_generic_inbound_event(
         adapter=adapter,
         event_type="message",
         message_kind="text" if text else "unknown",
-        session=None,
-        sender=None,
+        session=SessionRef(platform=platform, scope="private", conversation_id="unknown"),
+        sender=SenderRef(user_id="unknown"),
         text=text,
         message_id=str(getattr(event, "message_id", "") or ""),
         reply_to_message_id="",

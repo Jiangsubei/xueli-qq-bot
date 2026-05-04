@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.core.config import AppConfig
@@ -160,7 +161,7 @@ class EmojiReplyService:
         }
 
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("system", await self._build_system_prompt()),
             self.ai_client.build_text_message("user", json.dumps(payload, ensure_ascii=False)),
         ]
         try:
@@ -216,7 +217,7 @@ class EmojiReplyService:
         weights = [max(0.01, float(item.manual_weight) / (1.0 + float(item.auto_reply_count))) for item in candidates]
         return self._rng.choices(candidates, weights=weights, k=1)[0]
 
-    def _group_cooldown_active(self, group_id: Optional[int]) -> bool:
+    def _group_cooldown_active(self, group_id: Optional[str]) -> bool:
         if group_id is None:
             return False
         last_sent = self._group_last_sent_at.get(str(group_id), 0.0)
@@ -235,10 +236,10 @@ class EmojiReplyService:
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("empty timestamp")
-        return __import__("datetime").datetime.fromisoformat(normalized).timestamp()
+        return datetime.fromisoformat(normalized).timestamp()
 
-    def _build_system_prompt(self) -> str:
-        return self.template_loader.render(
+    async def _build_system_prompt(self) -> str:
+        return await self.template_loader.render(
             "emoji_reply.prompt",
             emotion_labels=" / ".join(self.emotion_labels),
             reply_tones=" / ".join(self.reply_tones),

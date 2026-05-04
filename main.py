@@ -27,6 +27,8 @@ logging.getLogger("src.services").setLevel(logging.WARNING)                     
 logging.getLogger("src.adapters").setLevel(logging.WARNING)                    # 协议适配 WARNING
 logging.getLogger("websockets").setLevel(logging.WARNING)                      # WebSocket 连接 WARNING
 logging.getLogger("jieba").setLevel(logging.WARNING)                          # 结巴分词 WARNING
+
+logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 from src.core.runtime_supervisor import BotRuntimeSupervisor
@@ -73,7 +75,7 @@ async def main():
     except KeyboardInterrupt:
         logger.info("[启动] 键盘中断，准备退出")
     except Exception as exc:
-        print(f"Runtime error: {exc}")
+        logger.error("[启动] 运行时异常", exc_info=exc)
         raise
     finally:
         await supervisor.shutdown()

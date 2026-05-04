@@ -44,6 +44,7 @@ class EmojiEmotionResult:
     reply_intents: List[str] = field(default_factory=list)
     secondary_emotions: List[str] = field(default_factory=list)
     intensity: float = 0.5
+    emotion_error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -94,6 +95,15 @@ class EmojiRecord:
     message_type: str = ""
     user_id: int = 0
     group_id: Optional[int] = None
+    sticker_kind: str = ""
+    native_id: str = ""
+    emoji_package_id: str = ""
+    native_key: str = ""
+    native_summary: str = ""
+    raw_segment: str = ""
+    emotion_confidence: float = 0.0
+    emotion_reason: str = ""
+    emotion_error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

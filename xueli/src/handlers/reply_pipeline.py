@@ -100,7 +100,11 @@ class ReplyPipeline:
         self.reply_generation_service = ReplyGenerationService(host, self)
         self.memory_flow_service = getattr(host, "memory_flow_service", None)
         if self.memory_flow_service is None and getattr(host, "memory_manager", None) is not None:
-            self.memory_flow_service = MemoryFlowService(getattr(host, "memory_manager", None))
+            self.memory_flow_service = MemoryFlowService(
+                getattr(host, "memory_manager", None),
+                dispute_config=getattr(host, "dispute_config", None),
+                evidence_store=getattr(host, "evidence_store", None),
+            )
 
     def _create_recall_renderer(self) -> RecallRenderer:
         app_config = getattr(self.host, "app_config", None)
@@ -201,7 +205,7 @@ class ReplyPipeline:
             vision_analysis=vision_analysis,
         )
         prompt_plan = getattr(message_context, "prompt_plan", None) or getattr(plan, "prompt_plan", None)
-        rendered_prompt = self.renderer.render(
+        rendered_prompt = await self.renderer.render(
             event=event,
             current_message=model_user_message,
             planner_reason=str(getattr(plan, "reason", "") or ""),
@@ -840,7 +844,7 @@ class ReplyPipeline:
             return max(base, min(base + 2, 12))
         return base
 
-    def build_response_system_prompt(
+    async def build_response_system_prompt(
         self,
         *,
         event: Optional[MessageEvent] = None,
@@ -848,7 +852,7 @@ class ReplyPipeline:
         plan: Optional[MessageHandlingPlan] = None,
     ) -> str:
         prompt_plan = message_context.prompt_plan or (getattr(plan, "prompt_plan", None) if plan else None)
-        rendered = self.renderer.render(
+        rendered = await self.renderer.render(
             event=event,
             message_context=message_context,
             prompt_plan=prompt_plan,
@@ -970,22 +974,6 @@ class ReplyPipeline:
             return f"{prefix}{speaker}: [图片] " + "；".join(per_image_descriptions)
         if bool(item.get("has_image")):
             return f"{prefix}{speaker}: [图片]未成功识别"
-<<<<<<< HEAD
-=======
-        return ""
-
-    def _window_display_text(self, item: Dict[str, Any]) -> str:
-        text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
-        raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
-        has_image_indicator = bool(item.get("raw_has_image")) or raw_image_count > 0
-        merged_desc = str(item.get("merged_description") or "").strip()
-        if has_image_indicator and merged_desc:
-            return f"{text} [图片] {merged_desc}" if text and text != "用户发送了空文本" else f"[图片] {merged_desc}"
-        if text and text != "用户发送了空文本":
-            return text
-        if has_image_indicator:
-            return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
         return ""
 
     async def _resolve_vision_analysis(

@@ -222,9 +222,10 @@ class ConversationWindowScheduler:
                 waiters_to_resolve.extend(pending_waiters)
         except asyncio.CancelledError:
             raise
-        for waiter, result in waiters_to_resolve:
-            if not waiter.done():
-                waiter.set_result(result)
+        finally:
+            for waiter, result in waiters_to_resolve:
+                if not waiter.done():
+                    waiter.set_result(result)
 
     def _dispatch_next_locked(
         self,

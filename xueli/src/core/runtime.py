@@ -395,13 +395,13 @@ class BotRuntime:
 
         # ── 异常处理 ──
         # StaleWindowError / CancelledError：窗口过期或任务被取消，不需要发送错误回复
-        except (StaleWindowError, asyncio.CancelledError):
-            logger.info("[运行时] 窗口过期或任务取消")
-            await self._release_window_on_error(plan, trace_log)
         except asyncio.TimeoutError:
             logger.error("[运行时] 处理消息超时")
             self.runtime_metrics.record_error(message_error=True)
             self._sync_status_cache()
+            await self._release_window_on_error(plan, trace_log)
+        except (StaleWindowError, asyncio.CancelledError):
+            logger.info("[运行时] 窗口过期或任务取消")
             await self._release_window_on_error(plan, trace_log)
         except (SendError, ModelRequestError, ModelParseError, ImageProcessingError, MemoryOperationError, PipelineExecutionError) as exc:
             category = classify_pipeline_error(exc)

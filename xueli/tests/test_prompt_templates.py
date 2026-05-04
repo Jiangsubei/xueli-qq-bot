@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from src.core.prompt_templates import PromptTemplateLoader
@@ -9,7 +10,7 @@ class PromptTemplateLoaderTests(unittest.TestCase):
     def test_render_reply_template_includes_named_blocks(self) -> None:
         loader = PromptTemplateLoader()
 
-        rendered = loader.render(
+        rendered = asyncio.run(loader.render(
             "reply.prompt",
             identity_block="你是雪梨。",
             constraint_block="平台：私聊。格式：数组。",
@@ -21,7 +22,7 @@ class PromptTemplateLoaderTests(unittest.TestCase):
             precise_recall_block="[精确召回]\n上一轮聊的是天气。",
             dynamic_memory_block="[动态记忆]\n最近在追一部新番。",
             final_style_block="[风格约束]\n- 长度：短。",
-        )
+        ))
 
         self.assertIn("你是雪梨。", rendered)
         self.assertIn("参考方向（非强制）：轻一点。不要照抄。", rendered)
@@ -32,11 +33,11 @@ class PromptTemplateLoaderTests(unittest.TestCase):
         loader = PromptTemplateLoader()
 
         with self.assertRaises(KeyError) as exc:
-            loader.render(
+            asyncio.run(loader.render(
                 "planner.prompt",
                 chat_mode_label="私聊",
                 scene_guidance="只看当前消息。",
-            )
+            ))
 
         self.assertIn("decision_output_schema", str(exc.exception))
 

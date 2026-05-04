@@ -31,7 +31,7 @@ class ReplyPromptRenderer:
         self.recall_renderer = recall_renderer or RecallRenderer()
         self.mood_engine = mood_engine
 
-    def render(
+    async def render(
         self,
         *,
         event: Any,
@@ -62,7 +62,7 @@ class ReplyPromptRenderer:
         bot_persona_hints = self._bot_persona_hints_section(event=event)
         sections: List[Tuple[str, str]] = [
             ("identity", self._identity_section()),
-            ("constraint", self._constraint_section(event=event, enabled=plan.policy.include_reply_scope)),
+            ("constraint", await self._constraint_section(event=event, enabled=plan.policy.include_reply_scope)),
             ("scene", self._scene_section(event=event, message_context=message_context, current_message=current_message)),
             ("continuity", self._continuity_section(message_context=message_context, prompt_plan=plan)),
             ("planner_reference", self._planner_reference_section(message_context=message_context)),
@@ -84,7 +84,7 @@ class ReplyPromptRenderer:
             extra = str(section_texts.get(extra_key, ""))
             if extra and extra not in final_style_text:
                 final_style_text = final_style_text + extra
-        system_prompt = self.template_loader.render(
+        system_prompt = await self.template_loader.render(
             "reply.prompt",
             identity_block=section_texts.get("identity", ""),
             constraint_block=section_texts.get("constraint", ""),
@@ -131,7 +131,7 @@ class ReplyPromptRenderer:
         target = f"用户于 {time_prefix}说：{str(current_message or '').strip() or '用户发送了空文本'}"
         return f"{scene}\n{target}"
 
-    def _constraint_section(self, *, event: Any, enabled: bool) -> str:
+    async def _constraint_section(self, *, event: Any, enabled: bool) -> str:
         if not enabled:
             return ""
         chat_mode = str(getattr(event, "message_type", "") or "").strip().lower()
@@ -145,9 +145,10 @@ class ReplyPromptRenderer:
             "例如：[\"晚上好喵~\"] 或 [\"第一句喵~\", \"第二句喵~\"]。\n"
             "不要输出任何其他内容（无MD、无解释、无编号）。"
         )
-        return self.template_loader.render(
+        return await self.template_loader.render(
             "reply_constraint.prompt",
             platform_rule=platform_rule,
+            format_rules=format_rules,
         )
 
     def _continuity_section(self, *, message_context: MessageContext, prompt_plan: PromptPlan) -> str:

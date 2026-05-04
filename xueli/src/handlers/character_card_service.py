@@ -14,6 +14,8 @@ from typing import Dict, List
 from src.core.config import CharacterGrowthConfig
 from src.core.models import CharacterCardSnapshot, RelationshipProfile
 
+logger = logging.getLogger(__name__)
+
 
 class CharacterCardService:
     """Maintain a lightweight layered character preference snapshot per user."""
@@ -258,8 +260,6 @@ class CharacterCardService:
     def update_intimacy(self, user_id: str, delta: float, *, is_friction: bool = False) -> RelationshipProfile:
         if not self.config.relationship_tracking_enabled:
             return RelationshipProfile(user_id=user_id)
-        import logging
-        _logger = logging.getLogger(__name__)
         profile = self.get_relationship_profile(user_id)
         previous_stage = str(profile.relationship_stage or "stranger")
         profile.user_id = user_id

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from src.core.config import AppConfig, config, get_vision_service_status, is_vision_service_configured
 from src.core.model_invocation_router import ModelInvocationRouter, ModelInvocationType
 from src.core.prompt_templates import PromptTemplateLoader
-from src.emoji.models import DEFAULT_REPLY_TONES
+from src.emoji.models import DEFAULT_EMOTION_LABELS, DEFAULT_REPLY_TONES
 from src.services.ai_client import AIAPIError, AIClient
 
 logger = logging.getLogger(__name__)
@@ -122,8 +122,8 @@ class VisionClient:
     def status(self) -> str:
         return get_vision_service_status(self.app_config)
 
-    def _build_system_prompt(self) -> str:
-        return self.template_loader.load("vision.prompt")
+    async def _build_system_prompt(self) -> str:
+        return await self.template_loader.load("vision.prompt")
 
     def _build_user_text(self, user_text: str, image_count: int) -> str:
         clean_text = str(user_text or "").strip()
@@ -135,8 +135,8 @@ class VisionClient:
             lines.append("用户原始文字为空，请直接描述图片内容。")
         return "\n".join(lines)
 
-    def _build_emotion_system_prompt(self, emotion_labels: List[str]) -> str:
-        return self.template_loader.render(
+    async def _build_emotion_system_prompt(self, emotion_labels: List[str]) -> str:
+        return await self.template_loader.render(
             "vision_emotion.prompt",
             emotion_labels=" / ".join(emotion_labels),
             reply_tones=" / ".join(DEFAULT_REPLY_TONES),
@@ -235,7 +235,7 @@ class VisionClient:
             )
 
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("system", await self._build_system_prompt()),
             self.ai_client.build_multimodal_message(
                 role="user",
                 text=self._build_user_text(user_text, len(base64_images)),
@@ -290,12 +290,12 @@ class VisionClient:
     ) -> Dict[str, Any]:
         labels = [label.strip() for label in emotion_labels if str(label).strip()]
         if not labels:
-            labels = ["开心", "无语", "生气", "伤心"]
+            labels = DEFAULT_EMOTION_LABELS
         if not self.is_available() or self.ai_client is None:
             raise RuntimeError("视觉服务不可用")
 
         messages = [
-            self.ai_client.build_text_message("system", self._build_emotion_system_prompt(labels)),
+            self.ai_client.build_text_message("system", await self._build_emotion_system_prompt(labels)),
             self.ai_client.build_multimodal_message(
                 role="user",
                 text="请为这张表情包输出情绪和适合的回复场景。",

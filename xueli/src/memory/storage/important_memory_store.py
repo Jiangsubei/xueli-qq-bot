@@ -260,7 +260,7 @@ class ImportantMemoryStore:
                 tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
                 async with aiofiles.open(tmp_path, "w", encoding="utf-8") as file:
                     await file.write("\n".join(lines))
-                os.replace(tmp_path, file_path)
+                await asyncio.to_thread(os.replace, str(tmp_path), str(file_path))
                 return True
             except asyncio.CancelledError:
                 raise

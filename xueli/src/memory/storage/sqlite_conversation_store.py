@@ -461,7 +461,7 @@ class SQLiteConversationStore:
 
         # 每轮立即写入 SQLite（异步线程执行，避免阻塞事件循环）
         import asyncio
-        asyncio.get_event_loop().run_in_executor(None, self._persist_turn_sync, session)
+        asyncio.get_running_loop().run_in_executor(None, self._persist_turn_sync, session)
 
         closed_user_id = ""
         if closed_session_id:

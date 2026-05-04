@@ -94,13 +94,13 @@ class ConversationPlanner:
     def _decision_output_schema(self) -> str:
         return self.prompt_planner.decision_output_schema()
 
-    def _build_system_prompt(self, chat_mode: str, *, emoji_enabled: bool = False) -> str:
+    async def _build_system_prompt(self, chat_mode: str, *, emoji_enabled: bool = False) -> str:
         """Render planner.prompt template.
 
         Template variables: chat_mode_label, decision_output_schema, reply_tones, emotion_labels.
         All scene guidance is fixed text inside the template.
         """
-        return self.template_loader.render(
+        return await self.template_loader.render(
             "planner.prompt",
             chat_mode_label="私聊" if chat_mode == "private" else "群聊",
             decision_output_schema=self._decision_output_schema(),
@@ -138,8 +138,6 @@ class ConversationPlanner:
                     lines.append(f"  图片理解错误: {vision_error}")
         return "\n".join(lines)
 
-<<<<<<< HEAD
-=======
     def _window_display_text(self, item: Dict[str, Any]) -> str:
         text = str(item.get("display_text") or item.get("text") or item.get("raw_text") or "").strip()
         raw_image_count = int(item.get("raw_image_count", item.get("image_count", 0)) or 0)
@@ -152,8 +150,6 @@ class ConversationPlanner:
         if has_image_indicator:
             return "[图片]" if raw_image_count <= 1 else f"[图片 x{raw_image_count}]"
         return text or "用户发送了空文本"
-
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
     def _build_recent_history_text(self, window_messages: List[Dict[str, Any]]) -> str:
         history_items = [item for item in window_messages if not bool(item.get("is_latest"))]
         if not history_items:
@@ -406,19 +402,10 @@ class ConversationPlanner:
             )
 
         emoji_config = getattr(self.app_config, "emoji", None)
-<<<<<<< HEAD
-        emoji_enabled = bool(
-            emoji_config
-            and emoji_config.enabled
-            and self.emoji_repository
-            and self.emoji_repository.has_emoji_data()
-        )
-=======
         emoji_enabled = bool(emoji_config and emoji_config.enabled)
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt(str(event.message_type or "").strip().lower(), emoji_enabled=emoji_enabled)),
+            self.ai_client.build_text_message("system", await self._build_system_prompt(str(event.message_type or "").strip().lower(), emoji_enabled=emoji_enabled)),
             self.ai_client.build_text_message(
                 "user",
                 self._build_user_prompt(
@@ -458,6 +445,9 @@ class ConversationPlanner:
             raise
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("[规划器] 会话规划失败，改用回退")
+            return self._build_fallback_plan(event, str(exc))
+        except Exception as exc:
+            logger.error("[规划器] 会话规划意外异常")
             return self._build_fallback_plan(event, str(exc))
 
     async def close(self) -> None:

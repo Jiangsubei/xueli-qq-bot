@@ -67,8 +67,8 @@ class ExtractionConfig:
     )
 
 
-def _build_reflection_prompt() -> str:
-    return _reflection_template_loader.load("reflection.prompt")
+async def _build_reflection_prompt() -> str:
+    return await _reflection_template_loader.load("reflection.prompt")
 
 
 @dataclass
@@ -941,7 +941,7 @@ class MemoryExtractor:
                 ),
             }
         ]
-        response = await self.llm_callback(_build_reflection_prompt(), messages)
+        response = await self.llm_callback(await _build_reflection_prompt(), messages)
         return self._normalize_llm_response(response)
 
     def _parse_reflection_response(self, content: str) -> Optional[MemoryReflectionResult]:

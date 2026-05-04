@@ -39,3 +39,6 @@ data/
 
 # Local docs
 .docs/
+
+# Test cache
+.pytest_cache/

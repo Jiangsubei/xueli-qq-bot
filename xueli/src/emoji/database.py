@@ -255,7 +255,7 @@ class EmojiDatabase:
                     json.dumps(result.all_emotions or [], ensure_ascii=False),
                     json.dumps(result.secondary_emotions or [], ensure_ascii=False),
                     float(result.intensity or 0.5),
-                    result.reason if hasattr(result, "emotion_error") and result.emotion_error else "",
+                    getattr(result, "emotion_error", None) or "",
                 ),
             )
             conn.execute(

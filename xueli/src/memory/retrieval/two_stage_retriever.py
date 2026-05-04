@@ -94,7 +94,7 @@ class CrossEncoderReranker(BaseReranker):
             except ImportError:
                 logger.warning("未安装 sentence-transformers，本地重排器不可用")
                 return
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._model = await loop.run_in_executor(None, CrossEncoder, self.model_name)
 
     async def rerank(
@@ -112,7 +112,7 @@ class CrossEncoderReranker(BaseReranker):
             return candidates[:top_k]
         try:
             pairs = [(query, mem.content) for mem, _ in candidates]
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             scores = await loop.run_in_executor(None, self._model.predict, pairs)
             results = []
             for i, (mem, bm25_score) in enumerate(candidates):
@@ -159,8 +159,8 @@ class APIReranker(BaseReranker):
         )
         self.template_loader = PromptTemplateLoader()
 
-    def _build_system_prompt(self) -> str:
-        return self.template_loader.load("rerank.prompt")
+    async def _build_system_prompt(self) -> str:
+        return await self.template_loader.load("rerank.prompt")
 
     def _build_user_prompt(
         self,
@@ -246,7 +246,7 @@ class APIReranker(BaseReranker):
             async def run_chat():
                 return await self._client.chat_completion(
                     messages=[
-                        self._client.build_text_message("system", self._build_system_prompt()),
+                        self._client.build_text_message("system", await self._build_system_prompt()),
                         self._client.build_text_message("user", self._build_user_prompt(query, candidates, top_k, retrieval_context)),
                     ],
                     temperature=0.1,

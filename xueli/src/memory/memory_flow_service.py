@@ -64,30 +64,25 @@ class MemoryFlowService:
                 pass
             self._processor_task = None
 
-<<<<<<< HEAD
     async def _drain_queue_for_tests(self) -> None:
         """Process all pending queue items synchronously (for tests only)."""
         while not self._queue.empty():
             task = self._queue.get_nowait()
             await self._process_single_task(task)
 
-=======
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
     async def _run_loop(self) -> None:
         while self._running:
             try:
                 task = await self._queue.get()
                 await self._process_single_task(task)
             except asyncio.CancelledError:
-<<<<<<< HEAD
-                raise
-=======
                 break
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
             except Exception as exc:
                 logger.warning("[记忆流] 处理记忆任务异常")
 
     async def _process_single_task(self, task: MemoryTask) -> None:
+        if not self.memory_manager:
+            return
         host = task.host
         event = task.event
         prepared = task.prepared
@@ -97,25 +92,15 @@ class MemoryFlowService:
             dialogue_key = host._get_conversation_key(event)
 
             if task.task_type == "dialogue":
-<<<<<<< HEAD
                 raw_data = getattr(event, "raw_data", None)
-                if raw_data is not None and raw_data.get("group_id"):
-                    group_id_value = str(raw_data.get("group_id"))
-                else:
-                    group_id_value = str(getattr(event, "group_id", "") or "")
-=======
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
+                group_id_value = str(raw_data.get("group_id", "")) if raw_data else str(getattr(event, "group_id", "") or "")
                 self.memory_manager.register_dialogue_turn(
                     user_id=str(event.user_id),
                     user_message=prepared.original_user_message,
                     assistant_message=reply_text,
                     dialogue_key=dialogue_key,
                     message_type=event.message_type,
-<<<<<<< HEAD
                     group_id=group_id_value,
-=======
-                    group_id=str(event.raw_data.get("group_id", "")) if event.raw_data else str(getattr(event, "group_id", "") or ""),
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
                     message_id=str(event.message_id or ""),
                     image_description=task.image_description,
                 )
@@ -126,11 +111,7 @@ class MemoryFlowService:
                         str(event.user_id),
                         dialogue_key=dialogue_key,
                         message_type=event.message_type,
-<<<<<<< HEAD
                         group_id=group_id_value,
-=======
-                        group_id=str(event.raw_data.get("group_id", "")) if event.raw_data else str(getattr(event, "group_id", "") or ""),
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
                     )
                     self._schedule_post_extraction_processing(
                         host=host,
@@ -143,15 +124,12 @@ class MemoryFlowService:
             raise
         except Exception as exc:
             logger.warning("[记忆流] 处理记忆任务失败")
-<<<<<<< HEAD
-=======
 
     def enqueue_task(self, task: MemoryTask) -> None:
         try:
             self._queue.put_nowait(task)
         except asyncio.QueueFull:
             logger.warning("[记忆流] 记忆队列满，丢弃任务")
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
 
     def on_reply_generated(
         self,
@@ -161,9 +139,6 @@ class MemoryFlowService:
         prepared: "PreparedReplyRequest",
         reply_text: str,
     ) -> None:
-<<<<<<< HEAD
-        """回复生成后的副作用处理（异步队列写入）。
-=======
         """回复生成后的副作用处理（记忆写入调度）。
 
         负责：
@@ -175,7 +150,6 @@ class MemoryFlowService:
         所有异常均捕获并记录日志，不向上传播以避免污染主流程。
 
         使用有界队列（maxsize=256），队列满时丢弃异步记忆任务。
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
         """
         has_text = bool(str(prepared.original_user_message or "").strip())
         has_image = bool(prepared.base64_images)
@@ -199,57 +173,7 @@ class MemoryFlowService:
             reply_text=reply_text,
             image_description=image_description,
         )
-        try:
-<<<<<<< HEAD
-            self._queue.put_nowait(task)
-        except asyncio.QueueFull:
-            logger.warning("[记忆流] 记忆队列满，丢弃任务")
-=======
-            dialogue_key = host._get_conversation_key(event)
-
-            image_description = ""
-            if prepared.message_context and prepared.message_context.vision_analysis:
-                va = prepared.message_context.vision_analysis
-                image_description = str(va.get("merged_description") or "").strip()
-                if not image_description:
-                    parts = [str(p).strip() for p in (va.get("per_image_descriptions") or []) if str(p).strip()]
-                    if parts:
-                        image_description = "；".join(parts)
-
-            raw_data = getattr(event, "raw_data", None)
-            if raw_data is not None and raw_data.get("group_id"):
-                group_id_value = str(raw_data.get("group_id"))
-            else:
-                group_id_value = str(getattr(event, "group_id", "") or "")
-            self.memory_manager.register_dialogue_turn(
-                user_id=str(event.user_id),
-                user_message=prepared.original_user_message,
-                assistant_message=reply_text,
-                dialogue_key=dialogue_key,
-                message_type=event.message_type,
-                group_id=group_id_value,
-                message_id=str(event.message_id or ""),
-                image_description=image_description,
-            )
-
-            scheduler = getattr(self.memory_manager, "schedule_memory_extraction", None)
-            if callable(scheduler):
-                extraction_task = scheduler(
-                    str(event.user_id),
-                    dialogue_key=dialogue_key,
-                    message_type=event.message_type,
-                    group_id=group_id_value,
-                )
-                self._schedule_post_extraction_processing(
-                    host=host,
-                    event=event,
-                    task=extraction_task,
-                )
-
-            self._record_character_growth(host=host, event=event, prepared=prepared, reply_text=reply_text)
-        except Exception as exc:
-            logger.warning("[记忆流] 记录记忆副作用失败")
->>>>>>> fc5b56b (WIP on main: 250d0b0 fix: 修复导入问题)
+        self.enqueue_task(task)
 
     def _schedule_post_extraction_processing(self, *, host: Any, event: Any, task: Any) -> None:
         if task is None:
@@ -310,6 +234,8 @@ class MemoryFlowService:
                         record=record,
                         ttl_hours=self.dispute_config.signal_ttl_hours,
                     )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("[记忆流] 后台记忆争议处理失败")
 

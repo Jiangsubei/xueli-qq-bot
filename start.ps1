@@ -27,16 +27,16 @@ try {
     Fail-AndExit "Python was not found. Please install Python 3.8+ first."
 }
 
-if (-not (Test-Path -LiteralPath "xueli\venv")) {
+if (-not (Test-Path -LiteralPath ".venv")) {
     Write-Host "[INFO] Creating virtual environment..." -ForegroundColor Cyan
-    python -m venv xueli\venv
+    python -m venv .venv
     if ($LASTEXITCODE -ne 0) {
         Fail-AndExit "Failed to create virtual environment."
     }
 }
 
 Write-Host "[INFO] Activating virtual environment..." -ForegroundColor Cyan
-. .\xueli\venv\Scripts\Activate.ps1
+. .\.venv\Scripts\Activate.ps1
 
 Write-Host "[INFO] Installing dependencies..." -ForegroundColor Cyan
 python -m pip install -q -r requirements.txt
@@ -69,8 +69,8 @@ Write-Host ""
 python main.py
 $appExit = $LASTEXITCODE
 
-if (Test-Path -LiteralPath ".\xueli\venv\Scripts\Deactivate.ps1") {
-    . .\xueli\venv\Scripts\Deactivate.ps1
+if (Test-Path -LiteralPath ".\.venv\Scripts\Deactivate.ps1") {
+    . .\.venv\Scripts\Deactivate.ps1
 }
 
 Write-Host ""

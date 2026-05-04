@@ -54,8 +54,8 @@ class ImageClient:
         Returns:
             修复后的 URL
         """
-        # 反转义 &amp; 为 &
-        return url.replace("&amp;", "&")
+        import html
+        return html.unescape(url)
 
     async def download_image_from_url(self, url: str) -> Optional[bytes]:
         """

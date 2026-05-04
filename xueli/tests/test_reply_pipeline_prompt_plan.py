@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
@@ -63,7 +64,7 @@ class ReplyPipelinePromptPlanTests(unittest.TestCase):
             summary_text="当前消息和最近上下文之间间隔较长，更像是在隔了一段时间后重提旧话题。",
         )
 
-        prompt = pipeline.build_response_system_prompt(
+        prompt = asyncio.run(pipeline.build_response_system_prompt(
             event=None,
             message_context=MessageContext(
                 user_message="继续聊这个",
@@ -79,7 +80,7 @@ class ReplyPipelinePromptPlanTests(unittest.TestCase):
                 is_first_turn=False,
                 prompt_plan=prompt_plan,
             ),
-        )
+        ))
 
         self.assertIn("回复目标：recall", prompt)
         self.assertIn("连续性策略", prompt)

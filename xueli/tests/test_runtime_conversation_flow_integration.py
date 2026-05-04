@@ -4,9 +4,11 @@ import asyncio
 import json
 import re
 import sys
+import tempfile
 import types
 import unittest
 from collections import defaultdict, deque
+from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -43,12 +45,14 @@ if "rank_bm25" not in sys.modules:
     sys.modules["rank_bm25"] = rank_bm25
 
 if "django.conf" not in sys.modules:
+    import tempfile
+    _test_tmpdir = tempfile.mkdtemp(prefix="xueli_test_")
     django = types.ModuleType("django")
     django_conf = types.ModuleType("django.conf")
     django_conf.settings = SimpleNamespace(
-        WEBUI_CONFIG_PATH="F:/AI/Workspace/xueli/config/settings.toml",
-        WEBUI_RUNTIME_SNAPSHOT_PATH="F:/AI/Workspace/xueli/data/webui/runtime_snapshot.json",
-        WEBUI_AVATAR_ROOT="F:/AI/Workspace/xueli/data/webui/avatar",
+        WEBUI_CONFIG_PATH=str(Path(_test_tmpdir) / "config.toml"),
+        WEBUI_RUNTIME_SNAPSHOT_PATH=str(Path(_test_tmpdir) / "runtime_snapshot.json"),
+        WEBUI_AVATAR_ROOT=str(Path(_test_tmpdir) / "avatar"),
     )
     django_urls = types.ModuleType("django.urls")
     django_urls.reverse = lambda name: f"/{name}/"

@@ -16,9 +16,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "xueli\venv" (
+if not exist ".venv" (
     echo [INFO] Creating virtual environment...
-    python -m venv xueli\venv
+    python -m venv .venv
     if errorlevel 1 (
         echo [ERROR] Failed to create virtual environment.
         pause
@@ -27,7 +27,7 @@ if not exist "xueli\venv" (
 )
 
 echo [INFO] Activating virtual environment...
-call xueli\venv\Scripts\activate.bat
+call .venv\Scripts\activate.bat
 if errorlevel 1 (
     echo [ERROR] Failed to activate virtual environment.
     pause
@@ -67,8 +67,8 @@ echo.
 python main.py
 set "APP_EXIT=%ERRORLEVEL%"
 
-if exist "xueli\venv\Scripts\deactivate.bat" (
-    call xueli\venv\Scripts\deactivate.bat
+if exist ".venv\Scripts\deactivate.bat" (
+    call .venv\Scripts\deactivate.bat
 )
 
 echo.

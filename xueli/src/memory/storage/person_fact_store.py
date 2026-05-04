@@ -74,6 +74,9 @@ class PersonFactStore:
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_user_file(self, user_id: str) -> Path:
+        if user_id.startswith("group:"):
+            group_part = user_id[6:]
+            return self.base_path / "group" / f"{group_part}.json"
         return self.base_path / f"{user_id}.json"
 
     def _get_file_lock(self, file_path: str) -> asyncio.Lock:
@@ -82,7 +85,12 @@ class PersonFactStore:
         return self._locks[file_path]
 
     def get_user_ids(self) -> List[str]:
-        return sorted(path.stem for path in self.base_path.glob("*.json"))
+        user_ids = sorted(path.stem for path in self.base_path.glob("*.json"))
+        group_dir = self.base_path / "group"
+        if group_dir.exists():
+            for file_path in group_dir.glob("*.json"):
+                user_ids.append(f"group:{file_path.stem}")
+        return sorted(user_ids)
 
     async def get_facts(self, user_id: str) -> List[PersonFactItem]:
         file_path = self._get_user_file(user_id)
@@ -113,7 +121,7 @@ class PersonFactStore:
                 tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
                 async with aiofiles.open(tmp_path, "w", encoding="utf-8") as handle:
                     await handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
-                os.replace(tmp_path, file_path)
+                await asyncio.to_thread(os.replace, str(tmp_path), str(file_path))
                 return True
             except asyncio.CancelledError:
                 raise

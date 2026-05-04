@@ -39,7 +39,9 @@ class DispatcherInboundWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(seen["preprocessor_inbound"], seen["handler_inbound"])
         self.assertEqual(seen["handler_inbound"].platform, "qq")
         self.assertEqual(seen["handler_inbound"].adapter, "napcat")
-        self.assertIsNone(seen["handler_inbound"].session)
+        self.assertIsNotNone(seen["handler_inbound"].session)
+        self.assertEqual(seen["handler_inbound"].session.scope, "private")
+        self.assertEqual(seen["handler_inbound"].session.conversation_id, "unknown")
         self.assertEqual(seen["handler_inbound"].text, "hello")
 
     async def test_dispatch_uses_configured_adapter_attacher(self) -> None:

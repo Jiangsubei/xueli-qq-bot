@@ -54,7 +54,7 @@ class TimingGateService:
         if self.ai_client is None:
             return fallback
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("system", await self._build_system_prompt()),
             self.ai_client.build_text_message("user", self._build_user_prompt(event=event, plan=plan, context=context)),
         ]
         try:
@@ -100,13 +100,16 @@ class TimingGateService:
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("[节奏门] 节奏判断失败，回退到规则")
             return fallback
+        except Exception as exc:
+            logger.error("[节奏门] 节奏判断意外异常")
+            return fallback
 
     async def decide_timing_only(self, *, event: Any, context: MessageContext) -> TimingDecision:
         fallback = self._fallback_decision(plan=None, context=context)
         if self.ai_client is None:
             return fallback
         messages = [
-            self.ai_client.build_text_message("system", self._build_system_prompt()),
+            self.ai_client.build_text_message("system", await self._build_system_prompt()),
             self.ai_client.build_text_message("user", self._build_user_prompt(event=event, plan=None, context=context)),
         ]
         try:
@@ -138,10 +141,13 @@ class TimingGateService:
         except (AIAPIError, asyncio.TimeoutError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("[节奏门] 节奏判断失败，回退到规则")
             return fallback
+        except Exception as exc:
+            logger.error("[节奏门] 节奏判断意外异常")
+            return fallback
 
-    def _build_system_prompt(self) -> str:
+    async def _build_system_prompt(self) -> str:
         """Load timing_gate.prompt — fully static, no variables."""
-        return self.template_loader.load("timing_gate.prompt")
+        return await self.template_loader.load("timing_gate.prompt")
 
     def _build_user_prompt(self, *, event: Any, plan: Any, context: MessageContext) -> str:
         lines = [

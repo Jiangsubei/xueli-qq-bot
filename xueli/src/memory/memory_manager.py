@@ -649,8 +649,8 @@ class MemoryManager:
         self._sync_background_task_metric()
         stats = {
             "storage_path": str(self.storage.base_path),
-            "indices_built": len(self.index_coordinator.index_built),
-            "indices_dirty": len(self.index_coordinator.index_dirty),
+            "indices_built": sum(1 for v in self.index_coordinator.index_built.values() if v),
+            "indices_dirty": sum(1 for v in self.index_coordinator.index_dirty.values() if v),
             "extractor_enabled": self.extractor is not None,
             "background_tasks": self.task_manager.count(),
         }
@@ -765,7 +765,7 @@ class MemoryManager:
         prepared = self.access_policy.normalize_memory_record(content="", metadata=metadata)
         category = prepared.get("content_category", "unknown")
         scope = prepared.get("applicability_scope", {})
-        return f"{category}|{scope}|{normalized_content}"
+        return f"{category}|{json.dumps(scope, sort_keys=True)}|{normalized_content}"
 
     def _merge_tags_into_metadata(
         self,
