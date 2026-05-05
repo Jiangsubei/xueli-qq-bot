@@ -555,6 +555,30 @@ class ConversationPlanCoordinator:
         else:
             history_items = await self._get_recent_history(history_key)
 
+        conversation_key = self.session_manager.get_key(event)
+        conversation = self.session_manager.get_optional(conversation_key)
+        if conversation and getattr(conversation, "restored_session_pending", False):
+            restored_messages = [
+                {
+                    "message_id": int(msg.get("message_id") or 0),
+                    "user_id": str(msg.get("user_id") or ""),
+                    "text": str(msg.get("content") or msg.get("text") or ""),
+                    "display_text": str(msg.get("content") or msg.get("text") or ""),
+                    "text_content": str(msg.get("content") or msg.get("text") or ""),
+                    "event_time": float(msg.get("timestamp") or 0.0),
+                    "has_image": bool(msg.get("image_description")),
+                    "raw_has_image": bool(msg.get("image_description")),
+                    "per_image_descriptions": [msg.get("image_description")] if msg.get("image_description") else [],
+                    "merged_description": str(msg.get("image_description") or ""),
+                    "is_restored": True,
+                    "is_latest": False,
+                }
+                for msg in conversation.messages
+                if msg.get("restored")
+            ]
+            if restored_messages:
+                history_items = restored_messages + history_items
+
         buffered_messages = await self._enrich_buffered_window_messages(list(window.messages or []), trace_id=trace_id)
         window_messages = self._compose_buffered_window_messages(history_items, buffered_messages)
         latest_message = next(

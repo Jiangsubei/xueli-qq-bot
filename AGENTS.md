@@ -4,6 +4,14 @@
 
 ## 通用原则
 
+### 实现新规则前必须检查复用可能性
+
+添加任何新的决策逻辑、条件分支或启发式规则之前，必须完成以下检查步骤：
+
+- 检索已有规则
+- 确认无等价或重叠规则
+- 优先扩展而非新建
+
 ### 编码陷阱（必读）
 
 - **async `except Exception` 前必须先 `except asyncio.CancelledError: raise`**：Python 3.9+ 中 `CancelledError` 继承自 `Exception`，不加守卫会破坏 asyncio 取消协议

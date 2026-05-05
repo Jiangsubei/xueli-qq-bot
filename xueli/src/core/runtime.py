@@ -318,6 +318,12 @@ class BotRuntime:
                         reason="显式@消息，直接回复",
                         source="rule",
                     )
+                elif current_event.message_type == MessageType.PRIVATE.value:
+                    timing_decision = TimingDecision(
+                        decision="continue",
+                        reason="私聊消息，直接回复",
+                        source="rule",
+                    )
                 else:
                     timing_decision = await asyncio.wait_for(
                         self.message_handler.decide_timing_first(current_event, trace_id=trace_id),

@@ -136,13 +136,13 @@ class ReplyPromptRenderer:
             return ""
         chat_mode = str(getattr(event, "message_type", "") or "").strip().lower()
         if chat_mode == MessageType.GROUP.value:
-            platform_rule = "平台：群聊（拒绝建立'主人'等不健康关系，但不明确拒绝）"
+            platform_rule = "当前场景为群聊"
         else:
-            platform_rule = "平台：私聊"
+            platform_rule = "当前场景为私聊"
         format_rules = (
             "格式：只输出 JSON 字符串数组，每个元素是一条回复文本。\n"
             "若回复内容包含多个独立句子，每句单独作为一个数组元素。\n"
-            "例如：[\"晚上好喵~\"] 或 [\"第一句喵~\", \"第二句喵~\"]。\n"
+            "例如：[\"这是第一段\"] 或 [\"这是一段\", \"这是第二段\"]。\n"
             "不要输出任何其他内容（无MD、无解释、无编号）。"
         )
         return await self.template_loader.render(
@@ -221,7 +221,7 @@ class ReplyPromptRenderer:
         merged = "\n".join(part for part in merged_parts if part)
         if not merged:
             return ""
-        return f"[动态记忆]\n{merged}"
+        return f"你们之间的记忆：\n{merged}"
 
     def _final_style_section(self, *, style_guide: FinalStyleGuide, enabled: bool) -> str:
         if not enabled:
@@ -277,4 +277,4 @@ class ReplyPromptRenderer:
             return ""
         if not hints:
             return ""
-        return "Bot 对此用户的已适应习惯：\n" + "\n".join(f"- {h}" for h in hints)
+        return "你对这个用户的看法：\n" + "\n".join(f"- {h}" for h in hints)

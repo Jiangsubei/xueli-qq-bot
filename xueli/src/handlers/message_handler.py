@@ -518,6 +518,15 @@ class MessageHandler:
             conversation=conversation,
         )
         pending_items = list(window.messages or [])
+        if getattr(conversation, "restored_session_pending", False):
+            restored_items = [
+                dict(msg) for msg in conversation.messages
+                if msg.get("restored")
+            ]
+            if restored_items:
+                for item in restored_items:
+                    item["is_restored"] = True
+                pending_items = restored_items + pending_items
         # 从 conversation.messages 提取 image_description，注入到 pending_items
         msg_id_to_image_desc: Dict[str, str] = {}
         for msg in conversation.messages:
